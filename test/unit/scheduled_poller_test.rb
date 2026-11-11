@@ -75,9 +75,11 @@ class ScheduledPollerTest < Wurk::Test::UnitCase
 
   def test_enqueue_promotes_past_due_schedule_job_to_queue
     schedule_job(set: @schedule, at: Time.now.to_f - 5)
+    promoted = Wurk::Metrics::ProcessCounters.labelled(:scheduler_promoted).fetch(@schedule, 0)
 
     Wurk::Scheduled::Enq.new(@config).enqueue_jobs([@schedule])
 
+    assert_equal promoted + 1, Wurk::Metrics::ProcessCounters.labelled(:scheduler_promoted)[@schedule]
     assert_equal(0, @pool.with { |c| c.call('ZCARD', @schedule) })
     assert_equal(1, @pool.with { |c| c.call('LLEN', @queue_list) })
     assert_equal(1, @pool.with { |c| c.call('SISMEMBER', 'queues', @queue) })

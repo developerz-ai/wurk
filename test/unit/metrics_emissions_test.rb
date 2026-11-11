@@ -136,10 +136,11 @@ class MetricsEmissionsTest < Wurk::Test::UnitCase
     cleanup_heartbeat
   end
 
-  def test_beat_emits_queue_size_gauge_per_capsule_queue
+  # Only the leader sends the cluster-wide queue.size (Heartbeat#emit_statsd_gauges).
+  def test_the_leaders_beat_emits_queue_size_gauge_per_capsule_queue
     Wurk.redis { |c| c.call('LPUSH', "queue:#{@ns}", '{}') }
-
     hb = build_heartbeat
+    Wurk.redis { |c| c.call('SET', Wurk::Leader::DEFAULT_KEY, @identity) }
     hb.beat!
 
     qs = @fake.calls.find { |c| c[0] == :gauge && c[1] == 'sidekiq.queue.size' }
@@ -149,7 +150,7 @@ class MetricsEmissionsTest < Wurk::Test::UnitCase
     assert_includes qs[3][:tags], "queue:#{@ns}"
     assert_includes qs[3][:tags], "process:#{@identity}"
   ensure
-    Wurk.redis { |c| c.call('UNLINK', "queue:#{@ns}") }
+    Wurk.redis { |c| c.call('UNLINK', "queue:#{@ns}", Wurk::Leader::DEFAULT_KEY) }
     cleanup_heartbeat
   end
 

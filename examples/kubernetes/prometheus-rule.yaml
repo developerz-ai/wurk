@@ -70,3 +70,21 @@ spec:
           labels: { severity: info }
           annotations:
             summary: "{{ $value | humanize }} jobs were reclaimed from dead workers. OOM kills or forced shutdowns are the usual cause."
+        - alert: WurkChildRestarting
+          expr: sum by (namespace, pod, reason) (increase(wurk_swarm_child_restarts_total{reason!="rolling"}[15m])) > 3
+          for: 0m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.pod }} replaced {{ $value | humanize }} children for {{ $labels.reason }} in 15m."
+        - alert: WurkCrashLoop
+          expr: max by (namespace, pod) (wurk_swarm_crash_streak) >= 3
+          for: 5m
+          labels: { severity: critical }
+          annotations:
+            summary: "{{ $labels.pod }} children keep dying within a minute of boot: see the child crash reports in its log."
+        - alert: WurkRedisPoolStarved
+          expr: sum by (namespace, pod, pool) (increase(wurk_redis_pool_checkout_timeouts_total[10m])) > 0
+          for: 0m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.pod }} waited past pool_timeout for a {{ $labels.pool }} Redis connection: raise the pool size."

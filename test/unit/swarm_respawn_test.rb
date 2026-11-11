@@ -76,6 +76,22 @@ class SwarmRespawnTest < Wurk::Test::UnitCase
            'a crashed slot must be scheduled for respawn'
   end
 
+  def test_restart_counters_split_crash_from_liveness_and_rolling
+    swarm = RespawnTestSwarm.new(topology: Wurk::Topology.flat(count: 3, queues: ['default'], concurrency: 1),
+                                 config: @config)
+    swarm.boot(install_signals: false)
+    crashed, stale, rolled = swarm.children.keys
+    swarm.instance_variable_get(:@liveness).instance_variable_get(:@terminating)[stale] = { kill_at: 0 }
+    swarm.send(:on_child_exit, crashed, Status.new(1))
+    swarm.send(:on_child_exit, stale, Status.new(0))
+    swarm.instance_variable_get(:@restart).enqueue([rolled], :rolling)
+    swarm.send(:advance_restart)
+
+    restarts = swarm.instance_variable_get(:@restart_counters).read.restarts
+
+    assert_equal({ crash: 1, recycle: 0, liveness: 1, rolling: 1 }, restarts)
+  end
+
   def test_respawn_defers_until_backoff_window_elapses
     clock = [1000.0]
     swarm = new_swarm

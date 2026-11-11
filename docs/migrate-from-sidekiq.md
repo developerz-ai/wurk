@@ -967,9 +967,12 @@ Every job runs inside `Rails.application.reloader`, in every boot mode. Set
       `-1.79e12` for every job Wurk enqueued, so a `latency > N` alert stays quiet until those jobs
       have run ([millisecond timestamps](#millisecond-timestamps-on-a-7x-app)). Watch queue size
       too, or silence the latency alert for the rollback window. A rollback to 8.x reads them right.
-- [ ] Probes that grep `ps` for `sidekiq` are replaced. A Wurk worker's process title differs, so
-      such a probe restarts a healthy pod. Use `wurk health`, which boots no app and exits 0 when
-      this host has a recent heartbeat ([deployment](deployment.md#health-probes)).
+- [ ] Probes that grep `ps` are replaced with `wurk health`. A Wurk worker's process title differs,
+      so a probe matching `sidekiq` restarts a healthy pod; one matching `wurk` passes for as long
+      as the swarm parent lives, including while every child crash-loops and nothing runs.
+      `wurk health` boots no app and exits 0 only when this host has a recent heartbeat; add
+      `--max-job-age` above your longest job to also catch a wedged processor
+      ([deployment](deployment.md#health-probes)).
 
 **Staging dry run against a copy of production Redis.** This is the step that
 matters most, because it is the only check of Pro/Enterprise data formats against

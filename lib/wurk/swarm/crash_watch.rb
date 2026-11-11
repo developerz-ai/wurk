@@ -37,6 +37,11 @@ module Wurk
         @streak[slot] += 1
       end
 
+      # Longest unbroken streak across slots; 0 when none is crashing.
+      def max_streak
+        @streak.values.max || 0
+      end
+
       def settled(slot, lifetime)
         clear(slot) if lifetime >= @young_within
       end

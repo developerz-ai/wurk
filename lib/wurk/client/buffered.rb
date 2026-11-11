@@ -24,6 +24,12 @@ module Wurk
       DEFAULT_BUFFER_CAP = 1_000
       DRAINING_KEY = :wurk_reliable_push_draining
       UNBUFFERED_KEY = :wurk_reliable_push_unbuffered
+      # What a failed replay's raw_push had already landed, handed from the
+      # prepended raw_push to Buffered.attempt_replay.
+      REPLAY_ACKED_KEY = :wurk_reliable_push_replay_acked
+      # Payloads per replayed raw_push. A backlog reaches Redis in about
+      # N / REPLAY_SLICE calls, each one pipeline per queue.
+      REPLAY_SLICE = 100
 
       # A clean exit tries to deliver what is still in memory, but never holds the
       # process up for longer than this: a hung Redis would otherwise stall shutdown.
@@ -528,15 +534,17 @@ module Wurk
         end
 
         # Leaves the circuit open on the first failed replay and closed once the
-        # backlog for this Redis has run out.
+        # backlog for this Redis has run out. Jobs buffered while a pass is in
+        # flight are taken by the next pass of the loop.
         def replay_all(client, target)
           drained = 0
-          while (entry = take_next(target))
-            unless replay(client, entry)
-              trip!(target)
-              return drained
-            end
-            drained += 1
+          until (entries = take_all(target)).empty?
+            landed = replay_entries(client, entries)
+            drained += landed
+            next if landed == entries.size
+
+            trip!(target)
+            return drained
           end
           circuit.close(target)
           drained
@@ -555,72 +563,113 @@ module Wurk
           end
         end
 
-        # The oldest entry bound for `target`, removed from the buffer.
-        def take_next(target)
+        # Every entry bound for `target`, oldest first, removed from the buffer
+        # in one pass.
+        def take_all(target)
           buffer_mutex.synchronize do
-            index = buffer.index { |entry| entry.origin.resolve.equal?(target) }
-            next unless index
+            taken, kept = buffer.partition { |entry| entry.origin.resolve.equal?(target) }
+            next taken if taken.empty?
 
-            @replaying += 1
-            remove_at(index)
+            buffer.replace(kept)
+            @buffer_bytes -= taken.sum(&:bytes)
+            @replaying += taken.size
+            taken
           end
         end
 
-        def replay_settled
-          buffer_mutex.synchronize { @replaying = [@replaying - 1, 0].max }
+        def replay_settled(count)
+          buffer_mutex.synchronize { @replaying = [@replaying - count, 0].max }
         end
 
         def buffered_pools
           buffer_mutex.synchronize { buffer.map { |entry| entry.origin.resolve } }.uniq(&:object_id)
         end
 
-        # The entry once it is in Redis, nil when it went back to the buffer.
-        # Same-origin order is all that matters (other entries go to another
-        # server), so a payload that could not be replayed goes back at the
-        # absolute head: ahead of every later entry for its own Redis.
-        def replay(client, entry)
-          begin
-            replayed = attempt_replay(client, entry.payload)
-          rescue StandardError
-            # Non-connection failures (OOM, LOADING, READONLY…) must not drop
-            # the taken payload — restore it before propagating, or a
-            # recovering-but-not-ready Redis silently eats one buffered job per
-            # drain tick. Redis answered, so the circuit closes and pushes go back
-            # to surfacing the refusal to their callers.
-            restore(entry)
-            circuit.close(client.send(:pool))
-            raise
-          end
-          unless replayed
-            restore(entry)
-            return
-          end
+        # Replays `entries` slice by slice and returns how many reached Redis.
+        # On the first slice that does not fully land, what did not land and
+        # every later slice go back at the absolute head of the buffer, in
+        # order: same-origin order is all that matters (other entries go to
+        # another server).
+        #
+        # A slice is a run of immediate or of scheduled payloads, because
+        # Client#atomic_push routes a whole call by its first payload.
+        def replay_entries(client, entries)
+          landed = 0
+          remaining = entries
+          replay_slices(entries).each do |slice|
+            remaining = remaining.drop(slice.size)
+            undelivered, error = replay(client, slice)
+            landed += slice.size - undelivered.size
+            next if undelivered.empty? && error.nil?
 
-          client.send(:emit_enqueued, [entry.payload])
-          Wurk::Metrics::Statsd.increment('jobs.recovered.push')
-          entry
+            return give_back(client, undelivered + remaining, error, landed)
+          end
+          landed
         ensure
-          replay_settled
+          replay_settled(entries.size)
         end
 
-        def restore(entry)
+        def replay_slices(entries)
+          entries.chunk_while { |a, b| a.payload.key?('at') == b.payload.key?('at') }
+                 .flat_map { |run| run.each_slice(REPLAY_SLICE).to_a }
+        end
+
+        # Puts `entries` back and returns `landed`. Non-connection failures
+        # (OOM, LOADING, READONLY…) must not drop the taken payloads either, or
+        # a recovering-but-not-ready Redis silently eats buffered jobs; they
+        # are restored before the error is raised. Redis answered,
+        # so the circuit closes and pushes go back to surfacing the refusal to
+        # their callers.
+        def give_back(client, entries, error, landed)
+          restore(entries)
+          return landed unless error
+
+          circuit.close(client.send(:pool))
+          raise error
+        end
+
+        # [entries that did not reach Redis, the non-connection error or nil].
+        def replay(client, slice)
+          acknowledged, error = attempt_replay(client, slice.map(&:payload))
+          landed, undelivered = acknowledged ? split_acknowledged(slice, acknowledged) : [slice, []]
+          payloads = landed.map(&:payload)
+          client.send(:emit_enqueued, payloads)
+          payloads.each { Wurk::Metrics::Statsd.increment('jobs.recovered.push') }
+          [undelivered, error]
+        end
+
+        def split_acknowledged(slice, acknowledged)
+          seen = {}.compare_by_identity
+          acknowledged.each { |payload| seen[payload] = true }
+          slice.partition { |entry| seen.key?(entry.payload) }
+        end
+
+        def restore(entries)
+          return if entries.empty?
+
           buffer_mutex.synchronize do
-            @buffer_bytes += entry.bytes
-            buffer.unshift(entry)
+            @buffer_bytes += entries.sum(&:bytes)
+            buffer.unshift(*entries)
           end
         end
 
         # Drain marks the thread so our prepended raw_push re-raises the
         # transient error back here instead of swallowing it into the buffer
-        # (which would spin forever).
-        def attempt_replay(client, payload)
+        # (which would spin forever). Returns [nil, nil] when the call landed,
+        # else [the payloads Redis acknowledged, the non-connection error or
+        # nil]: one call is a pipeline per queue, so it can fail after some
+        # of them landed.
+        def attempt_replay(client, payloads)
           Thread.current[DRAINING_KEY] = true
-          client.send(:raw_push, [payload])
-          true
+          client.send(:raw_push, payloads)
+          [nil, nil]
         rescue RedisClient::ConnectionError, ConnectionPool::TimeoutError
-          false
+          [Thread.current[REPLAY_ACKED_KEY] || [], nil]
+        rescue StandardError => e
+          [Thread.current[REPLAY_ACKED_KEY] || [], e]
         ensure
           Thread.current[DRAINING_KEY] = false
+          Thread.current[REPLAY_ACKED_KEY] = nil
         end
       end
 
@@ -672,6 +721,7 @@ module Wurk
         # replace the push's own result (its return, or the Overflow it is
         # raising), so the metric is strictly best-effort.
         def count_drop
+          Wurk::Metrics::ProcessCounters.increment(:client_buffer_drops)
           Wurk::Metrics::Statsd.increment('jobs.dropped.push')
         rescue StandardError
           nil
@@ -820,6 +870,12 @@ module Wurk
 
           buffer_undelivered(payloads)
         ensure
+          close_ledger
+        end
+
+        def close_ledger
+          ledger = Thread.current[DELIVERED_KEY]
+          Thread.current[Buffered::REPLAY_ACKED_KEY] = ledger if Thread.current[Buffered::DRAINING_KEY]
           Thread.current[DELIVERED_KEY] = nil
         end
 

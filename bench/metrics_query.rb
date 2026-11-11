@@ -45,6 +45,16 @@ BUDGETS = {
   'queue history 1m/24h, one queue' => [1, 1440, 1440 * 2],
   'flush, 50 classes in one minute' => [1, 302]
 }.freeze
+# Ruby objects one query allocates (08-M9: the memory budget of a dashboard
+# request), measured on a second call so lazy loads and memo fills are not in
+# it. Checked at the default shape; about 25% over the measured count, since
+# the exact number moves with the Ruby version. Measured on Ruby 3.4.2:
+# top-jobs 5,291,702 (2.6M of them the reply's field strings), queue history
+# 28,852.
+ALLOC_BUDGETS = {
+  'top-jobs 720h' => 6_600_000,
+  'queue history 1m/24h, one queue' => 36_000
+}.freeze
 FLUSH_CLASSES = 50
 GATED = CLASSES == 200 && QUEUES == 500
 
@@ -99,6 +109,9 @@ def measure(label, &query)
 
   AlgoBench.print_count(label, cost)
   printf("  %-52s %10d fields returned\n", '', pairs)
+  allocated = allocations(&query)
+  printf("  %-52s %10d objects allocated\n", '', allocated)
+  AlgoBench.budget!("#{label} (allocations)", allocated, ALLOC_BUDGETS.fetch(label)) if GATED
   if GATED
     budget = BUDGETS.fetch(label)
     AlgoBench.budget!("#{label} (round trips)", cost.round_trips, budget[0])
@@ -106,6 +119,13 @@ def measure(label, &query)
     AlgoBench.budget!("#{label} (fields)", pairs, budget[2])
   end
   rates(label, &query) unless AlgoBench.counts_only?
+end
+
+def allocations(&query)
+  query.call
+  before = GC.stat(:total_allocated_objects)
+  query.call
+  GC.stat(:total_allocated_objects) - before
 end
 
 def rates(label, &query)

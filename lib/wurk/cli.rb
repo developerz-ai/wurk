@@ -119,7 +119,8 @@ module Wurk
       ['-w', '--window SECONDS', :health_window, 'A heartbeat older than this does not count (default 60)', :to_i],
       ['-m', '--min COUNT', :health_min, 'Processes on this host that must be beating (default 1)', :to_i],
       ['-u', '--redis-url URL', :health_redis_url, 'Redis to read (default REDIS_URL)'],
-      ['-s', '--strict', :health_strict, 'Fail when Redis cannot be read, rather than passing']
+      ['-s', '--strict', :health_strict, 'Fail when Redis cannot be read, rather than passing'],
+      ['-a', '--max-job-age SECONDS', :health_max_job_age, 'Also fail when a job here has run this long (off)', :to_i]
     ].freeze
 
     HELP_COMMANDS = "\nCommands:\n    " \
@@ -298,7 +299,8 @@ module Wurk
       opts = @health_options
       @config.redis = { url: opts[:health_redis_url] } if opts[:health_redis_url]
       HealthProbe.new(@config, window: opts[:health_window] || HealthProbe::DEFAULT_WINDOW,
-                               min: opts[:health_min] || 1, strict: opts[:health_strict] == true).call
+                               min: opts[:health_min] || 1, strict: opts[:health_strict] == true,
+                               max_job_age: opts[:health_max_job_age]).call
     end
 
     # `wurk api` — serve the machine-facing HTTP API and nothing else: no

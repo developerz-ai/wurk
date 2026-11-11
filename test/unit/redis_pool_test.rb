@@ -594,6 +594,8 @@ class RedisPoolTest < Wurk::Test::UnitCase
       yield @conn
     end
 
+    def available = 1
+
     def shutdown(&)
       # no-op
     end

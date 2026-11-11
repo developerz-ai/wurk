@@ -72,6 +72,18 @@ PAYLOAD_BUDGETS = {
   'batches page 0 failed_jids in payload' => 0,
   'dead page 0 rows inflating error_backtrace' => 0
 }.freeze
+# Ruby objects one page request allocates, Rails stack included (08-M9: the
+# memory budget of a dashboard request), measured on a second request so lazy
+# loads are not in it. About 25% over the count measured on Ruby 3.4.2 (in
+# the comment per row), since the exact number moves with the Ruby and Rails
+# versions. A page that walked its whole list would be orders of magnitude over.
+ALLOC_BUDGETS = {
+  'queue page 0' => 1_700, 'queue page 999' => 1_700,        # 1,337 / 1,335
+  'dead page 0' => 1_950, 'dead page 999' => 1_950,          # 1,556 / 1,557
+  'batches page 0' => 3_950, 'batches page 999' => 3_950,    # 3,152 / 3,153
+  'flows page 0' => 1_950, 'flows page 999' => 1_950,        # 1,540 / 1,541
+  'limits page 0' => 37_000, 'limits page 999' => 37_000     # 29,645 / 29,648
+}.freeze
 GATED = PAGE_SIZE == 25 && FAILED_PER_BATCH == 1000
 
 Wurk.configuration.logger = Logger.new(IO::NULL)
@@ -168,8 +180,18 @@ def page_costs
       label = "#{name} page #{page}"
       AlgoBench.print_count(label, cost)
       AlgoBench.budget_count!(label, cost, BUDGETS.fetch(label)) if GATED
+      page_allocations(label, paged(path, page))
     end
   end
+end
+
+def page_allocations(label, path)
+  get(path)
+  before = GC.stat(:total_allocated_objects)
+  get(path)
+  allocated = GC.stat(:total_allocated_objects) - before
+  printf("  %-52s %10d objects allocated\n", '', allocated)
+  AlgoBench.budget!("#{label} (allocations)", allocated, ALLOC_BUDGETS.fetch(label)) if GATED
 end
 
 def payload_costs

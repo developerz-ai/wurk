@@ -111,6 +111,29 @@ class MetricsAccumulatorTest < Wurk::Test::UnitCase
     assert_equal(((MINUTE + 10)..(MINUTE + cap + 9)).to_a, @acc.drain[nil].keys.sort)
   end
 
+  def test_lifetime_keeps_successes_per_class_and_survives_drain
+    2.times { add(ms: 10) }
+    add(ms: 25)
+    add(ms: 5, success: false)
+    @acc.drain
+
+    count, ms, hist = @acc.lifetime['FooJob']
+
+    assert_equal [3, 45], [count, ms]
+    assert_equal [2, 1], hist.first(2)
+  end
+
+  def test_lifetime_folds_classes_past_the_cap_into_other
+    Wurk::Metrics::Accumulator::MAX_LIFETIME_CLASSES.times { |i| @acc.add(nil, "K#{i}", MINUTE, 1, true) }
+    @acc.add(nil, 'Late', MINUTE, 1, true)
+    @acc.add(nil, 'Later', MINUTE, 1, true)
+    lifetime = @acc.lifetime
+
+    assert_equal Wurk::Metrics::Accumulator::MAX_LIFETIME_CLASSES + 1, lifetime.size
+    assert_equal 2, lifetime['other'][0]
+    refute lifetime.key?('Late')
+  end
+
   private
 
   def add(pool: nil, klass: 'FooJob', minute: MINUTE, ms: 1, success: true)

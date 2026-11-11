@@ -4,6 +4,7 @@ require 'securerandom'
 require_relative 'component'
 require_relative 'fetcher/oom_drain'
 require_relative 'lua'
+require_relative 'metrics/process_counters'
 require_relative 'pool_checkout'
 require_relative 'timer_loop'
 
@@ -115,6 +116,7 @@ module Wurk
       return false unless transition
 
       if transition == :gained
+        Metrics::ProcessCounters.increment(:leader_acquired)
         @token = redis_call { |c| next_token(c) }
         dispatch_leader_event
       end

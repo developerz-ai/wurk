@@ -42,6 +42,10 @@ module Wurk
       # fleet of one and /ready judges them on their own heartbeat alone.
       attr_accessor :fleet_size
 
+      # The swarm parent's Swarm::RestartCounters, likewise set by ChildBoot;
+      # nil outside a swarm child.
+      attr_accessor :swarm_counters
+
       # WURK_HEALTH_PORT turns the listener on from the environment, so whoever
       # owns the deployment manifest can add a probe without an application
       # change. `config.health_check` wins when both are set. A bad value raises:
@@ -369,7 +373,8 @@ module Wurk
       def metrics_response
         return nil if option(:metrics) == false
 
-        body = collector.render(expected_children: Health.fleet_size, fresh_window: @ready_window)
+        body = collector.render(expected_children: Health.fleet_size, fresh_window: @ready_window,
+                                swarm: Health.swarm_counters&.read)
         [body, 200, Metrics::Prometheus::CONTENT_TYPE]
       end
 

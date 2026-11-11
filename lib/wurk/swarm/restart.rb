@@ -22,9 +22,9 @@ module Wurk
     # swarm's fork/kill/Redis internals and unit-testable against fakes.
     class Restart
       Config = Struct.new(:spawn, :kill, :heartbeat, :describe, :respawn, :now, :logger,
-                          :heartbeat_wait, :drain_timeout, :backoff, keyword_init: true)
+                          :heartbeat_wait, :drain_timeout, :backoff, :restarted, keyword_init: true)
 
-      def initialize(config)
+      def initialize(config) # rubocop:disable Metrics/AbcSize
         @spawn = config.spawn            # ->(slot, idx) => replacement pid (registered by the swarm)
         @kill = config.kill              # ->(pid, sig)
         @heartbeat = config.heartbeat    # ->(pid) => truthy once the child has beaten
@@ -35,7 +35,9 @@ module Wurk
         @heartbeat_wait = config.heartbeat_wait
         @drain_timeout = config.drain_timeout
         @backoff = config.backoff
+        @restarted = config.restarted    # ->(reason) once per replacement forked; optional
         @queue = []
+        @reasons = {}
         @current = nil
       end
 
@@ -45,11 +47,13 @@ module Wurk
 
       # Queue live child PIDs for restart, skipping any already queued or in
       # flight so recycle + rolling restart can't double up on one slot.
-      def enqueue(pids)
+      # `reason` (:rolling, :recycle) is what `restarted` reports for the slot.
+      def enqueue(pids, reason = :rolling)
         pids.each do |pid|
           next if in_flight?(pid) || @queue.include?(pid)
 
           @queue << pid
+          @reasons[pid] = reason
         end
       end
 
@@ -85,6 +89,7 @@ module Wurk
       # are ordinary children the swarm's shutdown TERMs and drains.
       def abort
         @queue.clear
+        @reasons.clear
         @current = nil
       end
 
@@ -104,8 +109,10 @@ module Wurk
         replacement = spawn_replacement(pid, meta)
         return unless replacement
 
-        @current = { old_pid: pid, index: meta[:index], replacement: replacement,
+        reason = @reasons.delete(pid)
+        @current = { old_pid: pid, index: meta[:index], replacement: replacement, reason: reason,
                      phase: :await_heartbeat, deadline: now + @heartbeat_wait }
+        @restarted&.call(reason)
         @logger.info { "swarm: restarting slot #{meta[:index]} (old #{pid} -> new #{replacement})" }
       end
 
@@ -134,7 +141,7 @@ module Wurk
 
         meta = @describe.call(pid)
         if meta.nil?
-          @queue.shift
+          @reasons.delete(@queue.shift)
           return nil
         end
         return nil unless @backoff.ready?(meta[:index])
@@ -179,6 +186,7 @@ module Wurk
         cur = @current
         delay = @backoff.fail(cur[:index], lifetime: 0.0)
         @queue.unshift(cur[:old_pid])
+        @reasons[cur[:old_pid]] = cur[:reason]
         @logger.warn do
           "swarm: replacement #{cur[:replacement]} for slot #{cur[:index]} died; " \
             "keeping #{cur[:old_pid]}, retry in #{delay}s"

@@ -71,6 +71,37 @@ class HealthProbeTest < Wurk::Test::UnitCase
     assert_equal 1, cli.run_health
   end
 
+  # O5: a heartbeat keeps beating while every processor is wedged in one job.
+  def test_max_job_age_fails_on_a_job_running_past_it
+    id = "#{HOST}:1:n"
+    beat(id, ::Time.now.to_f)
+    @redis.call('HSET', "#{id}:work", 't1', work_entry(::Time.now.to_i - 120))
+    @redis.call('HSET', "#{id}:work", 't2', work_entry(::Time.now.to_i - 5))
+
+    assert_equal 0, probe.call, 'off by default'
+    assert_equal 0, probe(max_job_age: 300).call
+    assert_equal 1, probe(max_job_age: 60).call
+    assert_match(/running for 1[12]\ds \(limit 60s\)/, @out.string)
+  end
+
+  def test_max_job_age_passes_an_idle_host
+    beat("#{HOST}:1:n", ::Time.now.to_f)
+
+    assert_equal 0, probe(max_job_age: 1).call
+  end
+
+  def test_cli_passes_max_job_age
+    id = "#{HOST}:1:n"
+    beat(id, ::Time.now.to_f)
+    @redis.call('HSET', "#{id}:work", 't1', work_entry(::Time.now.to_i - 120))
+    cli = Wurk::CLI.instance.class.allocate
+    cli.send(:initialize)
+    cli.config = @config
+    cli.parse(['health', '--max-job-age', '60', '--redis-url', Wurk::Test.redis_url])
+
+    assert_equal 60, cli.instance_variable_get(:@health_options)[:health_max_job_age]
+  end
+
   def test_help_lists_health_but_not_the_hidden_api_command
     cli = Wurk::CLI.instance.class.allocate
     cli.send(:initialize)
@@ -105,6 +136,10 @@ class HealthProbeTest < Wurk::Test::UnitCase
     started = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
     yield
     ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - started
+  end
+
+  def work_entry(run_at)
+    Wurk.dump_json('queue' => 'default', 'payload' => '{"run_at":1}', 'run_at' => run_at)
   end
 
   def beat(identity, at)

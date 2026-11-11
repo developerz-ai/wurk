@@ -14,6 +14,7 @@ require_relative 'swarm/orphan_guard'
 require_relative 'swarm/liveness'
 require_relative 'swarm/memory_watch'
 require_relative 'swarm/prefork'
+require_relative 'swarm/restart_counters'
 
 module Wurk
   # Parent supervisor. Forks N children per the worker topology, monitors
@@ -150,6 +151,7 @@ module Wurk
       @crash_watch = CrashWatch.new(exit_after: crash_exit_after, young_within: Backoff::RESET_AFTER)
       @exit_on_crash_loop = exit_on_crash_loop
       @crash_looped = false
+      @restart_counters = nil
       @title_program = nil
       @restart = build_restart
       @liveness = build_liveness(heartbeat_timeout)
@@ -227,6 +229,7 @@ module Wurk
       hard_kill_stragglers
       close_supervisor_pool
       close_signal_pipe
+      @restart_counters&.close
     end
 
     # Cross-thread drain request: raise a flag the supervise loop observes on
@@ -270,7 +273,7 @@ module Wurk
     # heartbeat → TERM the old child → await its drain) without blocking the
     # supervise thread, so TERM stays responsive throughout the cycle.
     def rolling_restart
-      @lock.synchronize { @restart.enqueue(@children.keys) }
+      @lock.synchronize { @restart.enqueue(@children.keys, :rolling) }
     end
 
     private
@@ -347,7 +350,8 @@ module Wurk
                     logger: logger,
                     heartbeat_wait: HEARTBEAT_WAIT,
                     drain_timeout: @shutdown_timeout + SHUTDOWN_GRACE,
-                    backoff: Backoff.new(base: RESPAWN_BACKOFF)
+                    backoff: Backoff.new(base: RESPAWN_BACKOFF),
+                    restarted: ->(reason) { @restart_counters&.record_restart(reason) }
                   ))
     end
 
@@ -355,7 +359,7 @@ module Wurk
       return nil unless limit_kb
 
       MemoryWatch.new(limit_kb: limit_kb, metric: @config.memory_limit_metric, logger: logger,
-                      recycle: ->(pid) { @lock.synchronize { @restart.enqueue([pid]) } })
+                      recycle: ->(pid) { @lock.synchronize { @restart.enqueue([pid], :recycle) } })
     end
 
     # `{ pid => [seconds since fork, slot index] }` for every child in the table.
@@ -432,6 +436,7 @@ module Wurk
     # per-fork enforcement. Left sequential; re-measure with
     # `bin/rake bench:swarm_boot` before revisiting.
     def fork_children
+      @restart_counters = RestartCounters.open(logger: logger)
       @assignments.each_index { |idx| spawn_child(@assignments[idx], idx) }
     end
 
@@ -470,7 +475,7 @@ module Wurk
       # child pid would drain the whole swarm). Dropped, the trap write no-ops.
       close_signal_pipe
       ChildBoot.new(@config, slot, idx, parent_pid: parent_pid, start_quiet: @quieted,
-                                        fleet_size: @assignments.size).run
+                                        fleet_size: @assignments.size, restart_counters: @restart_counters).run
       exit 0 # unreachable; ChildBoot exits explicitly
     end
 
@@ -592,6 +597,7 @@ module Wurk
       meta = @children.delete(pid)
       return unless meta
 
+      reason = @liveness&.terminating?(pid) ? :liveness : :crash
       @liveness&.forget(pid)
       @memory_watch&.forget(pid)
       return meta if @restart.claim_exit(pid)
@@ -599,7 +605,7 @@ module Wurk
       if @stopping
         logger.info { "swarm: child #{pid} exited (status=#{status&.exitstatus})" }
       else
-        schedule_respawn(pid, status, meta)
+        schedule_respawn(pid, status, meta, reason)
       end
       meta
     end
@@ -630,7 +636,8 @@ module Wurk
     # due tick respawns it. A child that lived past the reset window counts as a
     # fresh failure (base delay), so only a genuine crash-loop escalates toward
     # the cap.
-    def schedule_respawn(pid, status, meta)
+    def schedule_respawn(pid, status, meta, reason = :crash)
+      @restart_counters&.record_restart(reason)
       idx = meta[:index]
       lifetime = monotonic - meta[:spawned_at]
       delay = @respawn_backoff.fail(idx, lifetime: lifetime)
@@ -651,6 +658,7 @@ module Wurk
     def check_crash_loop
       now = monotonic
       @lock.synchronize { @children.each_value { |meta| @crash_watch.settled(meta[:index], now - meta[:spawned_at]) } }
+      @restart_counters&.crash_streak = @crash_watch.max_streak
       return unless @crash_watch.due?(@assignments.each_index.to_a, now)
 
       give_up_on_crash_loop

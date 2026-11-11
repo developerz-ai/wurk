@@ -458,6 +458,25 @@ Alongside the families listed in [deployment](deployment.md), the health listene
 | `wurk_leader` | 1 when this pod's process group holds the leader lease | `sum` should be 1 |
 | `wurk_fetch_errors_total` | Fetch-loop errors in the process serving the scrape | `rate`; a sample of one child under a swarm |
 | `wurk_reaper_reclaimed_total` | Orphaned jobs this process reclaimed | `rate`; a sample of one child under a swarm |
+| `wurk_jobs_reclaimed_total{source=}` | The same reclaims split by who found them: `reaper` (the periodic sweep) or `self` (a live process returning a payload it lost track of) | `rate`; a sample of one child |
+| `wurk_poison_kills_total` | Jobs sent to the dead set for being orphaned past the poison-pill cap | `increase > 0` is worth a look |
+| `wurk_leader_acquired_total` | Times the process serving the scrape became leader | `changes`/`increase`; a flapping leader shows here |
+| `wurk_scheduler_promoted_total{set=}` | Jobs this process promoted from `retry` / `schedule` | `rate`; a sample of one child |
+| `wurk_scheduler_lag_seconds{set=}` | How far past due the earliest `retry` / `schedule` member is; 0 when nothing is due | cluster value, `max`; alert when it keeps growing |
+| `wurk_client_buffer_dropped_total` | Jobs `reliable_push` dropped from its outage buffer (cap reached) | `increase > 0` means lost jobs |
+| `wurk_redis_pool_checkout_timeouts_total{pool=}` | Checkouts that waited past `pool_timeout` for a free connection | `increase > 0`: raise the pool size |
+| `wurk_redis_pool_size{pool=}`, `wurk_redis_pool_available{pool=}` | Connections each pool may open, and slots free right now | `available` near 0 for long is exhaustion |
+| `wurk_process_redis_rtt_seconds{pid=}` | Round trip of the process's last heartbeat write | per process; a rising floor is Redis or network latency |
+| `wurk_process_oldest_job_seconds{pid=}` | Age of the longest-running job in the process; 0 when idle | alert above your longest legitimate job: a wedged processor keeps the heartbeat alive |
+| `wurk_process_pss_bytes{pid=}` | Proportional set size from `/proc/<pid>/smaps_rollup`: shared pages split across the processes sharing them, so it sums to the pod's real footprint (Linux only; absent elsewhere) | per child; compare with `wurk_process_rss_bytes` |
+| `wurk_job_duration_seconds{class=}` | Histogram of successful job run times since the process started, on Sidekiq's 26 histogram buckets. The 20 busiest classes keep their name, the rest are summed as `class="other"` | `histogram_quantile` over `rate(..._bucket)`; a sample of one child |
+| `wurk_swarm_child_restarts_total{reason=}` | Children the swarm parent replaced: `crash` (died on its own), `liveness` (heartbeat stood still, see `swarm_heartbeat_timeout`), `recycle` (over `memory_limit_mb`), `rolling` (USR1) | `increase`; the parent's own count, so it survives the child serving the scrape. Swarm only |
+| `wurk_swarm_crash_streak` | Longest run of young crashes across the swarm's slots; 0 when none is crashing | `> 0` for minutes is a crash loop. Swarm only |
+
+The swarm parent runs no listener and writes no Redis key for its counts: it keeps
+them in an unlinked temp file opened before the first fork, which every child
+inherits and reads on each scrape. Every other process-local family resets when
+the child serving the scrape restarts; `rate` and `increase` handle that.
 
 [`examples/kubernetes/prometheus-rule.yaml`](../examples/kubernetes/prometheus-rule.yaml)
 has ready-made alert rules.
@@ -486,12 +505,20 @@ without limit.
 | Key | Written by | Retention | Steady-state size |
 |-----|-----------|-----------|-------------------|
 | `j\|<YYMMDD>\|<H>:<MM>` | every worker, ≤5s | 8 hours from last write | ≤ 480 keys; 3 fields × active job classes each |
-| `j\|<YYMMDD>\|<H>:<M>` | every worker, ≤5s | 30 days from last write (`MID_TERM`) | ≤ 4320 keys; 3 fields × active job classes each |
+| `j\|<YYMMDD>\|<H>:<M>` | every worker, ≤5s | 30 days from last write (`MID_TERM`; `config.metrics_retention`) | ≤ 4320 keys at 30 days; 3 fields × active job classes each |
 | `h\|<klass>-<D>-<H>:<M>` | every worker, ≤5s | 8 hours from last write | ≤ 480 keys × active job classes; 52 bytes each |
 | `jr\|{1m,5m,1h}\|<epoch>` | rollup leader | 24h / 7d / 30d | ≈ 4 176 keys total — see [Metrics history](metrics-history.md) |
 | `qm\|{1m,5m,1h}\|<epoch>` | queue-rollup leader | 24h / 7d / 30d | ≈ 4 176 keys; 2 fields × live queues each |
 | `history:metrics` | `retain_history` snapshotter | capped at ~10 000 entries | ~3.5 days at the 30s default |
 | `<YYYYMMDD>-marks` | `Deploy.mark!` | 90 days | one small HASH per day |
+
+**Shortening the 10-minute retention.** `config.metrics_retention = 7 * 24 * 3600`
+(seconds, at least 3 days, Sidekiq's own TTL for these keys) changes the TTL of the
+10-minute buckets and nothing else: same keys, same fields. Their count is
+retention ÷ 10 minutes (4320 at 30 days, 1008 at 7 days), each holding 3 fields per
+job class that ran in it, so the Redis cost scales linearly with the setting. The
+dashboard's 7-day and 30-day tabs show zeros for anything older than the retention.
+`nil` restores the 30-day default.
 
 The per-class keys are the only ones that scale with job-class cardinality —
 an app that generates dynamic class names (thousands of distinct `class`
@@ -513,8 +540,10 @@ Three supported export paths:
 `wurk_scheduled_size`, `wurk_retry_size`, `wurk_dead_size`, `wurk_processes`,
 `wurk_busy`, `wurk_concurrency`, `wurk_swarm_children_expected`,
 `wurk_swarm_children_fresh`, and per process (`{pid}`) `wurk_process_busy`,
-`wurk_process_concurrency`, `wurk_process_rss_bytes`,
-`wurk_process_heartbeat_age_seconds`, `wurk_process_quiet`. Cluster families
+`wurk_process_concurrency`, `wurk_process_rss_bytes`, `wurk_process_pss_bytes`,
+`wurk_process_heartbeat_age_seconds`, `wurk_process_quiet`,
+`wurk_process_redis_rtt_seconds`, `wurk_process_oldest_job_seconds`, plus the
+operational families in [the table above](#operational-gauges-on-the-health-listener). Cluster families
 come from shared Redis and are identical on every pod — aggregate with `max`,
 not `sum`; `wurk_process_*` and `wurk_swarm_children_*` describe the scraped
 pod's own swarm. Values are cached for 1s and one scrape costs one Redis

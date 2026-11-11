@@ -386,9 +386,16 @@ Two details that differ from a stock Sidekiq unit:
 - **`Type=simple`, not `Type=notify`.** Wurk does not emit `sd_notify` readiness or
   watchdog pings, so there's no `WatchdogSec`. systemd considers the process ready as
   soon as `ExecStart` forks.
-- **`TimeoutStopSec` ≥ shutdown timeout.** The unit sets `TimeoutStopSec=30` against
-  the default 25s drain so a clean shutdown always wins before systemd's `SIGKILL`.
-  If you raise `-t`, raise `TimeoutStopSec` to match.
+- **`TimeoutStopSec` > shutdown timeout + 5s.** The unit sets `TimeoutStopSec=35`
+  against the default 25s drain, plus the 5s a `wurkswarm` parent gives a straggler
+  child before it `KILL`s it, so a clean shutdown always wins before systemd's
+  `SIGKILL`. If you raise `-t`, raise `TimeoutStopSec` with it.
+- **A release that cannot boot stops restarting.** `RestartSec=5` with
+  `StartLimitBurst=5` in `StartLimitIntervalSec=300`: five failed starts in five
+  minutes leave the unit `failed`, where `systemctl status` and your alerting see it,
+  instead of a restart every second forever. `systemctl reset-failed wurk` re-arms it.
+  On systemd 254 or newer, `RestartSteps=` and `RestartMaxDelaySec=` back off instead
+  of a fixed delay.
 
 ### Multiple workers
 
@@ -414,14 +421,17 @@ fully drop-in:
 - `Sidekiq::CLI` is aliased to `Wurk::CLI`, and
 - the `TSTP` / `TERM` / `USR1` signal semantics match exactly.
 
-The one thing to map is the binary name. Wurk ships `wurk`, `wurkswarm`, and a
-`sidekiqswarm` alias — but there is **no `sidekiq` binary** (see
-[`docs/migrate-from-sidekiq.md`](migrate-from-sidekiq.md)). So an Enterprise
-`sidekiqswarm` invocation drops in unchanged, while a `bundle exec sidekiq` invocation
-needs pointing at `wurk`: set `sidekiq_role`/`sidekiq_command` config to
-`wurk`/`wurkswarm`, or add a tiny `bin/sidekiq` shim that `exec`s `wurk`. The systemd
-integration mode drops in the same way — replace the generated unit's `ExecStart` with
-`bundle exec wurk` and keep the rest.
+Wurk ships `wurk`, `wurkswarm`, and the `sidekiq` and `sidekiqswarm` aliases, so a
+`bundle exec sidekiq` or `sidekiqswarm` invocation drops in unchanged. The systemd
+integration mode drops in the same way: keep the generated unit, or point its
+`ExecStart` at `bundle exec wurk`.
+
+Without capistrano-sidekiq, [`examples/capistrano/wurk.rake`](../examples/capistrano/wurk.rake)
+drives the [systemd unit](#systemd) directly: it quiets the old workers when the deploy
+starts and restarts them on the new release once it is published (and on a failed
+deploy, so quieted workers do not stay idle). It restarts rather than sending `USR1`:
+a rolling restart forks replacements from the running `wurkswarm` parent, which still
+holds the old code.
 
 ---
 
@@ -557,6 +567,12 @@ livenessProbe:
 within `--window` seconds (default 60), `--min COUNT` raises how many must be beating, and it
 passes when Redis cannot be read, so a store outage does not restart your workers, unless you
 add `--strict`.
+
+A heartbeat only says the process is alive: its heartbeat thread keeps beating while every
+processor thread is stuck in one job. `--max-job-age SECONDS` (off by default) also fails the
+probe when any job on this host has been running that long. Set it above your longest
+legitimate job, or a slow job restarts the pod. The same signal is on `/metrics` as
+`wurk_process_oldest_job_seconds`, where an alert is gentler than a restart.
 
 Prefer either to a `ps | grep` exec probe ([process titles](#process-titles)). That probe passes as long as the swarm parent
 is alive, including while every child crash-loops and nothing is being processed. `wurkswarm`
@@ -728,9 +744,11 @@ default-deny namespace needs. Without the rule the scrape target just reads as d
 [`examples/kubernetes/prometheus-rule.yaml`](../examples/kubernetes/prometheus-rule.yaml)
 covers the exporter going away (`absent()`, without which every other alert goes quiet
 along with it), Redis unreachable, missing children, queue latency, a queue nobody
-consumes, no leader, dead-set growth, fetch errors and reclaims, using `wurk_leader`,
-`wurk_fetch_errors_total`, `wurk_reaper_reclaimed_total` and `wurk_queue_consumers` among
-others. Every metric and how to aggregate it is in
+consumes, no leader, dead-set growth, fetch errors and reclaims, children restarting,
+a crash loop and a starved Redis pool, using `wurk_leader`, `wurk_fetch_errors_total`,
+`wurk_reaper_reclaimed_total`, `wurk_queue_consumers`,
+`wurk_swarm_child_restarts_total`, `wurk_swarm_crash_streak` and
+`wurk_redis_pool_checkout_timeouts_total` among others. Every metric and how to aggregate it is in
 [metrics](metrics.md#7-exporting-to-an-external-system). A unit test keeps these manifests
 in step with the exporter.
 
@@ -878,6 +896,29 @@ DB connections per host = WURK_COUNT × pool     (each fork opens its own pool)
 - Rule of thumb: `concurrency: 5` and `WURK_COUNT` = cores you want to dedicate to
   jobs. Raise concurrency for IO-bound work, raise `WURK_COUNT` for CPU-bound work,
   re-check the connection and memory math after either change.
+
+### Sizing table
+
+One row per number you set; each is per process unless it says host. `C` is
+`concurrency`, `N` is `WURK_COUNT`, `T` is the shutdown timeout (`-t`, `:timeout`).
+
+| Setting | Size it to | Default | When it is wrong |
+|---|---|---|---|
+| Processes per host (`WURK_COUNT`) | Cores you give to jobs; set it explicitly | the cgroup CPU limit, else every core | A default on a large node forks one child per core: `N × C` jobs and DB connections you did not plan for |
+| Threads per process (`concurrency`) | 5 for mixed work; higher only for IO-bound jobs | 5 | CPU-bound jobs above ~5 threads queue on the GVL and run no faster |
+| Redis pool, main (`config.redis[:size]`) | Leave it: `C + 5`, at least 10. Raise it only if your job code checks out Redis itself | `C + 5` (min 10) | `wurk_redis_pool_checkout_timeouts_total` rises, `wurk_redis_pool_available` sits at 0 |
+| Redis pool, fetch | Fixed at `C`, one per processor thread | `C` | Not a knob |
+| Redis connections per host | `N × (C + 5 + C)` plus the swarm parent's one; check against the server's `maxclients` and any ACL or proxy limit | | Connection refused at boot or on a deploy, when old and new pods overlap |
+| Active Record pool (`database.yml` `pool:`) | `C` plus headroom for threads your jobs start: `C + 2` | Rails' `RAILS_MAX_THREADS` (5) | `pool == C` with no headroom times out as soon as a job uses a thread or a callback holds a connection |
+| DB connections per host | `N × AR pool`; check against the database's spare connections (and the pgbouncer pool) | | `N × pool` past the database's limit fails under load, not at boot |
+| `:timeout` (`-t`) | Longer than the jobs you want to finish on a deploy; jobs still running after it are pushed back to their queue | 25 | Too short requeues long jobs on every deploy; see [idempotency](idempotency.md) |
+| Kubernetes `terminationGracePeriodSeconds` | `preStop` sleep + `T` + 5 (swarm grace) + a few seconds | 30 | Grace ≤ `T` + 5 SIGKILLs the drain: in-flight jobs come back only through the reclaim, minutes later |
+| systemd `TimeoutStopSec` | `T` + 5 + a few seconds | 35 in the [example unit](../examples/wurk.service) | As above |
+| `memory_limit_mb` | Above a booted child's footprint ([Memory](#memory)) | off | Below a booted child: the child is marked and never recycled, and an ERROR says so |
+
+A worker container's memory limit is roughly `N ×` per-child PSS plus the parent;
+`wurk_process_pss_bytes` reports each child's PSS, which, unlike RSS, does not count
+the copy-on-write pages the children share.
 
 ---
 

@@ -3,6 +3,7 @@
 require 'json'
 require_relative '../middleware'
 require_relative '../metrics/statsd'
+require_relative '../metrics/process_counters'
 require_relative '../keys'
 require_relative '../dead_set'
 
@@ -194,6 +195,7 @@ module Wurk
       # (docs/target/sidekiq-pro.md §12); recorded in docs/idea/parity-divergences.md.
       def mark_poison(payload, job, queue:, count:)
         emit('jobs.poison', job['class'], queue)
+        Wurk::Metrics::ProcessCounters.increment(:poison_kills)
         Wurk::DeadSet.new.kill(payload, ex: poisoned_error(job['class'], count))
         fire_callbacks(jid: job['jid'], klass: job['class'], count: count, queue: queue)
       end

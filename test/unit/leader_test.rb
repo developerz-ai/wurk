@@ -119,9 +119,12 @@ class LeaderTest < Wurk::Test::UnitCase
 
   def test_acquire_returns_true_when_lock_available
     ldr = build_leader
+    gained = Wurk::Metrics::ProcessCounters.value(:leader_acquired)
 
     assert ldr.acquire
     assert_predicate ldr, :leader?
+    assert ldr.acquire, 'a refresh is not a new term'
+    assert_equal gained + 1, Wurk::Metrics::ProcessCounters.value(:leader_acquired)
   end
 
   def test_acquire_writes_owner_to_key

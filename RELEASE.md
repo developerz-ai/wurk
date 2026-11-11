@@ -389,3 +389,29 @@ Every step in this section is a maintainer-only manual action. The scheduled
 health checkup only ever points at this runbook via a filed ask — the checkup
 reports; it never executes a publish, a tag operation or a release create
 itself.
+
+## Upgrade notes in the release notes
+
+When a release asks anything of an app upgrading to it, its notes
+(`docs/changelog/<version>.md`) end with an `### Upgrade notes` block: one bullet
+per item, each starting with a tag, so an adopter can grep every release since the
+one they run instead of auditing each changelog by hand.
+
+```markdown
+### Upgrade notes
+
+- `behaviour-change:` job log `elapsed` is in seconds, as Sidekiq's (was ms).
+- `removable-workaround:` the `unless Wurk.server?` guard around `configure_client` is no longer needed.
+- `action-required:` raise `TimeoutStopSec` above `-t` + 5s; the example unit now says 35.
+```
+
+- `behaviour-change:` something works differently with no code change.
+- `removable-workaround:` a workaround an earlier release forced can now go.
+- `action-required:` a step without which the upgrade misbehaves.
+
+A release that asks nothing has no block. Each bullet names the setting, method or
+file it is about, so one line reads on its own:
+
+```bash
+grep -h -- '- `removable-workaround:`' docs/changelog/*.md
+```

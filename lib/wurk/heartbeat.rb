@@ -84,6 +84,18 @@ module Wurk
       statm.split[1].to_i * PAGE_SIZE / 1024
     end
 
+    # Sum of `fields` (kB) in /proc/<pid>/smaps_rollup; nil when none is
+    # there. Raises SystemCallError when the file cannot be read. Shared with
+    # Swarm::MemoryWatch and Metrics::Prometheus.
+    def self.smaps_kb(pid, fields, proc_root: '/proc')
+      total = nil
+      ::File.foreach("#{proc_root}/#{pid}/smaps_rollup") do |line|
+        name, value = line.split(':', 2)
+        total = total.to_i + value.to_i if value && fields.include?(name)
+      end
+      total
+    end
+
     attr_reader :identity, :rtt_us, :last_beat_at
 
     # `quiet:` is a callable so Launcher can keep ownership of its `@done`
@@ -167,7 +179,7 @@ module Wurk
     def beat_at_maxmemory(conn, error, work_snapshot = {})
       work = work_snapshot.flat_map { |tid, hash| [tid.to_s, Wurk.dump_json(hash)] }
       conn.call('EVAL', OOM_BEAT, 3, Keys::PROCESSES, @identity, "#{@identity}:work",
-                Wurk.dump_json(info_hash), Time.now.to_f.to_s, TTL_SECONDS, *work)
+                info_json, Time.now.to_f.to_s, TTL_SECONDS, *work)
       refresh_holds_at_maxmemory(conn)
     rescue RedisClient::ConnectionError
       raise
@@ -197,7 +209,7 @@ module Wurk
 
     def beat_hash_args(busy)
       [
-        'info', Wurk.dump_json(info_hash),
+        'info', info_json,
         'concurrency', total_concurrency.to_s,
         'busy', busy.to_s,
         'beat', Time.now.to_f.to_s,
@@ -245,6 +257,16 @@ module Wurk
     # is missing.
     def drain_signals
       redis { |conn| conn.call('RPOP', "#{@identity}-signals", BEAT_PAUSE) } || []
+    end
+
+    # Every `info` field is fixed once the config is frozen (Launcher#boot
+    # freezes it before the first beat), so the JSON is built once rather than
+    # re-dumped every beat. Same bytes as #info_hash dumped fresh, field order
+    # included: ProcessSet, the dashboard and Sidekiq Web parse it.
+    def info_json
+      return Wurk.dump_json(info_hash) unless @config.frozen?
+
+      @info_json ||= Wurk.dump_json(info_hash).freeze
     end
 
     # The hostname is read once per Heartbeat, like the identity it is paired
@@ -322,9 +344,10 @@ module Wurk
 
     # Best-effort statsd snapshot per beat. Emits `sidekiq.busy` (this
     # process's in-flight job count) and `sidekiq.queue.size` (per queue
-    # LLEN). Tagged with `process:<identity>` so multi-process emissions
-    # of the global `queue.size` are tag-distinguishable downstream — pick
-    # `max` across the process tag in your dashboard. No-op when
+    # LLEN). Tagged with `process:<identity>`. `queue.size` is a cluster
+    # value, so only the leader sends it: every process LLEN-ing every queue
+    # each beat cost O(processes x queues) commands fleet-wide for one number
+    # per queue. `max` across the process tag still reads it. No-op when
     # `config.dogstatsd` is unset (Statsd.gauge short-circuits on nil
     # client) so the LLEN pipeline is also skipped.
     # Spec hint: docs/target/sidekiq-ent.md §5.2 names (`busy`, `queue.size`).
@@ -333,7 +356,7 @@ module Wurk
 
       busy = Processor::WORK_STATE.size
       Wurk::Metrics::Statsd.gauge('busy', busy, tags: ["process:#{@identity}"])
-      emit_queue_sizes
+      emit_queue_sizes if leader?
     rescue StandardError => e
       handle_exception(e, { context: 'heartbeat metrics' })
     end

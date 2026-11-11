@@ -103,13 +103,7 @@ module Wurk
       end
 
       def smaps_kb(pid)
-        fields = SMAPS_FIELDS.fetch(@metric)
-        total = nil
-        ::File.foreach("#{@proc_root}/#{pid}/smaps_rollup") do |line|
-          name, value = line.split(':', 2)
-          total = total.to_i + value.to_i if value && fields.include?(name)
-        end
-        total
+        Heartbeat.smaps_kb(pid, SMAPS_FIELDS.fetch(@metric), proc_root: @proc_root)
       end
     end
   end

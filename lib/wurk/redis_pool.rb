@@ -5,6 +5,8 @@ require 'connection_pool'
 require_relative 'command_builder'
 require_relative 'redis_client_adapter'
 require_relative 'redis_options'
+require_relative 'metrics/process_counters'
+require_relative 'metrics/pool_registry'
 
 module Wurk
   # Per-process pool over redis-client + connection_pool. Never share a socket
@@ -40,7 +42,7 @@ module Wurk
   # replay a non-idempotent block that has already completed one.
   # Every retry, refused replay, and final give-up is reported through the
   # injected `on_error` telemetry hook (Wurk::Configuration#on_redis_error).
-  class RedisPool
+  class RedisPool # rubocop:disable Metrics/ClassLength
     DEFAULT_URL  = ENV.fetch('REDIS_URL', 'redis://localhost:6379/0')
     DEFAULT_NAME = 'default'
 
@@ -147,6 +149,7 @@ module Wurk
       @reaper_lock        = Thread::Mutex.new
       @reaper             = nil
       @reaper_closed      = false
+      Metrics::PoolRegistry.register(self)
     end
 
     # Checkout a connection and run the block. Our own checkout raises
@@ -172,6 +175,7 @@ module Wurk
       rescue ConnectionPool::TimeoutError => e
         raise if entered
 
+        Metrics::ProcessCounters.increment([:pool_checkout_timeouts, @name])
         if checkout_retried
           notify_error(e, attempt: 2, retried: false)
           raise
@@ -184,6 +188,7 @@ module Wurk
     end
 
     def disconnect!
+      Metrics::PoolRegistry.deregister(self)
       stop_reaper
       @pool.shutdown { |conn| safe_close(conn) }
     end

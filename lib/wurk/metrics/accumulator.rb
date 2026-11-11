@@ -36,16 +36,32 @@ module Wurk
       # failure during a metrics write has never changed a job's outcome).
       MAX_RETAINED_MINUTES = 60
 
+      # The process-lifetime per-class histograms behind `/metrics`
+      # (`wurk_job_duration_seconds`) stop adding classes here; any further
+      # class folds into OTHER, so dynamic class names cannot grow the table.
+      MAX_LIFETIME_CLASSES = 500
+      OTHER = 'other'
+
       def initialize
         @lock = ::Mutex.new
         @pools = {}
+        @lifetime = {}
       end
 
-      # Hot path. Three hash lookups under the mutex; allocates only the first
+      # Hot path. Four hash lookups under the mutex; allocates only the first
       # time a (pool, minute, class) triple is seen.
       def add(pool, klass, minute, ms, success)
         bucket = Histogram.index_for(ms) if success
-        @lock.synchronize { fold(((@pools[pool] ||= {})[minute] ||= {})[klass] ||= [0, 0, 0, nil], ms, bucket) }
+        @lock.synchronize do
+          fold(((@pools[pool] ||= {})[minute] ||= {})[klass] ||= [0, 0, 0, nil], ms, bucket)
+          record_lifetime(klass, ms, bucket) if bucket
+        end
+      end
+
+      # `{ class => [successes, total ms, Histogram::SIZE bucket counts] }` since
+      # this process started; never drained, so it is a Prometheus counter.
+      def lifetime
+        @lock.synchronize { @lifetime.transform_values { |count, ms, hist| [count, ms, hist.dup] } }
       end
 
       # Hands the whole tree over and starts a fresh one, so recording never
@@ -75,6 +91,15 @@ module Wurk
       end
 
       private
+
+      def record_lifetime(klass, ms, bucket)
+        counts = @lifetime[klass] ||
+                 (@lifetime[@lifetime.size < MAX_LIFETIME_CLASSES ? klass : OTHER] ||=
+                    [0, 0, Array.new(Histogram::SIZE, 0)])
+        counts[0] += 1
+        counts[1] += ms
+        counts[2][bucket] += 1
+      end
 
       # `bucket` is the success's histogram slot, nil for a failure.
       def fold(counts, ms, bucket)
