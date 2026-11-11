@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require_relative 'base'
-
 module Wurk
   module Limiter
     # Atomic slot acquisition in a ZSET. Score = expiry epoch; the acquire

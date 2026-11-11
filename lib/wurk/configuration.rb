@@ -487,7 +487,6 @@ module Wurk
     #
     # Spec: docs/target/sidekiq-ent.md §2.
     def periodic
-      require_relative 'cron'
       @periodic_manager ||= Wurk::Cron::Manager.new(self, deferred: true)
       yield @periodic_manager if block_given?
       @periodic_manager

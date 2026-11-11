@@ -3,12 +3,7 @@
 require_relative '../component'
 require_relative '../keys'
 require_relative '../timer_loop'
-require_relative 'private_list_key'
-require_relative 'unparseable_keys'
-require_relative 'orphan_grace'
 require_relative 'oom_drain'
-require_relative 'orphan_reclaim'
-require_relative 'self_reconcile'
 require_relative 'reliable'
 
 module Wurk

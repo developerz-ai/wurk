@@ -51,7 +51,7 @@
     post 'busy/quiet', to: 'api#quiet_process', as: :api_quiet_process
     post 'busy/stop',  to: 'api#stop_process',  as: :api_stop_process
 - entry: "Busy-control HTTP request-shape parity is unsupported"
-  anchor: "app/controllers/wurk/api_controller.rb#L178-L179"
+  anchor: "app/controllers/wurk/api_controller.rb#L177-L178"
   fragment: |-
     def quiet_process = signal_processes(:quiet!)
     def stop_process  = signal_processes(:stop!)
@@ -127,7 +127,7 @@
     def delete_job(jid)
       raise ArgumentError, 'jid required' if jid.nil? || jid.to_s.empty?
 - entry: "Queue job-delete takes `jid`, not the spec's `key_val`"
-  anchor: "app/controllers/wurk/application_controller.rb#L22"
+  anchor: "app/controllers/wurk/application_controller.rb#L20"
   fragment: |-
     rescue_from(*::Wurk::Configuration::REDIS_ERROR_CLASSES) { |ex| render_redis_unavailable(ex) }
 - entry: "Queue job-delete takes `jid`, not the spec's `key_val`"

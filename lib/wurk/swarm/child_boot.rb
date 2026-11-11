@@ -1,11 +1,9 @@
 # frozen_string_literal: true
 
 require_relative '../component'
-require_relative '../launcher'
 require_relative '../client/buffered'
 require_relative '../fetcher/reliable'
 require_relative '../lua'
-require_relative '../health'
 require_relative 'orphan_guard'
 require_relative 'test_mode_guard'
 

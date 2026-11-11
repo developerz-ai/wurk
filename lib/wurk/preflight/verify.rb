@@ -1,9 +1,7 @@
 # frozen_string_literal: true
 
 require_relative '../client'
-require_relative '../cron'
 require_relative '../keys'
-require_relative '../leader'
 require_relative '../preflight'
 require_relative 'keyspace'
 require_relative 'owners'

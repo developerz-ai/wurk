@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require_relative 'base'
-
 module Wurk
   module Limiter
     # Leaky bucket: drain rate = bucket_size / drain ops/sec. Stored as a

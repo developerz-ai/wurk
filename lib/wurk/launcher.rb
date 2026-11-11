@@ -1,22 +1,10 @@
 # frozen_string_literal: true
 
 require_relative 'component'
-require_relative 'manager'
 require_relative 'processor'
-require_relative 'heartbeat'
-require_relative 'health'
 require_relative 'keys'
-require_relative 'scheduled'
-require_relative 'leader'
-require_relative 'cron'
-require_relative 'metrics/rollup'
-require_relative 'metrics/queue_rollup'
 require_relative 'queue_consumers'
-require_relative 'metrics/flusher'
-require_relative 'history'
-require_relative 'fetcher/reaper'
 require_relative 'timer_loop'
-require_relative 'shutdown_gate'
 
 module Wurk
   # Top-level supervisor inside each worker process. Owns the Manager pool

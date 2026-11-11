@@ -1,6 +1,6 @@
 ---
 - entry: 'Quiet does not step the leader down; full shutdown does'
-  anchor: lib/wurk/launcher.rb#L140-L150
+  anchor: lib/wurk/launcher.rb#L136-L146
   fragment: |-
     @managers.each(&:quiet)
     @poller&.terminate
@@ -47,7 +47,7 @@
     @options[:redis_error_handlers] << block
 
 - entry: 'DEFAULTS adds `:redis_error_handlers`'
-  anchor: lib/wurk/configuration.rb#L1290-L1291
+  anchor: lib/wurk/configuration.rb#L1289-L1290
   fragment: |-
     def dispatch_redis_error(info)
     redis_error_handlers.each do |handler|

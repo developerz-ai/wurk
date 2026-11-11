@@ -5,7 +5,6 @@ require 'digest'
 require 'time'
 require_relative 'component'
 require_relative 'client'
-require_relative 'leader'
 require_relative 'timer_loop'
 
 module Wurk

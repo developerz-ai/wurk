@@ -1,11 +1,9 @@
 # frozen_string_literal: true
 
 require 'time'
-require_relative '../deploy'
 require_relative '../pool_checkout'
 require_relative 'history'
 require_relative 'histogram'
-require_relative 'dashboard_series'
 
 module Wurk
   module Metrics

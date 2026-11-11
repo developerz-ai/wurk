@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require_relative '../heartbeat'
-
 module Wurk
   class Swarm
     # Parent-side child liveness. A child can stay alive as a pid while doing

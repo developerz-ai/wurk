@@ -3,4 +3,4 @@
 # Drop-in require path (sidekiq-pro.md §10): Sidekiq::Pro::Web is the same
 # dashboard as Sidekiq::Web.
 require 'wurk'
-require 'wurk/compat/web'
+Sidekiq::Pro.const_get(:Web)

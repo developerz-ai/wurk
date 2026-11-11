@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require_relative 'base'
-
 module Wurk
   module Limiter
     # Cardinal-boundary counter. Reset at the top of the unit (00:00 of

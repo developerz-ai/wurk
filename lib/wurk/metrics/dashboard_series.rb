@@ -1,8 +1,6 @@
 # frozen_string_literal: true
 
 require_relative '../keys'
-require_relative 'rollup'
-require_relative 'queue_rollup'
 
 module Wurk
   module Metrics

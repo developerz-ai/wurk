@@ -14,7 +14,8 @@ require 'open3'
 class LazyLoaderTest < Wurk::Test::UnitCase
   parallelize_me!
 
-  LIB = File.expand_path('../../lib', __dir__)
+  ROOT = File.expand_path('../..', __dir__)
+  LIB = File.join(ROOT, 'lib')
 
   # Every `Sidekiq::*` constant that names a Wurk module, and the Wurk constant
   # it must be. The oracle for the drop-in contract: completeness is asserted
@@ -69,6 +70,15 @@ class LazyLoaderTest < Wurk::Test::UnitCase
       out
     end
   RUBY
+
+  # The file a `require` / `require_relative` line loads, without `.rb`, when it
+  # is one of ours; nil for a gem or any other line.
+  def required_file(file, line)
+    case line
+    when /\A\s*require_relative\s+['"]([^'"]+)['"]/ then File.expand_path(Regexp.last_match(1), File.dirname(file))
+    when %r{\A\s*require\s+['"](wurk/[^'"]+)['"]} then File.join(LIB, Regexp.last_match(1))
+    end&.delete_suffix('.rb')
+  end
 
   def ruby(code)
     out, err, status = Open3.capture3(RbConfig.ruby, *Wurk::Test::SUBPROCESS_COVERAGE, '-I', LIB, '-e', code)
@@ -140,6 +150,30 @@ class LazyLoaderTest < Wurk::Test::UnitCase
     RUBY
 
     assert_equal ALIASES.except('Sidekiq::Rails::Reloader').keys.sort, result.keys.sort
+  end
+
+  # On Ruby 3.2 a plain `require` of an autoload's file does not take that
+  # autoload's lock: a thread requiring launcher.rb (from cli.rb) and a thread
+  # resolving Wurk::Launcher each wait on the other, and the process dies with
+  # "No live threads left. Deadlock?". So nothing in lib/ or app/ requires an
+  # autoload target; it names the constant and lets the autoload load it.
+  # The concurrent case below hits that race only sometimes; this one always.
+  def test_no_file_requires_an_autoload_target
+    targets = ruby(<<~RUBY).to_set
+      require 'json'
+      require 'wurk'
+      print JSON.dump(Wurk::LazyLoader.registered.map { |ns, name| ns.autoload?(name).delete_suffix('.rb') })
+    RUBY
+    offenders = Dir[File.join(ROOT, '{lib,app}/**/*.rb')].flat_map do |file|
+      File.foreach(file).with_index(1).filter_map do |line, lineno|
+        target = required_file(file, line)
+        next unless target && targets.include?(target) && target != file.delete_suffix('.rb')
+
+        "#{file.delete_prefix("#{ROOT}/")}:#{lineno}: #{line.strip}"
+      end
+    end
+
+    assert_empty offenders, 'name the constant instead of requiring its autoload file'
   end
 
   def test_concurrent_first_references_share_one_object

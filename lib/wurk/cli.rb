@@ -11,8 +11,6 @@ require_relative 'version'
 require_relative 'configuration'
 require_relative 'component'
 require_relative 'capsule'
-require_relative 'launcher'
-require_relative 'rails_boot'
 require_relative 'boot_checks'
 
 module Wurk

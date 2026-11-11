@@ -4,7 +4,6 @@ require 'erb'
 require 'json'
 require 'net/http'
 require 'uri'
-require 'wurk/web'
 
 module Wurk
   # Serves the SPA shell. Everything else is JSON from ApiController.

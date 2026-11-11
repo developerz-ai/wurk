@@ -6,5 +6,5 @@
 # passthrough carries that *semantic* as well as the CLI class: requiring it
 # declares this process a server.
 require 'wurk'
-require 'wurk/compat/server'
+Sidekiq.const_get(:CLI)
 Wurk.enter_server_mode

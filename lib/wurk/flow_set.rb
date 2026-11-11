@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require_relative 'flow'
-
 module Wurk
   # Discovery over the `flows` sorted set: `size`, and `each` newest-first
   # yielding {Wurk::Flow::Status}. The counterpart of {Wurk::BatchSet}, and a

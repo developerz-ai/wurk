@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require_relative 'points'
-
 module Wurk
   module Limiter
     # No-op for the tests + bypass scenarios documented in §1.8. The

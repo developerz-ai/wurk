@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require_relative '../keys'
-require_relative 'orphan_reclaim'
 
 module Wurk
   class Fetcher

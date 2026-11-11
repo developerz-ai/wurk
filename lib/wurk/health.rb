@@ -2,7 +2,6 @@
 
 require 'socket'
 require 'json'
-require_relative 'metrics/prometheus'
 
 module Wurk
   # Thin HTTP listener for k8s liveness/readiness probes. Optional, off by

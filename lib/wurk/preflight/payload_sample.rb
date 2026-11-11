@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require 'json'
-require_relative '../encryption'
 require_relative '../keys'
 
 module Wurk

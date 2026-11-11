@@ -1,17 +1,17 @@
 - entry: 'Concurrent limiter polls instead of using XREAD waiter signalling'
-  anchor: lib/wurk/limiter/concurrent.rb#L16
+  anchor: lib/wurk/limiter/concurrent.rb#L14
   fragment: |-
     WAIT_SLEEP = 0.05
 
 - entry: 'Concurrent limiter polls instead of using XREAD waiter signalling'
-  anchor: lib/wurk/limiter/concurrent.rb#L89-L98
+  anchor: lib/wurk/limiter/concurrent.rb#L87-L96
   fragment: |-
     loop do
       return monotime if acquire(slot, waited)[0].to_i == 1
       return if @options[:policy] == :ignore
 
 - entry: 'Concurrent limiter polls instead of using XREAD waiter signalling'
-  anchor: lib/wurk/limiter/concurrent.rb#L101-L109
+  anchor: lib/wurk/limiter/concurrent.rb#L99-L107
   fragment: |-
     def acquire(slot, waited)
       lua(:limiter_concurrent_acquire,
@@ -30,7 +30,7 @@
     local removed = redis.call('ZREM', KEYS[1], ARGV[1])
 
 - entry: 'Concurrent limiter polls instead of using XREAD waiter signalling'
-  anchor: lib/wurk/limiter/concurrent.rb#L53-L55
+  anchor: lib/wurk/limiter/concurrent.rb#L51-L53
   fragment: |-
     def state_keys
       [state_key, stats_key]

@@ -3,10 +3,7 @@
 require 'monitor'
 
 require_relative 'component'
-require_relative 'heartbeat'
-require_relative 'launcher'
 require_relative 'fetcher/reliable'
-require_relative 'fetcher/reaper'
 require_relative 'capsule'
 require_relative 'keys'
 require_relative 'swarm/child_boot'

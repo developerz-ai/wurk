@@ -2,4 +2,4 @@
 
 # Drop-in require path (see lib/sidekiq.rb): loads the lazy surface it names.
 require 'wurk'
-require 'wurk/compat/iterable_job'
+Sidekiq.const_get(:IterableJob)

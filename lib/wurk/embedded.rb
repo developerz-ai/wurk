@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require_relative 'component'
-require_relative 'launcher'
 
 module Wurk
   # Embeds Wurk inside an arbitrary Ruby process (Puma, rake task, custom

@@ -60,7 +60,7 @@ class IdleBootFootprintTest < Wurk::Test::UnitCase
       assert_equal IDLE_THREADS, threads, 'idle worker threads by name'
 
       conns = worker_connections
-      fetch = conns.count { |c| c['cmd'] == 'blmove' }
+      fetch = conns.count { |c| parked?(c) }
 
       assert_equal CONCURRENCY, fetch, "one fetch socket per processor, parked in BLMOVE: #{conns}"
       # The main pool holds what the background loops (heartbeat, poller,
@@ -134,7 +134,7 @@ class IdleBootFootprintTest < Wurk::Test::UnitCase
     previous = nil
     while monotonic_now < deadline
       current = @observer.call('GET', @threads_key)&.split(',')&.tally
-      parked = worker_connections.count { |c| c['cmd'] == 'blmove' } == CONCURRENCY
+      parked = worker_connections.count { |c| parked?(c) } == CONCURRENCY
       return current if parked && current && current == previous
 
       previous = current
@@ -142,6 +142,12 @@ class IdleBootFootprintTest < Wurk::Test::UnitCase
     end
 
     flunk "idle worker never settled; last threads: #{previous.inspect}, conns: #{worker_connections}"
+  end
+
+  # Blocked in BLMOVE, the only blocking command a worker sends. The `b` flag,
+  # not `cmd`: Dragonfly's CLIENT LIST has no `cmd` field.
+  def parked?(conn)
+    conn['flags'].to_s.include?('b')
   end
 
   def worker_connections

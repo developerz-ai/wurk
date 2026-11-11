@@ -101,12 +101,12 @@ wake-up delay after a slot is released. The 50ms bound is on each requested
 sleep, not a guarantee of scheduling or acquisition latency. This does not
 claim identical wake latency, FIFO ordering, or fairness relative to Ent.
 
-**Anchor:** [poll interval](../../lib/wurk/limiter/concurrent.rb#L16),
-[retry loop and immediate ignore](../../lib/wurk/limiter/concurrent.rb#L89-L98),
-[acquire/release key scope](../../lib/wurk/limiter/concurrent.rb#L101-L109),
+**Anchor:** [poll interval](../../lib/wurk/limiter/concurrent.rb#L14),
+[retry loop and immediate ignore](../../lib/wurk/limiter/concurrent.rb#L87-L96),
+[acquire/release key scope](../../lib/wurk/limiter/concurrent.rb#L99-L107),
 [atomic acquisition and TTLs](../../lib/wurk/lua/limiter_concurrent_acquire.lua#L15-L33),
 [ZREM-only release](../../lib/wurk/lua/limiter_concurrent_release.lua#L10),
-[concurrent lifecycle keys](../../lib/wurk/limiter/concurrent.rb#L53-L55), and
+[concurrent lifecycle keys](../../lib/wurk/limiter/concurrent.rb#L51-L53), and
 [reset/delete scope](../../lib/wurk/limiter/base.rb#L50-L61).
 
 ## Limiter reschedule cap routes to the dead set, not re-raise
@@ -234,7 +234,7 @@ a short `ttl` (legal in Sidekiq Ent) booting after the gem swap.
 **Wurk:** `SIGUSR1` on the swarm parent enqueues every live child into
 `Swarm#rolling_restart`, a state machine (`spawn_replacement → await
 heartbeat → SIGTERM old slot → await exit → next`) driven entirely by the
-existing non-blocking supervise loop (`lib/wurk/swarm.rb:275-277`, the
+existing non-blocking supervise loop (`lib/wurk/swarm.rb:272-274`, the
 `:usr1` case at `lib/wurk/swarm.rb:525-539`, and the state machine in
 `lib/wurk/swarm/restart.rb`).
 
@@ -255,7 +255,7 @@ cycling, which the in-process state machine does (verified by
 `test/integration/rolling_restart_test.rb` and
 `test/integration/swarm_supervision_test.rb`, PR3).
 
-**Anchor:** `lib/wurk/swarm.rb:275-277`, `lib/wurk/swarm.rb:525-539`,
+**Anchor:** `lib/wurk/swarm.rb:272-274`, `lib/wurk/swarm.rb:525-539`,
 `lib/wurk/swarm/restart.rb`, PR3 (`fix/swarm-supervision`), Ent §8.
 
 ## USR2 reopens logs; RSS recycling uses the rolling-restart machine
@@ -298,14 +298,14 @@ queued or in flight (including the replacement), so repeated RSS checks and
 manual rolling restarts cannot double-enqueue the same work. This deliberately
 changes the signal and hand-off ordering, not the purpose of RSS recycling.
 
-**Anchor:** [ChildBoot signal table](../../lib/wurk/swarm/child_boot.rb#L32),
+**Anchor:** [ChildBoot signal table](../../lib/wurk/swarm/child_boot.rb#L30),
 [child dispatch and reopen](../../lib/wurk/swarm/child_boot.rb#L226-L247),
 [parent drain_signals](../../lib/wurk/swarm.rb#L525-L539),
-[parent reopen](../../lib/wurk/swarm.rb#L554-L558),
-[parent relay](../../lib/wurk/swarm.rb#L708-L710),
+[parent reopen](../../lib/wurk/swarm.rb#L553-L557),
+[parent relay](../../lib/wurk/swarm.rb#L705-L707),
 [recycle enqueue](../../lib/wurk/swarm.rb#L357-L362),
 [memory check and fresh-child guard](../../lib/wurk/swarm/memory_watch.rb#L66-L78),
-[manual rolling_restart enqueue](../../lib/wurk/swarm.rb#L275-L277),
+[manual rolling_restart enqueue](../../lib/wurk/swarm.rb#L272-L274),
 [Restart deduplication](../../lib/wurk/swarm/restart.rb#L48-L54),
 [replacement spawn](../../lib/wurk/swarm/restart.rb#L99-L109), and
 [heartbeat/TERM/drain phases](../../lib/wurk/swarm/restart.rb#L145-L170).
@@ -636,7 +636,7 @@ resetting it.
 **Wurk:** quiet is cluster-global and one-way, signalled with `TSTP`
 (`lib/wurk/swarm.rb:224-231`, `lib/wurk/api/swarm.rb:37`
 `QUIET_SIGNAL = 'TSTP'`, `lib/wurk/cli.rb:66-68`). `Launcher#quiet`
-(`lib/wurk/launcher.rb:140-150`) quiets every manager and the scheduled
+(`lib/wurk/launcher.rb:136-146`) quiets every manager and the scheduled
 poller, deliberately leaves the cron poller running, and never touches
 `@leader` — the renewal loop keeps renewing the lock every 15s while held
 (`lib/wurk/leader.rb:189-199`) straight through a quiet. Leadership ends only
@@ -661,7 +661,7 @@ on campaign loss or campaign error (`lib/wurk/leader.rb:189-199,281-286`). Full
 shutdown releases the lock deliberately, periodic loops stopped before the
 CAS release, rather than waiting out the TTL.
 
-**Anchor:** `lib/wurk/launcher.rb:140-150` (`#quiet`),
+**Anchor:** `lib/wurk/launcher.rb:136-146` (`#quiet`),
 `lib/wurk/launcher.rb:355-367` (`#redis_teardown_steps`),
 `lib/wurk/leader.rb:189-199` (`#stop` join + release); pinned by
 `test/unit/launcher_test.rb` (`test_quiet_does_not_terminate_periodic_poller`,
@@ -1100,7 +1100,7 @@ gem that reads `Sidekiq::Pro::VERSION` raises `NameError` and must gate on
 (`config/routes.rb:15,57-58`). The action is selected by the path:
 `ApiController#quiet_process` calls `signal_processes(:quiet!)` and
 `#stop_process` calls `signal_processes(:stop!)`
-(`app/controllers/wurk/api_controller.rb:178-179`). The helper reads only
+(`app/controllers/wurk/api_controller.rb:177-178`). The helper reads only
 `identity`: absent or empty, or `"all"`, targets every live non-embedded
 process; a named identity targets that process. An unknown identity returns
 404, and a named embedded process is not signalled and returns count 0
@@ -1122,7 +1122,7 @@ or a compatibility handler; it does not infer unspecified flag semantics.
 
 **Anchor:** free §25.4 ([free §25.4 Routes — `POST /busy`](../target/sidekiq-free.md#254-routes));
 `config/routes.rb:15,65-70`;
-`app/controllers/wurk/api_controller.rb:178-179,450-461`
+`app/controllers/wurk/api_controller.rb:177-178,450-461`
 (`quiet_process`, `stop_process`, `signal_processes`).
 
 ## `Sidekiq.redis` retries a refused connect with backoff
@@ -1264,7 +1264,7 @@ leaves `params[:jid]` blank, so `delete_job('')` raises
 `ArgumentError, 'jid required'` before any Redis round-trip
 (`lib/wurk/api/fast.rb:20-31`), and the engine rescues only Redis errors there
 (`rescue_from(*REDIS_ERROR_CLASSES)` in
-`app/controllers/wurk/application_controller.rb:22`, class list at
+`app/controllers/wurk/application_controller.rb:20`, class list at
 `lib/wurk/configuration.rb:119`) — an unhandled 500, not the
 `unknown job` 404, which is the unmatched-jid branch
 (`app/controllers/wurk/api_controller.rb:86-91`) and is reachable only when a
@@ -1275,7 +1275,7 @@ to add `key_val` support.
 **Anchor:** free §25.4 ([free §25.4 Routes — `POST /queues/:name/delete`](../target/sidekiq-free.md#254-routes));
 `config/routes.rb:15,21`; `app/controllers/wurk/api_controller.rb:86-91`;
 `lib/wurk/api/fast.rb:20-31`;
-`app/controllers/wurk/application_controller.rb:22`;
+`app/controllers/wurk/application_controller.rb:20`;
 `lib/wurk/configuration.rb:119`; `frontend/src/pages/Queues.tsx:77-84`;
 `test/engine/api_mutations_test.rb:487-500`.
 
@@ -1379,7 +1379,7 @@ mirrored Sidekiq prefix of `@options` stays byte-for-byte intact, so gems
 introspecting the config hash see no change.
 
 **Anchor:** `lib/wurk/configuration.rb:51`, `lib/wurk/configuration.rb:368`,
-`lib/wurk/configuration.rb:1290-1291`; free DEFAULTS
+`lib/wurk/configuration.rb:1289-1290`; free DEFAULTS
 ([free §4.1 DEFAULTS — handler keys](../target/sidekiq-free.md#41-defaults)).
 
 ## Pool sizing: three disjoint pools per process
@@ -1681,8 +1681,8 @@ long-lived SSE stream from draining the connections a co-located worker needs
 to fetch and heartbeat (#101). A class-level pool handle would let any gem swap
 that pool out from under every request path, and it is global mutable state
 set before boot: the parent closes its sockets before forking
-(`lib/wurk/swarm.rb:400-404`) and each child drops the inherited pools and
-builds fresh ones (`lib/wurk/swarm/child_boot.rb:157-158`), so a
+(`lib/wurk/swarm.rb:399-403`) and each child drops the inherited pools and
+builds fresh ones (`lib/wurk/swarm/child_boot.rb:155-156`), so a
 caller-assigned pool could not survive the fork boundary — it would be an
 inherited socket, not a fresh pool.
 Per-mount shards would need a pool and a teardown per mount, which the
@@ -1699,8 +1699,8 @@ shard-per-mount deployment has no Wurk equivalent.
 [`config.web_pool_size`](../../lib/wurk/configuration.rb#L310-L317),
 [`config.web_redis_pool`](../../lib/wurk/configuration.rb#L332-L334) and
 [`build_redis_pool`](../../lib/wurk/configuration.rb#L1280-L1284);
-[parent sockets closed before fork](../../lib/wurk/swarm.rb#L400-L404) and
-[child pools rebuilt after fork](../../lib/wurk/swarm/child_boot.rb#L157-L158);
+[parent sockets closed before fork](../../lib/wurk/swarm.rb#L399-L403) and
+[child pools rebuilt after fork](../../lib/wurk/swarm/child_boot.rb#L155-L156);
 free §25.1 ([free §25.1 Entrypoint](../target/sidekiq-free.md#251-entrypoint))
 and Pro §10.2 ([Pro §10.2 Multi-shard](../target/sidekiq-pro.md#102-multi-shard));
 the user-facing statement is [migration guide §7](../migrate-from-sidekiq.md#7-known-incompatibilities--what-not-to-expect);
