@@ -38,28 +38,39 @@ ROWS      = PAGE_SIZE * (DEEP_PAGE + 1)
 FAILED_PER_BATCH = Integer(ENV.fetch('WURK_BENCH_FAILED_PER_BATCH', '1000'))
 QUEUE = 'paging'
 
-# [round trips, commands], recorded on this tree at the default shape (25 per
-# page, 1000 failed jids per batch): the "before" of 07-A1, A2, A6, A14, A16 and
-# 21-K1..K5. Exact, so any added round trip or command fails the run; a fix
+# [round trips, commands] at the default shape (25 per page, 1000 failed jids
+# per batch). Exact, so any added round trip or command fails the run; a fix
 # lowers its row in the same change. Another shape prints counts ungated.
+#
+# Before 07-A1/A2/A6/A14/A16 and 21-K1..K5 (v1.13.0): queue page 0/999 5/1003,
+# dead 2/501, batches 52/25,276, flows 27/25,251, limits 150/150, SSE tick 9,
+# /api/queues 6, /api/processes 6, queue detail 5 round trips; 25,000 failed
+# jids and 25 inflated backtraces in the page-0 payloads.
+#
+# Limits: page 0 runs first and pays the per-process liveness probe (an EXISTS
+# per limiter, at most once a minute); page 999 is a page between probes. The
+# rest of a limits row is Limiter#status, three round trips per row.
+# /api/queues is one command over its old count: the snapshot also reads the
+# `default` tail the landing payload needs.
 BUDGETS = {
-  'queue page 0' => [5, 5], 'queue page 999' => [1003, 1003],
-  'dead page 0' => [2, 2], 'dead page 999' => [501, 501],
-  'batches page 0' => [52, 127], 'batches page 999' => [25_276, 25_351],
-  'flows page 0' => [27, 27], 'flows page 999' => [25_251, 25_251],
-  'limits page 0' => [150, 25_102], 'limits page 999' => [150, 25_102],
-  'GET /api/stats (SSE tick), 10 queues 5 processes' => [9, 47],
-  'GET /api/stats (SSE tick), 20 queues 10 processes' => [9, 82],
-  'GET /api/queues, 10 queues 5 processes' => [6, 35],
-  'GET /api/queues, 20 queues 10 processes' => [6, 60],
-  'GET /api/queues/:name, page 0' => [5, 5],
-  'GET /api/processes, 5 processes' => [6, 14],
-  'GET /api/processes, 10 processes' => [6, 24]
+  'queue page 0' => [1, 4], 'queue page 999' => [1, 4],
+  'dead page 0' => [1, 2], 'dead page 999' => [1, 2],
+  'batches page 0' => [2, 127], 'batches page 999' => [2, 127],
+  'flows page 0' => [2, 27], 'flows page 999' => [2, 27],
+  'limits page 0' => [126, 25_102], 'limits page 999' => [77, 101],
+  'GET /api/stats (SSE tick), 10 queues 5 processes' => [2, 36],
+  'GET /api/stats (SSE tick), 20 queues 10 processes' => [2, 61],
+  'GET /api/queues, 10 queues 5 processes' => [2, 36],
+  'GET /api/queues, 20 queues 10 processes' => [2, 61],
+  'GET /api/queues/:name, page 0' => [1, 4],
+  'GET /api/processes, 5 processes' => [5, 14],
+  'GET /api/processes, 10 processes' => [5, 24]
 }.freeze
-# Payload rows, not round trips.
+# Payload rows, not round trips: list rows carry neither jid arrays (A2) nor
+# backtraces (A16).
 PAYLOAD_BUDGETS = {
-  'batches page 0 failed_jids in payload' => 25 * 1000,
-  'dead page 0 rows inflating error_backtrace' => 25
+  'batches page 0 failed_jids in payload' => 0,
+  'dead page 0 rows inflating error_backtrace' => 0
 }.freeze
 GATED = PAGE_SIZE == 25 && FAILED_PER_BATCH == 1000
 

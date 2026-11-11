@@ -152,13 +152,12 @@ module Wurk
         { name: summary.name, size: summary.size, latency: summary.latency, paused: summary.paused? }
       end
 
-      # The same four gauges read off a Wurk::Queue instead of a pipelined
-      # Stats::QueueSummary — three round trips rather than a share of one,
-      # which is what asking about a single queue costs. Same field names on
-      # purpose: a client that read a queue out of the listing and then fetched
-      # it should not have to reshape anything.
-      def queue_gauges(queue)
-        { name: queue.name, size: queue.size, latency: queue.latency, paused: queue.paused? }
+      # The same four gauges read off a Wurk::Queue::Snapshot instead of a
+      # Stats::QueueSummary. Same field names on purpose: a client that read a
+      # queue out of the listing and then fetched it should not have to
+      # reshape anything.
+      def queue_gauges(name, gauges)
+        { name: name, size: gauges.size, latency: gauges.latency, paused: gauges.paused? }
       end
 
       # `class` and `args` are the *display* view, the same one the dashboard

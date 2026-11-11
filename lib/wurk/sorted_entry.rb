@@ -91,6 +91,22 @@ module Wurk
 
     def error? = !item['error_class'].nil?
 
+    # Puts the original bytes back at the original score, after this entry was
+    # removed and its push failed. Internal: #remove_job and JobSet's batched
+    # retry_all, which removes a page before pushing it.
+    #
+    # Past maxmemory the push is refused, and so is a plain ZADD putting the
+    # entry back. Dragonfly refuses both forms: all that is left is the log.
+    def restore_after_failed_push
+      Wurk.redis do |conn|
+        conn.call('ZADD', @parent.name, @score, value)
+      rescue RedisClient::OutOfMemoryError => e
+        Fetcher::OomDrain.zadd(conn, e, @parent.name, @score, value)
+      end
+    rescue StandardError => e
+      Wurk.logger.error("#{@parent.name} entry lost, ZADD refused (#{e.class}): #{loggable_payload}")
+    end
+
     private
 
     # Pulls the message out of Redis, yields its raw JSON for the caller's
@@ -114,18 +130,6 @@ module Wurk
         raise
       end
       item
-    end
-
-    # Past maxmemory the push is refused, and so is a plain ZADD putting the
-    # entry back. Dragonfly refuses both forms: all that is left is the log.
-    def restore_after_failed_push
-      Wurk.redis do |conn|
-        conn.call('ZADD', @parent.name, @score, value)
-      rescue RedisClient::OutOfMemoryError => e
-        Fetcher::OomDrain.zadd(conn, e, @parent.name, @score, value)
-      end
-    rescue StandardError => e
-      Wurk.logger.error("#{@parent.name} entry lost, ZADD refused (#{e.class}): #{loggable_payload}")
     end
 
     # The last copy of the job, so it is logged whole, short of what the host's

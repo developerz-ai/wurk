@@ -38,6 +38,20 @@ module Wurk
       end
     end
 
+    # The set's size and the #each-ordered page of `count` batches from
+    # `offset`, each as its Status#summary: the page's ids in one round trip
+    # and every row's hash and set sizes in a second, where #each pays a round
+    # trip per batch from the top of the set down. Internal reader for the
+    # dashboard.
+    #
+    # @return [Array(Integer, Array<Hash>)]
+    def snapshot(offset, count)
+      Wurk.redis do |conn|
+        size, bids = page_ids(conn, offset, count)
+        [size.to_i, summaries(conn, bids)]
+      end
+    end
+
     # Yields each BID indexed under the given tag (set at `tags:<tag>`).
     # No JSON parsing; cheap iteration. Caller wraps in `Status.new(bid)`
     # if it needs full state.
@@ -51,6 +65,26 @@ module Wurk
           members.each(&block)
           break if cursor == '0'
         end
+      end
+    end
+
+    private
+
+    # ZCARD and one newest-first page of ids, in one round trip.
+    def page_ids(conn, offset, count)
+      conn.pipelined do |pipe|
+        pipe.call('ZCARD', @key)
+        pipe.call('ZRANGE', @key, offset, offset + count - 1, 'REV')
+      end
+    end
+
+    def summaries(conn, bids)
+      return [] if bids.empty?
+
+      commands = bids.map { |bid| [['HGETALL', "b-#{bid}"], *Wurk::Batch::Status.summary_commands(bid)] }
+      replies = conn.pipelined { |pipe| commands.flatten(1).each { |cmd| pipe.call(*cmd) } }
+      bids.zip(replies.each_slice(commands.first.size)).map do |bid, (hash, *sizes)|
+        Wurk::Batch::Status.new(bid, data: hash).summary(sizes)
       end
     end
   end

@@ -2,6 +2,7 @@ import { createSignal, onMount, For, Show, Switch, Match } from 'solid-js';
 import { Pagination } from '../components/Pagination';
 import { ArgsValue } from '../components/ArgsValue';
 import { t } from '../i18n';
+import { basePath } from '../basePath';
 import { PageHeader } from '../components/PageHeader';
 import { formatArgs, formatNumber, hoverTime, relativeTime, truncate } from '../utils';
 import JobDetailModal, { type JobEntry } from '../components/JobDetailModal';
@@ -28,7 +29,6 @@ interface RetryEntry {
   score: number;
   queue?: string;
   enqueued_at?: number | null;
-  error_backtrace?: string[] | null;
 }
 
 const SORT: Accessors<RetryEntry> = {
@@ -158,6 +158,7 @@ export default function Retries() {
               </Show>
               <JobDetailModal
                 entry={selected()}
+                detailUrl={selectedKey() ? `${basePath()}/api/retries/${encodeURIComponent(selectedKey()!)}` : null}
                 atLabel={t('table.retry_at')}
                 actions={readOnly() ? undefined : BULK}
                 pending={single.isPending}

@@ -18,11 +18,19 @@ module Wurk
 
       attr_reader :bid
 
-      def initialize(bid)
+      # `data:` is the `b-<bid>` hash already read, by a listing that fetched a
+      # page of them in one pipeline (BatchSet#snapshot); without it the hash
+      # is read here.
+      def initialize(bid, data: nil)
         raise ArgumentError, 'bid required' if bid.nil? || bid.to_s.empty?
 
         @bid = bid.to_s
-        reload!
+        data ? self.data_hash = data : reload!
+      end
+
+      # The four set sizes #summary takes, as one pipeline's commands.
+      def self.summary_commands(bid)
+        %w[failed died kids jids].map { |set| ['SCARD', "b-#{bid}-#{set}"] }
       end
 
       # False when no `b-<bid>` hash exists — a well-formed bid that was never
@@ -87,24 +95,18 @@ module Wurk
       # set reads it needs ride one pipeline.
       def data
         failed, dead, kids, live = set_snapshot
-        {
-          'bid' => @bid,
-          'total' => total,
-          'pending' => pending,
-          'failures' => failures,
-          'created_at' => created_at,
-          'complete_at' => complete_at,
-          'success_at' => success_at,
-          'death_at' => death_at,
-          'complete' => complete_with?(live.to_i),
-          'invalidated' => invalidated?,
-          'description' => description,
-          'parent_bid' => parent_bid,
-          'tags' => tags,
-          'failed_jids' => failed,
-          'dead_jids' => dead,
-          'child_count' => kids.to_i
-        }
+        header(live).merge('failed_jids' => failed, 'dead_jids' => dead, 'child_count' => kids.to_i)
+      end
+
+      # #data for a listing row: the failed and dead jid sets by size rather
+      # than by member, so a page of batches with ten thousand failures each
+      # is 25 rows and not 250,000 jids. `sizes` are the replies to
+      # .summary_commands when the caller pipelined them for a whole page.
+      def summary(sizes = nil)
+        failed, dead, kids, live = sizes || Wurk.redis do |conn|
+          conn.pipelined { |pipe| Status.summary_commands(@bid).each { |cmd| pipe.call(*cmd) } }
+        end
+        header(live).merge('failed_count' => failed.to_i, 'dead_count' => dead.to_i, 'child_count' => kids.to_i)
       end
 
       # Blocks the current thread until `complete?` is true. Test/util only —
@@ -139,12 +141,33 @@ module Wurk
       end
 
       def reload!
-        raw = Wurk.redis { |conn| conn.call('HGETALL', "b-#{@bid}") }
-        @data = raw.is_a?(Hash) ? raw : raw.each_slice(2).to_h
+        self.data_hash = Wurk.redis { |conn| conn.call('HGETALL', "b-#{@bid}") }
         self
       end
 
       private
+
+      def header(live)
+        {
+          'bid' => @bid,
+          'total' => total,
+          'pending' => pending,
+          'failures' => failures,
+          'created_at' => created_at,
+          'complete_at' => complete_at,
+          'success_at' => success_at,
+          'death_at' => death_at,
+          'complete' => complete_with?(live.to_i),
+          'invalidated' => invalidated?,
+          'description' => description,
+          'parent_bid' => parent_bid,
+          'tags' => tags
+        }
+      end
+
+      def data_hash=(raw)
+        @data = raw.is_a?(Hash) ? raw : raw.each_slice(2).to_h
+      end
 
       # [failed jids, dead jids, child count, live count] in one round trip.
       def set_snapshot

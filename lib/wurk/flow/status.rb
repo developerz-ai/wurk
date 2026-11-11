@@ -31,11 +31,14 @@ module Wurk
 
       attr_reader :fid
 
-      def initialize(fid)
+      # `header:` is the `flow:<fid>` hash already read, by a listing that
+      # fetched a page of them in one pipeline (FlowSet#snapshot); without it
+      # the header is read here.
+      def initialize(fid, header: nil)
         raise ArgumentError, 'fid required' if fid.nil? || fid.to_s.empty?
 
         @fid = fid.to_s
-        reload!
+        header ? self.header = header : reload!
       end
 
       # False when no `flow:<fid>` hash exists: a well-formed fid that was
@@ -98,8 +101,7 @@ module Wurk
       end
 
       def reload!
-        raw = Wurk.redis { |conn| conn.call('HGETALL', Keys.flow(@fid)) }
-        @header = raw.is_a?(Hash) ? raw : raw.each_slice(2).to_h
+        self.header = Wurk.redis { |conn| conn.call('HGETALL', Keys.flow(@fid)) }
         @nodes = nil
         @dead_indexes = nil
         self
@@ -189,6 +191,10 @@ module Wurk
           end
         end
         rows.filter_map { |row| Node.new(NODE_FIELDS.zip(row).to_h) if row.first }
+      end
+
+      def header=(raw)
+        @header = raw.is_a?(Hash) ? raw : raw.each_slice(2).to_h
       end
 
       # "No timestamp" and "a timestamp nothing can read" are the same answer to

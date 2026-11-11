@@ -143,7 +143,9 @@
     "at": "计划时间",
     "args": "参数",
     "error": "错误",
-    "backtrace": "调用栈"
+    "backtrace": "调用栈",
+    "backtrace_loading": "正在加载回溯…",
+    "backtrace_unavailable": "回溯不可用：该作业已不在此集合中。"
   },
   "search": {
     "emptyTitle": "搜索任务",

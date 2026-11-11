@@ -107,6 +107,19 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     assert_equal 4, queue_length
   end
 
+  # JobSet#retry_all writes through #push_prepared: jobs buffered during an
+  # outage must land before the retried ones, as they do before a #push.
+  def test_push_prepared_drains_the_buffer_first
+    client, pool = outage_client
+    client.push(base_item('args' => ['buffered']))
+
+    recover(pool)
+    client.push_prepared([client.prepare_push(base_item('args' => ['retried']))])
+
+    assert_equal 0, Wurk::Client::Buffered.buffer_size
+    assert_equal [['buffered'], ['retried']], queued_args.reverse
+  end
+
   def test_drain_preserves_oldest_first_order
     client, pool = outage_client
     client.push(base_item('args' => ['first']))

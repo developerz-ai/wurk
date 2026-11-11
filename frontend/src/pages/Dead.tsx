@@ -5,6 +5,7 @@ import { SortableTh } from '../components/SortableTh';
 import { useSort, type Accessors } from '../hooks/useSort';
 import { useParams } from '@solidjs/router';
 import { t } from '../i18n';
+import { basePath } from '../basePath';
 import { PageHeader } from '../components/PageHeader';
 import { formatArgs, formatNumber, hoverTime, relativeTime, truncate } from '../utils';
 import JobDetailModal, { type JobEntry } from '../components/JobDetailModal';
@@ -27,7 +28,6 @@ interface DeadEntry {
   score: number;
   queue?: string;
   enqueued_at?: number | null;
-  error_backtrace?: string[] | null;
 }
 
 const SORT: Accessors<DeadEntry> = {
@@ -156,6 +156,7 @@ export default function Dead() {
               </Show>
               <JobDetailModal
                 entry={selected()}
+                detailUrl={selectedKey() ? `${basePath()}/api/dead/${encodeURIComponent(selectedKey()!)}` : null}
                 atLabel={t('table.failed_at')}
                 actions={readOnly() ? undefined : ACTIONS}
                 pending={single.isPending}

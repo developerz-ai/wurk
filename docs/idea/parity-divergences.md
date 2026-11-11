@@ -41,8 +41,8 @@ unmarked for replay under the at-least-once contract, so neither absence nor
 exactly-once delivery is guaranteed in that case. Existing queue membership is
 not removed when a group fails.
 
-**Anchor:** [delivery tracking and round-trip rationale](../../lib/wurk/client.rb#L437-L450),
-[delivery marking](../../lib/wurk/client.rb#L563-L565),
+**Anchor:** [delivery tracking and round-trip rationale](../../lib/wurk/client.rb#L447-L460),
+[delivery marking](../../lib/wurk/client.rb#L584-L586),
 [plain grouping and per-group SADD/LPUSH](../../lib/wurk/client.rb#L473-L498),
 free [§7.1 `atomic_push` semantics](../target/sidekiq-free.md#71-atomic_push-semantics-critical-for-wire-compat),
 and the public `push_bulk`
@@ -942,8 +942,8 @@ JSON field and reverse indexes.
 
 **Anchor:** [JSON and reverse-index writers](../../lib/wurk/batch.rb#L469-L496),
 [reopen reader](../../lib/wurk/batch.rb#L557-L560),
-[status reader](../../lib/wurk/batch/status.rb#L76-L82),
-[reverse-index scan](../../lib/wurk/batch_set.rb#L48-L60),
+[status reader](../../lib/wurk/batch/status.rb#L80-L86),
+[reverse-index scan](../../lib/wurk/batch_set.rb#L52-L64),
 [carried-over cleanup suffixes](../../lib/wurk/batch.rb#L77-L84),
 [delete key selection](../../lib/wurk/batch/status.rb#L130-L136),
 [linger expiry](../../lib/wurk/batch/callbacks.rb#L191-L195), and
@@ -1100,11 +1100,11 @@ gem that reads `Sidekiq::Pro::VERSION` raises `NameError` and must gate on
 (`config/routes.rb:15,57-58`). The action is selected by the path:
 `ApiController#quiet_process` calls `signal_processes(:quiet!)` and
 `#stop_process` calls `signal_processes(:stop!)`
-(`app/controllers/wurk/api_controller.rb:170-171`). The helper reads only
+(`app/controllers/wurk/api_controller.rb:178-179`). The helper reads only
 `identity`: absent or empty, or `"all"`, targets every live non-embedded
 process; a named identity targets that process. An unknown identity returns
 404, and a named embedded process is not signalled and returns count 0
-(`app/controllers/wurk/api_controller.rb:446-457`). It does not select the
+(`app/controllers/wurk/api_controller.rb:450-461`). It does not select the
 action using `quiet` or `stop` request parameters.
 
 **Spec:** free [§25.4](../target/sidekiq-free.md#254-routes) specifies
@@ -1122,7 +1122,7 @@ or a compatibility handler; it does not infer unspecified flag semantics.
 
 **Anchor:** free §25.4 ([free §25.4 Routes — `POST /busy`](../target/sidekiq-free.md#254-routes));
 `config/routes.rb:15,65-70`;
-`app/controllers/wurk/api_controller.rb:170-171,446-457`
+`app/controllers/wurk/api_controller.rb:178-179,450-461`
 (`quiet_process`, `stop_process`, `signal_processes`).
 
 ## `Sidekiq.redis` retries a refused connect with backoff
@@ -1505,8 +1505,8 @@ web search ([Pro §10.1 Mount — Retry/Scheduled/Dead search box](../target/sid
 ## `Stats#expired`/`reset` extend the OSS Stats surface
 
 **Wurk:** `Stats#expired` is a first-class counter snapshotted at `new`
-(`lib/wurk/stats.rb:27`), `Stats::History#expired` reads the daily buckets like
-processed/failed (`lib/wurk/stats.rb:190`), and `reset` with no arguments
+(`lib/wurk/stats.rb:28`), `Stats::History#expired` reads the daily buckets like
+processed/failed (`lib/wurk/stats.rb:274`), and `reset` with no arguments
 clears `failed`, `processed`, **and** `expired` (`lib/wurk/stats.rb:104-107`).
 The counter is fed by the expiry middleware, which bumps `stat:expired` and
 `stat:expired:YYYY-MM-DD` when a job past its `expires_in` is skipped
@@ -1529,8 +1529,8 @@ while leaving expired would make the executed = processed - failed - expired
 arithmetic lie. Both changes are additive: `reset` with explicit arguments is
 unchanged, and the readers are new methods.
 
-**Anchor:** `lib/wurk/stats.rb:27`, `lib/wurk/stats.rb:104-107`,
-`lib/wurk/stats.rb:190`; `lib/wurk/middleware/expiry.rb:105-108`; free Stats
+**Anchor:** `lib/wurk/stats.rb:28`, `lib/wurk/stats.rb:104-107`,
+`lib/wurk/stats.rb:274`; `lib/wurk/middleware/expiry.rb:105-108`; free Stats
 ([free §19.1 `Sidekiq::Stats` readers](../target/sidekiq-free.md#191-sidekiqstats), [free §19.1 `Stats#reset` defaults](../target/sidekiq-free.md#191-sidekiqstats)); Pro
 §7 ([Pro §7 Job expiration — skipped-job Statsd event](../target/sidekiq-pro.md#7-job-expiration--expires_in)).
 

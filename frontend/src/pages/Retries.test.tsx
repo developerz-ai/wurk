@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@solidjs/testing-library';
 import { QueryClient, QueryClientProvider } from '@tanstack/solid-query';
 import { MemoryRouter, Route, createMemoryHistory } from '@solidjs/router';
@@ -108,5 +108,37 @@ describe('job-set "all" actions under a filter (W10)', () => {
     expect(screen.getByText(t('common.matching', { n: '20,000+' }))).toBeInTheDocument();
     // The whole-set badge still reports the unfiltered total those buttons act on.
     expect(screen.getByText('500')).toBeInTheDocument();
+  });
+});
+
+describe('job detail backtrace (07-A16)', () => {
+  // jsdom has no <dialog> modality; Modal only needs the calls to exist.
+  const dialog = Object.fromEntries(['showModal', 'close'].map((name) => [name, Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, name)]));
+  beforeEach(() => {
+    HTMLDialogElement.prototype.showModal = vi.fn();
+    HTMLDialogElement.prototype.close = vi.fn();
+  });
+  afterEach(() => {
+    for (const [name, descriptor] of Object.entries(dialog)) {
+      if (descriptor) Object.defineProperty(HTMLDialogElement.prototype, name, descriptor);
+      else delete (HTMLDialogElement.prototype as unknown as Record<string, unknown>)[name];
+    }
+  });
+
+  it('reads the backtrace from the entry endpoint, since listing rows leave it out', async () => {
+    const row = entry(1);
+    const key = `${row.score}|${row.jid}`;
+    const fetchMock = stub((url) =>
+      url.pathname.endsWith('/api/retries')
+        ? { total: 1, page: 0, count: 25, entries: [row] }
+        : { ...row, error_backtrace: ['app/jobs/job1.rb:3:in perform'] },
+    );
+    renderRetries();
+
+    fireEvent.click(await screen.findByText('Job1'));
+
+    expect(await screen.findByText('app/jobs/job1.rb:3:in perform')).toBeInTheDocument();
+    const detail = fetchMock.mock.calls.map((c) => new URL(String(c[0]), 'http://x')).find((u) => u.pathname.includes('/api/retries/'));
+    expect(decodeURIComponent(detail!.pathname.split('/api/retries/')[1])).toBe(key);
   });
 });

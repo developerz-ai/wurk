@@ -58,22 +58,22 @@ module Wurk
     end
 
     def stats
-      render json: ::Wurk::Api::Serializers.stats_payload(::Wurk::Stats.new)
+      render json: ::Wurk::Api::Serializers.stats_payload(::Wurk::Stats::Snapshot.new)
     end
 
     def queues
-      consumers = ::Wurk.redis(idempotent: true) { |conn| ::Wurk::QueueConsumers.counts(conn) }
-      render json: ::Wurk::Stats.new.queue_summaries.map { |q|
-        ::Wurk::Api::Serializers.queue_summary(q).merge(consumers: consumers.fetch(q.name, 0))
+      snapshot = ::Wurk::Stats::Snapshot.new(consumers: true)
+      render json: snapshot.queue_summaries.map { |q|
+        ::Wurk::Api::Serializers.queue_summary(q).merge(consumers: snapshot.consumers.fetch(q.name, 0))
       }
     end
 
     def queue
       q = ::Wurk::Queue.new(params[:name].to_s)
       page = ::Wurk::Api::Pagination.window(params)
-      jobs = ::Wurk::Api::Pagination.slice(q, page) { |rec| ::Wurk::Api::Serializers.job_record(rec) }
+      gauges, jobs = queue_page(q, page)
       render json: {
-        name: q.name, size: q.size, latency: q.latency, paused: q.paused?,
+        name: q.name, size: gauges.size, latency: gauges.latency, paused: gauges.paused?,
         **::Wurk::Api::Pagination.meta(page), jobs: jobs
       }
     end
@@ -108,6 +108,13 @@ module Wurk
     def retries   = render_sorted_set(::Wurk::RetrySet.new)
     def scheduled = render_sorted_set(::Wurk::ScheduledSet.new)
     def dead      = render_sorted_set(::Wurk::DeadSet.new)
+
+    # One entry with its backtrace, which listing rows leave out: inflating
+    # it costs a base64 decode, an inflate and a JSON parse per row, for a
+    # field only the detail view shows. `:key` is "<score>|<jid>".
+    def retry_entry     = render_sorted_entry(::Wurk::RetrySet.new)
+    def scheduled_entry = render_sorted_entry(::Wurk::ScheduledSet.new)
+    def dead_entry      = render_sorted_entry(::Wurk::DeadSet.new)
 
     # --- Retry set mutations -------------------------------------------------
     def retry_job    = single_entry_action(::Wurk::RetrySet.new, RETRY_ACTIONS, params[:cmd])
@@ -153,8 +160,9 @@ module Wurk
 
     def processes
       set = ::Wurk::ProcessSet.new
+      live = set.to_a # before #leader: the walk reads `dear-leader` in its pipeline
       leader_identity = set.leader
-      render json: set.map { |p| ::Wurk::Api::Serializers.process_row(p, leader_identity: leader_identity) }
+      render json: live.map { |p| ::Wurk::Api::Serializers.process_row(p, leader_identity: leader_identity) }
     end
 
     # Currently-executing jobs across the cluster (WorkSet), oldest first.
@@ -170,11 +178,14 @@ module Wurk
     def quiet_process = signal_processes(:quiet!)
     def stop_process  = signal_processes(:stop!)
 
+    # Rows are Batch::Status#summary: #data with the failed and dead jid sets
+    # counted rather than listed. GET /api/batches/:bid carries the jids.
     def batches
-      set = ::Wurk::BatchSet.new
       page = ::Wurk::Api::Pagination.window(params)
-      rows = ::Wurk::Api::Pagination.slice(set, page) { |status| status.data.transform_keys(&:to_sym) }
-      render json: { total: set.size, **::Wurk::Api::Pagination.meta(page), batches: rows }
+      total, rows = page_rows(::Wurk::BatchSet.new, page, :summary.to_proc) do |summary|
+        summary.transform_keys(&:to_sym)
+      end
+      render json: { total: total, **::Wurk::Api::Pagination.meta(page), batches: rows }
     end
 
     def batch
@@ -187,10 +198,9 @@ module Wurk
     end
 
     def flows
-      set = ::Wurk::FlowSet.new
       page = ::Wurk::Api::Pagination.window(params)
-      rows = ::Wurk::Api::Pagination.slice(set, page) { |status| ::Wurk::Api::Serializers.flow_row(status) }
-      render json: { total: set.size, **::Wurk::Api::Pagination.meta(page), flows: rows }
+      total, rows = page_rows(::Wurk::FlowSet.new, page) { |status| ::Wurk::Api::Serializers.flow_row(status) }
+      render json: { total: total, **::Wurk::Api::Pagination.meta(page), flows: rows }
     end
 
     def flow
@@ -212,9 +222,12 @@ module Wurk
     end
 
     def limiters
-      names = ::Wurk::Web::Enterprise::Limits.list(filter: params[:substr])
       page = ::Wurk::Api::Pagination.window(params)
-      render json: { total: names.size, **::Wurk::Api::Pagination.meta(page), limiters: limiter_rows(names, page) }
+      total, rows = ::Wurk::Web::Enterprise::Limits.page(
+        filter: params[:substr], offset: ::Wurk::Api::Pagination.offset(page), count: page[:count]
+      )
+      render json: { total: total, **::Wurk::Api::Pagination.meta(page),
+                     limiters: rows.map { |name, meta| ::Wurk::Api::Serializers.limiter_row(name, meta) } }
     end
 
     def reset_limiter
@@ -489,18 +502,39 @@ module Wurk
 
     def render_sorted_set(set)
       page = ::Wurk::Api::Pagination.window(params)
-      total = set.size
-      entries = ::Wurk::Api::Pagination.slice(set, page) { |entry| ::Wurk::Api::Serializers.sorted_entry(entry) }
+      total, entries = page_rows(set, page) { |entry| ::Wurk::Api::Serializers.sorted_entry(entry) }
       render json: { total: total, **::Wurk::Api::Pagination.meta(page), entries: entries }
     end
 
-    # substr is already applied by Limits.list (matches on name), so slice the
-    # filtered names directly — only the page's rows pay the per-limiter Redis
-    # reads in limiter_row (which folds in live status).
-    def limiter_rows(names, page)
-      (names.slice(page[:page] * page[:count], page[:count]) || []).map do |name|
-        ::Wurk::Api::Serializers.limiter_row(name, ::Wurk::Web::Enterprise::Limits.metadata(name))
+    # [total, rows] of one listing page. Unfiltered, the page is read straight
+    # off Redis at its offset (the set's #snapshot), so page 999 costs what
+    # page 0 does; a filter counts matching rows, so it still walks, bounded by
+    # FILTER_SCAN_LIMIT. `walk` maps a walked member to what #snapshot yields
+    # (a Batch::Status to its summary); the block serializes either.
+    def page_rows(set, page, walk = nil, &serialize)
+      if page[:substr].empty?
+        total, members = set.snapshot(::Wurk::Api::Pagination.offset(page), page[:count])
+        return [total, members.map(&serialize)]
       end
+
+      rows = ::Wurk::Api::Pagination.slice(set, page) { |member| serialize.call(walk ? walk.call(member) : member) }
+      [set.size, rows]
+    end
+
+    # The gauges (anything answering size/latency/paused?) and the page's rows.
+    def queue_page(queue, page)
+      serialize = ->(rec) { ::Wurk::Api::Serializers.job_record(rec) }
+      return [queue, ::Wurk::Api::Pagination.slice(queue, page, &serialize)] unless page[:substr].empty?
+
+      snapshot = queue.snapshot(::Wurk::Api::Pagination.offset(page), page[:count])
+      [snapshot, snapshot.records.map(&serialize)]
+    end
+
+    def render_sorted_entry(set)
+      entry = entries_for(set, [params[:key]]).first
+      return render(json: { error: 'unknown job' }, status: :not_found) unless entry
+
+      render json: ::Wurk::Api::Serializers.sorted_entry_detail(entry)
     end
 
     def render_cron_action(success)

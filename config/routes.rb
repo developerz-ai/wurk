@@ -43,19 +43,23 @@ Wurk::Engine.routes.draw do
     # Listings answer `{ total, page, count, max_page, entries }`; `page` is
     # the page actually served (clamped to `max_page`), and a `?substr=`
     # listing adds `filtered_total` + `filtered_total_exact` (false: lower
-    # bound).
+    # bound). Listing rows leave out `error_backtrace`; `GET <set>/:key`
+    # answers one entry with it, or 404 `{ error: 'unknown job' }`.
     get  'retries',          to: 'api#retries'
     post 'retries',          to: 'api#retries_bulk',   as: :api_retries_bulk
     post 'retries/all/:cmd', to: 'api#retries_all',    as: :api_retries_all
     post 'retries/:key',     to: 'api#retry_job',      as: :api_retry_job, constraints: { key: %r{[^/]+} }
+    get  'retries/:key',     to: 'api#retry_entry', as: :api_retry_entry, constraints: { key: %r{[^/]+} }
     get  'scheduled',        to: 'api#scheduled'
     post 'scheduled',          to: 'api#scheduled_bulk', as: :api_scheduled_bulk
     post 'scheduled/all/:cmd', to: 'api#scheduled_all',  as: :api_scheduled_all
     post 'scheduled/:key',     to: 'api#scheduled_job',  as: :api_scheduled_job, constraints: { key: %r{[^/]+} }
+    get  'scheduled/:key',   to: 'api#scheduled_entry', as: :api_scheduled_entry, constraints: { key: %r{[^/]+} }
     get  'dead',             to: 'api#dead'
     post 'dead',             to: 'api#dead_bulk',      as: :api_dead_bulk
     post 'dead/all/:cmd',    to: 'api#dead_all',       as: :api_dead_all
     post 'dead/:key',        to: 'api#dead_job',       as: :api_dead_job, constraints: { key: %r{[^/]+} }
+    get  'dead/:key',        to: 'api#dead_entry', as: :api_dead_entry, constraints: { key: %r{[^/]+} }
     get  'processes',        to: 'api#processes'
     get  'workers',          to: 'api#workers'
     # Wurk uses split POST /api/busy/quiet and /api/busy/stop requests, not free

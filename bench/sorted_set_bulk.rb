@@ -8,8 +8,9 @@ require_relative 'algo/support'
 # "Retry all" on a full retry set — row 07-A11 of docs/plans/2026/11/10/101-
 # evidence-driven-improvement-sweep/07-algorithms.md. RetrySet#retry_all (the
 # dashboard's Retry All, POST /api/retries/all/retry) walks the set newest
-# first and, per entry, removes it and pushes it through the client: serial
-# round trips per job, in a Puma thread.
+# first and, per page of 50, removes the page in one pipeline and pushes it
+# in one write per queue. Before A11 it removed and pushed entry by entry:
+# 2.02 round trips and 3.02 commands per entry.
 #
 # Round trips and commands per entry are deterministic and checked against
 # BUDGET (exit 1 when exceeded); jobs/s is advisory. The queue the jobs land
@@ -23,9 +24,9 @@ require_relative 'algo/support'
 ENTRIES = Integer(ENV.fetch('WURK_BENCH_BULK_ENTRIES', '10000'))
 QUEUE   = 'bulk'
 
-# [round trips, commands] per entry, recorded on this tree: the "before" of
-# 07-A11 (pages of 100-500 with one push per page is the fix).
-BUDGET = [2.02, 3.02].freeze
+# [round trips, commands] per entry. Each page: its ZRANGE, its ZREM pipeline,
+# one SADD + LPUSH pipeline; and a second pass that finds nothing new.
+BUDGET = [0.06, 1.06].freeze
 
 config = Wurk.configuration
 config.logger = Logger.new(IO::NULL)

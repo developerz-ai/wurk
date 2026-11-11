@@ -1,12 +1,12 @@
 - entry: "Immediate plain multi-queue pushes register queues per group"
-  anchor: "lib/wurk/client.rb#L437-L450"
+  anchor: "lib/wurk/client.rb#L447-L460"
   fragment: |-
     # One pipeline per queue, marked delivered the moment its reply is in.
     # A push can die between groups — or land its whole plain phase and then
     # lose the connection in the batched phase above — and whatever Redis
 
 - entry: "Immediate plain multi-queue pushes register queues per group"
-  anchor: "lib/wurk/client.rb#L563-L565"
+  anchor: "lib/wurk/client.rb#L584-L586"
   fragment: |-
     def mark_delivered(payloads)
       Thread.current[DELIVERED_KEY]&.concat(payloads)

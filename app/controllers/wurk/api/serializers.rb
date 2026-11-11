@@ -52,15 +52,21 @@ module Wurk
         rows.empty? ? base : base.merge(custom_rows: rows)
       end
 
+      # A listing row. No `error_backtrace`: it is stored compressed, and
+      # inflating it for every row of a page served a field only the detail
+      # view (#sorted_entry_detail) shows.
       def sorted_entry(entry)
         job_record(entry).merge(
           score: entry.score,
           at: entry.at.to_f,
           error_class: entry['error_class'].to_s,
           error_message: entry['error_message'].to_s,
-          retry_count: entry['retry_count'],
-          error_backtrace: entry.error_backtrace
+          retry_count: entry['retry_count']
         )
+      end
+
+      def sorted_entry_detail(entry)
+        sorted_entry(entry).merge(error_backtrace: entry.error_backtrace)
       end
 
       # `leader_identity` is the cluster's `dear-leader` value (ProcessSet#leader,

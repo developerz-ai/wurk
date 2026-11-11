@@ -143,7 +143,9 @@
     "at": "Agendado",
     "args": "Argumentos",
     "error": "Erro",
-    "backtrace": "Backtrace"
+    "backtrace": "Backtrace",
+    "backtrace_loading": "Carregando backtrace…",
+    "backtrace_unavailable": "Backtrace indisponível: o job não está mais neste conjunto."
   },
   "search": {
     "emptyTitle": "Buscar um job",

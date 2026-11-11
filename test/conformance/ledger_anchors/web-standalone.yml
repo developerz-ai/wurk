@@ -21,7 +21,7 @@
   fragment: |-
     def truncated? = @truncated
 - entry: '`Stats#expired`/`reset` extend the OSS Stats surface'
-  anchor: 'lib/wurk/stats.rb#L27'
+  anchor: 'lib/wurk/stats.rb#L28'
   fragment: |-
     def expired         = @stats.fetch(:expired)
 - entry: '`Stats#expired`/`reset` extend the OSS Stats surface'
@@ -31,7 +31,7 @@
       all      = %w[failed processed expired]
       to_clear = stats.empty? ? all : all & stats.flatten.map(&:to_s)
 - entry: '`Stats#expired`/`reset` extend the OSS Stats surface'
-  anchor: 'lib/wurk/stats.rb#L190'
+  anchor: 'lib/wurk/stats.rb#L274'
   fragment: |-
     def expired   = date_stat_hash('expired')
 - entry: '`Stats#expired`/`reset` extend the OSS Stats surface'

@@ -26,6 +26,12 @@ module Wurk
     # observing Redis traffic see the same pattern.
     PAGE_SIZE = 50
 
+    # One read of #snapshot: `size`, `latency`, `paused` as their methods
+    # answer them, and `records`, the page's JobRecords.
+    Snapshot = Data.define(:size, :latency, :paused, :records) do
+      alias_method :paused?, :paused
+    end
+
     attr_reader :name
     alias id name
 
@@ -46,13 +52,25 @@ module Wurk
 
     # Seconds since the oldest job (tail of LIST) was enqueued. 0.0 when empty.
     def latency
-      payload = Wurk.redis(idempotent: true) { |conn| conn.call('LRANGE', @rname, -1, -1).first }
-      return 0.0 if payload.nil?
+      latency_of(Wurk.redis(idempotent: true) { |conn| conn.call('LRANGE', @rname, -1, -1).first })
+    end
 
-      job = Wurk.load_json(payload)
-      JobRecord.latency_from(job['enqueued_at'] || job['created_at'])
-    rescue ::JSON::ParserError
-      0.0
+    # The four gauges and the `count` jobs from `offset` (the order #each
+    # walks), read in one round trip rather than #each's page-by-page walk
+    # from the head. Internal reader for the dashboard and the HTTP API.
+    #
+    # @return [Snapshot]
+    def snapshot(offset, count)
+      size, tail, paused, rows = Wurk.redis(idempotent: true) do |conn|
+        conn.pipelined do |pipe|
+          pipe.call('LLEN', @rname)
+          pipe.call('LRANGE', @rname, -1, -1)
+          pipe.call('SISMEMBER', Keys::PAUSED_SET, @name)
+          pipe.call('LRANGE', @rname, offset, offset + count - 1)
+        end
+      end
+      Snapshot.new(size: size, latency: latency_of(tail.first), paused: paused == 1,
+                   records: rows.map { |value| JobRecord.new(value, @name) })
     end
 
     # True iff this queue's name is a member of the `paused` SET. Wurk
@@ -128,6 +146,15 @@ module Wurk
     end
 
     private
+
+    def latency_of(payload)
+      return 0.0 if payload.nil?
+
+      job = Wurk.load_json(payload)
+      JobRecord.latency_from(job['enqueued_at'] || job['created_at'])
+    rescue ::JSON::ParserError
+      0.0
+    end
 
     def page_from(start)
       Wurk.redis(idempotent: true) { |conn| conn.call('LRANGE', @rname, start, start + PAGE_SIZE - 1) }

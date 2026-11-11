@@ -143,7 +143,9 @@
     "at": "Programado",
     "args": "Argumentos",
     "error": "Error",
-    "backtrace": "Backtrace"
+    "backtrace": "Backtrace",
+    "backtrace_loading": "Cargando backtrace…",
+    "backtrace_unavailable": "Backtrace no disponible: el trabajo ya no está en este conjunto."
   },
   "search": {
     "emptyTitle": "Buscar un trabajo",

@@ -46,13 +46,13 @@
     load_meta(data)
     @tags      = parse_json_array(data['tags'])
 - entry: 'Batch tags use a JSON field and reverse indexes, not `b-<bid>-tags`'
-  anchor: 'lib/wurk/batch/status.rb#L76-L82'
+  anchor: 'lib/wurk/batch/status.rb#L80-L86'
   fragment: |-
     def tags
     raw = @data['tags']
     return [] if raw.nil? || raw.empty?
 - entry: 'Batch tags use a JSON field and reverse indexes, not `b-<bid>-tags`'
-  anchor: 'lib/wurk/batch_set.rb#L48-L60'
+  anchor: 'lib/wurk/batch_set.rb#L52-L64'
   fragment: |-
     Wurk.redis do |conn|
     loop do

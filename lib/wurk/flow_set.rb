@@ -49,5 +49,29 @@ module Wurk
         page += 1
       end
     end
+
+    # The set's size and the #each-ordered page of `count` flows from
+    # `offset`: the page's ids in one round trip and every header in a second,
+    # where #each pays a round trip per flow from the top of the set down.
+    # Internal reader for the dashboard.
+    #
+    # @return [Array(Integer, Array<Wurk::Flow::Status>)]
+    def snapshot(offset, count)
+      Wurk.redis do |conn|
+        size, fids = page_ids(conn, offset, count)
+        headers = fids.empty? ? [] : conn.pipelined { |pipe| fids.each { |fid| pipe.call('HGETALL', Keys.flow(fid)) } }
+        [size.to_i, fids.zip(headers).map { |fid, header| Wurk::Flow::Status.new(fid, header: header) }]
+      end
+    end
+
+    private
+
+    # ZCARD and one newest-first page of ids, in one round trip.
+    def page_ids(conn, offset, count)
+      conn.pipelined do |pipe|
+        pipe.call('ZCARD', @key)
+        pipe.call('ZRANGE', @key, offset, offset + count - 1, 'REV')
+      end
+    end
   end
 end
