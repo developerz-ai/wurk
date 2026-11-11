@@ -220,6 +220,10 @@ class ClientPartialDeliveryTest < Wurk::Test::UnitCase
       yield @conn
     end
 
+    # The RedisPool stays in Metrics::PoolRegistry, so a later /metrics render
+    # in the same process reads it.
+    def available = 1
+
     def shutdown(&); end
   end
 
