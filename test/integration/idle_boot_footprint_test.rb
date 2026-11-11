@@ -59,7 +59,7 @@ class IdleBootFootprintTest < Wurk::Test::UnitCase
 
       assert_equal IDLE_THREADS, threads, 'idle worker threads by name'
 
-      conns = worker_connections
+      conns = wait_for_parked_fetch_connections
       fetch = conns.count { |c| parked?(c) }
 
       assert_equal CONCURRENCY, fetch, "one fetch socket per processor, parked in BLMOVE: #{conns}"
@@ -108,6 +108,17 @@ class IdleBootFootprintTest < Wurk::Test::UnitCase
               names = (Thread.list - [Thread.current]).map { |t| t == Thread.main ? 'main' : t.name.to_s }
               c.call('SET', #{@threads_key.inspect}, names.sort.join(','), 'EX', 60)
               sleep 0.2
+            rescue StandardError
+              # A dropped connection must not take the settle signal with it:
+              # the worker keeps running, so the recorder reconnects and
+              # writes the thread set again.
+              begin
+                c.close
+              rescue StandardError
+                nil
+              end
+              c = RedisClient.config(url: url).new_client
+              sleep 0.2
             end
           end
         end
@@ -126,22 +137,38 @@ class IdleBootFootprintTest < Wurk::Test::UnitCase
     )
   end
 
-  # Boot is settled once every processor is parked in BLMOVE; the one-shot
-  # boot-reclaim thread may still be finishing, so the thread set must also
-  # read the same twice in a row.
+  # Boot is settled once the worker reports the same thread set twice in a row;
+  # the one-shot boot-reclaim thread may still be finishing. The wait is best
+  # effort: the assertion above is what judges the set, so a worker whose set
+  # never repeats is reported by the diff, not by a timeout.
   def wait_for_settled_threads
     deadline = monotonic_now + SETTLE_TIMEOUT
     previous = nil
     while monotonic_now < deadline
       current = @observer.call('GET', @threads_key)&.split(',')&.tally
-      parked = worker_connections.count { |c| parked?(c) } == CONCURRENCY
-      return current if parked && current && current == previous
+      return current if current && current == previous
 
       previous = current
       sleep POLL_INTERVAL * 3
     end
 
-    flunk "idle worker never settled; last threads: #{previous.inspect}, conns: #{worker_connections}"
+    previous || flunk('idle worker never reported its threads')
+  end
+
+  # A processor parks in BLMOVE and polls again two seconds later, so an
+  # instant where one of them sits between polls is normal, and on a loaded
+  # server that window is wide. The parked sockets are therefore sampled on
+  # their own, and the snapshot the assertions read is one where every
+  # processor is parked - not one where two independent samples happen to
+  # agree.
+  def wait_for_parked_fetch_connections
+    deadline = monotonic_now + SETTLE_TIMEOUT
+    conns = worker_connections
+    while conns.count { |c| parked?(c) } != CONCURRENCY && monotonic_now < deadline
+      sleep POLL_INTERVAL * 3
+      conns = worker_connections
+    end
+    conns
   end
 
   # Blocked in BLMOVE, the only blocking command a worker sends. The `b` flag,
