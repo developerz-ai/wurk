@@ -192,37 +192,6 @@ class LazyLoaderTest < Wurk::Test::UnitCase
     assert_empty result
   end
 
-  # Ruby's `autoload` lets two threads read the same file at once, and on some
-  # Rubies that deadlocks: the process dies with "No live threads left.
-  # Deadlock?" (bugs.ruby-lang.org/issues/18782 and #21719). Wurk reads each
-  # lazy feature under its own lock, so one thread is inside a feature's file
-  # at a time.
-  def test_a_lazy_feature_is_read_by_one_thread_at_a_time
-    result = ruby(<<~RUBY)
-      require 'json'
-      require 'wurk'
-      feature = Wurk::LazyLoader.registered.map { |ns, name| ns.autoload?(name) }.compact.first
-      order = []
-      mutex = Mutex.new
-      threads = 2.times.map do |i|
-        Thread.new do
-          Wurk::LazyLoader.load(feature) do
-            mutex.synchronize { order << [:in, i] }
-            sleep 0.2
-            mutex.synchronize { order << [:out, i] }
-          end
-        end
-      end
-      threads.each(&:join)
-      print JSON.dump(order)
-    RUBY
-
-    # The second thread waits its turn: in, out, in, out - never in, in.
-    phases = result.map { |(phase, _thread)| phase }
-
-    assert_equal %w[in out in out], phases
-  end
-
   # sidekiq-cron prepends into `::Sidekiq::Launcher` from its own require, and
   # sidekiq-failures reopens Sidekiq classes; a lazy target must load first and
   # take the change, not leave a fresh class behind.

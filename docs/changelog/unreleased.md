@@ -27,7 +27,6 @@
 
 ### Fixed
 
-- **Two threads first-referencing a lazy constant no longer deadlock.** Ruby's `autoload` lets both read the same file at once, and on some Rubies (3.2 among them) the process dies with "No live threads left. Deadlock?". Wurk reads each lazy feature under its own lock, so one thread is inside a feature's file at a time.
 - **A memory limit below a freshly booted child's size no longer fork-loops the swarm.** A child already over the limit within its first 60s is reported once at ERROR and kept; a slot recycles at most once for that cause.
 - **Per-process caches are bounded**: the queue-without-consumers warning map, the error coalescer (1,024 keys) and the Sentry middleware's thread-locals.
 - A dead-set kill builds its synthetic backtrace only when death handlers will see it.
