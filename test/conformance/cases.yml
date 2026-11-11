@@ -611,7 +611,7 @@
 - id: crypto.decrypt-failure
   area: encryption
   behavior: A decrypt failure dead-sets the job tagged with Wurk::Encryption::DecryptionError and never retries it.
-  source: docs/idea/parity-divergences.md#L1252-L1254
+  source: docs/idea/parity-divergences.md#L1218-L1220
   promise: >-
     a decrypt failure (unknown key version, a key resolver that returns nil or
     raises, a corrupt envelope) raises `Wurk::Encryption::DecryptionError`,
@@ -947,7 +947,7 @@
 - id: module.server-flag
   area: module
   behavior: server? reports whether this process is running workers, false in a client process and true in a worker.
-  source: docs/idea/parity-divergences.md#L1906-L1914
+  source: docs/idea/parity-divergences.md#L1865-L1873
   promise: >-
     `Sidekiq.server?` reports whether this process is running workers. It is false in a client process and true in a worker process.
   oracles: [ModuleApiParityTest#test_server_flag]
@@ -1671,8 +1671,59 @@
 - id: logger.context-thread-local
   area: logging
   behavior: The logging context is thread-local and lives under Wurk's own context key.
-  source: docs/idea/parity-divergences.md#L1916-L1924
+  source: docs/idea/parity-divergences.md#L1875-L1883
   promise: >-
     `Sidekiq::Context` stores its thread-local logging context under `Thread.current[:wurk_context]`. A context added on one thread is not visible on another.
   oracles: [LoggerParityTest#test_context_thread_local]
 
+- id: logger.job-elapsed-seconds
+  area: logging
+  behavior: The job logger's done and fail lines carry elapsed in seconds, rounded to 3 places.
+  source: docs/target/sidekiq-free.md#L957
+  promise: >-
+    `Sidekiq::Context.add(:elapsed, seconds)` (Float, rounded to 3 places, so the line reads `elapsed=0.007`).
+  oracles: [JobLoggerParityTest#test_done_line_carries_elapsed_in_seconds, JobLoggerParityTest#test_fail_line_carries_elapsed_in_seconds]
+- id: web.head-root-probe
+  area: dashboard
+  behavior: HEAD / is a health check that reaches Redis with LLEN queue:default.
+  source: docs/target/sidekiq-free.md#L1398
+  promise: >-
+    Heartbeat: `HEAD /` calls `LLEN queue:default`.
+  oracles: [WebStatsRoutesParityTest#test_head_root_is_a_redis_health_check]
+- id: web.stats-routes
+  area: dashboard
+  behavior: GET /stats and GET /stats/queues answer JSON in upstream's shape; GET /dashboard/stats redirects to /stats.
+  source: docs/target/sidekiq-free.md#L1468
+  promise: >-
+    | GET | `/stats` | JSON stats (`sidekiq`, `redis`, `server_utc_time`) |
+  oracles: [WebStatsRoutesParityTest#test_stats_answers_upstream_shape, WebStatsRoutesParityTest#test_stats_queues_answers_name_to_size, WebStatsRoutesParityTest#test_dashboard_stats_redirects_to_stats, WebStatsRoutesParityTest#test_a_falsey_authorization_block_refuses_stats]
+- id: rails-error.per-attempt
+  area: error-handlers
+  behavior: >-
+    The class lookup, retrier.local, middleware and perform run inside the Rails reloader, so a Rails.error
+    subscriber hears every failed attempt (Handled with the job's exception as cause, Skip, or the NameError of
+    a class that will not load), not only the terminal one.
+  source: docs/target/sidekiq-free.md#L818
+  promise: >-
+    `@reloader.call` (Rails reloader)
+  oracles:
+    - RailsErrorReportingParityTest#test_a_failing_job_reports_handled_with_the_jobs_exception_as_its_cause
+    - RailsErrorReportingParityTest#test_each_attempt_is_reported_not_only_the_last
+    - RailsErrorReportingParityTest#test_a_class_that_will_not_load_reports_the_name_error_each_attempt
+    - RailsErrorReportingParityTest#test_a_skip_reaches_the_reporter_but_not_the_error_handlers
+- id: testing.inline-scheduled
+  area: testing
+  behavior: Inline mode runs every push at once, scheduled ones (perform_in, ActiveJob set(wait:)) included.
+  source: docs/target/sidekiq-free.md#L1362
+  promise: >-
+    In `:inline!` mode, `Sidekiq::Client#atomic_push` is monkey-patched (via `Sidekiq::TestingClient`) to immediately `klass.process_job(job_hash)`.
+  oracles:
+    - TestingModeParityTest#test_inline_runs_perform_in_and_perform_at_immediately
+    - TestingModeParityTest#test_inline_runs_active_job_enqueue_and_enqueue_at_immediately
+- id: testing.unique-in-fake
+  area: testing
+  behavior: A test mode does not bypass unique jobs; the client middleware still locks in Redis and drops the duplicate.
+  source: docs/target/sidekiq-ent.md#L361
+  promise: >-
+    | Push duplicate            | client middleware drops the duplicate (returns `nil` JID; logs "JID X holds lock"). |
+  oracles: [TestingModeParityTest#test_unique_still_locks_and_drops_the_duplicate_in_fake_mode]

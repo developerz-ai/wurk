@@ -245,7 +245,78 @@ class BootChecksTest < Wurk::Test::UnitCase
     broken&.reset_redis_pools!
   end
 
+  # The standard Sidekiq shape (both blocks) is quiet; only a server that got
+  # client blocks and nothing else hears about it.
+  def test_a_server_with_only_client_blocks_is_warned
+    @config[:server] = true
+    @config.configure_client { nil }
+
+    Wurk::BootChecks.run(@config, nil)
+
+    assert_match(/configure_client blocks were skipped, and no configure_server block ran/, @out.string)
+  end
+
+  def test_a_server_with_both_blocks_is_quiet
+    @config[:server] = true
+    @config.configure_client { nil }
+    @config.configure_server { nil }
+
+    Wurk::BootChecks.warn_on_client_config_only(@config)
+
+    refute_match(/WARN/, @out.string)
+  end
+
+  def test_a_framework_queue_no_process_listens_to_is_warned
+    @config.default_capsule.queues = %w[default]
+    process('peer:1', 'queues' => %w[critical])
+
+    with_framework_queues('mailers' => 'mail delivery', 'critical' => 'Active Storage analysis') do
+      Wurk::BootChecks.warn_on_unconsumed_framework_queues(@config)
+    end
+
+    assert_match(/Rails enqueues to mailers \(mail delivery\), which neither this process nor any live one/,
+                 @out.string)
+    refute_includes @out.string, 'critical ('
+  end
+
+  def test_framework_queues_this_process_listens_to_are_quiet
+    @config.default_capsule.queues = %w[default mailers]
+
+    with_framework_queues('mailers' => 'mail delivery') do
+      Wurk::BootChecks.warn_on_unconsumed_framework_queues(@config)
+    end
+
+    assert_empty @out.string
+  end
+
+  def test_framework_queue_sets_are_read_off_the_framework_module
+    framework = Struct.new(:queues).new({ analysis: 'storage', purge: nil })
+
+    assert_equal({ 'Active Storage analysis' => 'storage', 'Active Storage purge' => nil },
+                 Wurk::BootChecks.framework_queue_set('Active Storage', framework))
+    assert_empty Wurk::BootChecks.framework_queue_set('Action Mailbox', false)
+  end
+
+  def test_a_declared_topology_is_reported_ignored_by_a_single_process
+    Wurk::BootChecks.warn_on_ignored_topology(@config, 'wurk')
+
+    assert_empty @out.string
+
+    @config.topology = Wurk::Topology.flat(count: 2, queues: %w[default], concurrency: 5)
+    Wurk::BootChecks.warn_on_ignored_topology(@config, 'wurk')
+
+    assert_match(/config.topology is set, but wurk runs a single process and ignores it/, @out.string)
+  end
+
   private
+
+  def with_framework_queues(queues)
+    original = Wurk::BootChecks.method(:framework_queues)
+    Wurk::BootChecks.define_singleton_method(:framework_queues) { queues }
+    yield
+  ensure
+    Wurk::BootChecks.define_singleton_method(:framework_queues, original)
+  end
 
   def with_unique(enabled)
     was = Wurk::Unique.enabled?

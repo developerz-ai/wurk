@@ -114,6 +114,13 @@ module Wurk
 
     attr_reader :size, :url, :name, :pool_timeout, :client_config, :redis_idle_timeout
 
+    class << self
+      # A redis-client middleware every pool built from now on carries, after
+      # any the host configured. Set only by the boot of a command that must not
+      # write Redis (Preflight::RedisGuard); nil everywhere else.
+      attr_accessor :guard
+    end
+
     # Takes the standard Sidekiq `config.redis` hash: `pool_timeout` tunes the
     # ConnectionPool checkout; `connect_timeout`/`read_timeout`/`write_timeout`/
     # `reconnect_attempts` plus any other redis-client key (driver, ssl_params,
@@ -226,14 +233,30 @@ module Wurk
     # …) so this class stays about pooling; host-supplied keys win over the
     # defaults.
     def build_client_config(options)
-      RedisOptions.normalize(options, defaults: DEFAULT_CLIENT_CONFIG).freeze
+      config = RedisOptions.normalize(options, defaults: DEFAULT_CLIENT_CONFIG)
+      config[:middlewares] = [*(config[:middlewares] || []), self.class.guard] if self.class.guard
+      config.freeze
     end
 
     # Wrapped in the CompatClient decorator so `Sidekiq.redis { |c| c.smembers }`
     # method-style commands work like Sidekiq 7+ (#204). Wurk's own code paths
     # use #call, which the decorator forwards.
     def build_client
+      warn_on_fiber_blocking_driver
       RedisClientAdapter::CompatClient.new(redis_client_config.new_client)
+    end
+
+    # hiredis waits on the socket in C, where a fiber scheduler (Falcon, Async)
+    # cannot switch away, so one slow reply stalls every fiber on the thread.
+    # Checked on the connection build, the first moment a scheduler is visible.
+    def warn_on_fiber_blocking_driver
+      return if @fiber_warned || ::Fiber.scheduler.nil? || !RedisOptions.fiber_blocking_driver?(@client_config[:driver])
+
+      @fiber_warned = true
+      Wurk.logger.warn do
+        "Redis pool #{@name} uses the hiredis driver under a fiber scheduler, which blocks every fiber on the " \
+          'thread while it waits on Redis. Use `driver: :ruby` in the config.redis of this process.'
+      end
     end
 
     # A Sentinel set is a different constructor, not a different keyword:

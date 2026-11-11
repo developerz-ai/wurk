@@ -324,8 +324,11 @@ namespace :release do
   # the gem is already published) fails. release:check refuses the stale lock.
   # Plain `bundle lock` is enough: a path gem's version is re-read from its
   # gemspec on every resolve, and no other gem is unlocked.
-  desc 'Re-lock demo/Gemfile.lock after a lib/wurk/version.rb bump'
+  # Also stamps the release's tag into every `sidekiq` shim recipe in the docs:
+  # the same bump-time chore, and test/unit/shim_pin_test.rb refuses a stale one.
+  desc 'Re-lock demo/Gemfile.lock and re-tag the shim recipes after a lib/wurk/version.rb bump'
   task :relock_demo do
+    ReleaseHelpers.stamp_shim_recipes!(GEM_ROOT, Wurk::VERSION)
     Bundler.with_unbundled_env { sh 'bundle', 'lock', chdir: DEMO_DIR }
     ReleaseHelpers.demo_lock_matches_version!(File.read(File.join(DEMO_DIR, 'Gemfile.lock')), Wurk::VERSION)
     puts "release:relock_demo ✓ demo/Gemfile.lock pins wurk #{Wurk::VERSION}"

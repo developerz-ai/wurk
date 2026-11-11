@@ -263,6 +263,12 @@ module Wurk
       swarm.shutdown unless supervisor&.alive?
     end
 
+    def check_embedded_boot(config)
+      BootChecks.log_process_role(config, "embedded in #{server_name}, threads only")
+      BootChecks.run(config, nil)
+      BootChecks.warn_on_ignored_topology(config, "a worker embedded in #{server_name}")
+    end
+
     # Sidekiq-embedded parity: a threads-only worker inside the web process, no
     # fork. Redis validation failure keeps the host serving HTTP (log + carry
     # on). at_exit drains on the graceful shutdown the web server runs on TERM.
@@ -274,8 +280,7 @@ module Wurk
       # already running with nothing to drain them on host exit.
       at_exit { instance.stop }
       instance.run
-      BootChecks.log_process_role(Wurk.configuration, "embedded in #{server_name}, threads only")
-      BootChecks.run(Wurk.configuration, nil)
+      check_embedded_boot(Wurk.configuration)
       instance
     rescue StandardError => e
       logger.error { "wurk: embedded boot failed: #{e.class}: #{e.message}" }

@@ -47,7 +47,14 @@ Gem::Specification.new do |spec|
   ]
 
   spec.bindir      = 'exe'
-  spec.executables = %w[wurk wurkswarm sidekiqswarm]
+  # `sidekiq` and `sidekiqswarm` are the upstream command names, kept so a
+  # Procfile, systemd unit or k8s manifest survives the one-line gem swap.
+  spec.executables = %w[wurk wurkswarm sidekiq sidekiqswarm]
+  spec.post_install_message = <<~MSG
+    wurk: `bundle exec sidekiq` / `sidekiqswarm` keep working; `wurk` / `wurkswarm` are the same commands.
+    Keeping a sidekiq-* add-on gem? Bundle the pinned shim: docs/migrate-from-sidekiq.md in the wurk repository.
+    Before a cutover from Sidekiq, run `bundle exec wurk preflight` against production Redis (read-only).
+  MSG
   spec.require_paths = ['lib']
 
   # Bounded ranges (not pessimistic `~>`) where a newer major is already in

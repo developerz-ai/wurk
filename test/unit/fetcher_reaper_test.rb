@@ -397,16 +397,49 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     @capsule.queues = [@queue_name]
   end
 
-  # A replacement's boot sweep is what recovers the sibling it replaces, however
-  # recently another process booted.
-  def test_every_boot_sweep_runs_with_no_lock_between_them
+  # Every swarm child, every USR1 replacement and every memory recycle boots a
+  # Launcher: a lock-free boot sweep was one keyspace pass per process per deploy.
+  # The process that loses the lock does not SCAN at all.
+  def test_boot_sweeps_share_the_sweep_lock
     seed_private_list(DEAD_PID, %w[first])
-    other = Wurk::Fetcher::Reaper.new(@config, grace: 0)
+    other = Wurk::Fetcher::Reaper.new(@config, grace: 0, lock_key: @lock_key)
 
     assert_equal 1, @reaper.boot_reclaim!
     seed_private_list(DEAD_PID, %w[second])
+    scans = count_scans
 
-    assert_equal 1, other.boot_reclaim!
+    assert_equal 0, other.boot_reclaim!
+    assert_equal 0, scans.call
+    assert_equal 1, llen(private_list(DEAD_PID))
+  end
+
+  # --- reaped swarm child ------------------------------------------------
+
+  # The parent knows the child is dead, so a live-looking owner (its heartbeat
+  # hash still up) and a held sweep lock change nothing.
+  def test_reclaim_exited_drains_the_named_childs_lists_by_exact_key
+    seed_private_list(DEAD_PID, %w[a b])
+    other_queue = "#{@queue_name}-other"
+    other_list = "queue:#{other_queue}|#{@host}|#{DEAD_PID}|#{Wurk::Component::PROCESS_NONCE}|0"
+    @extra_keys << other_list << "queue:#{other_queue}"
+    @pool.with do |c|
+      c.call('RPUSH', other_list, payload('c'))
+      c.call('HSET', "#{@host}:#{DEAD_PID}:#{Wurk::Component::PROCESS_NONCE}", 'info', '{}')
+      c.call('SET', @lock_key, 'other', 'EX', 30)
+    end
+    @extra_keys << "#{@host}:#{DEAD_PID}:#{Wurk::Component::PROCESS_NONCE}"
+
+    assert_equal 3, @reaper.reclaim_exited(DEAD_PID, [@queue_name, other_queue, "#{@queue_name}-empty"])
+    assert_equal 2, llen(@public_queue)
+    assert_equal 1, llen("queue:#{other_queue}")
+    assert_equal 0, llen(private_list(DEAD_PID))
+  end
+
+  def test_reclaim_exited_leaves_other_pids_alone
+    seed_private_list(DEAD_PID, %w[a])
+
+    assert_equal 0, @reaper.reclaim_exited(DEAD_PID - 1, [@queue_name])
+    assert_equal 1, llen(private_list(DEAD_PID))
   end
 
   # `processes` carries no TTL, so a Redis restarted from a snapshot over 60s old
@@ -1094,6 +1127,7 @@ class FetcherReaperTest < Wurk::Test::UnitCase
           conn.call(*args)
         end
         proxy.define_singleton_method(:pipelined) { |&b| conn.pipelined(&b) }
+        proxy.define_singleton_method(:call_once) { |*args| conn.call_once(*args) }
         blk.call(proxy)
       end
     end
@@ -1118,6 +1152,7 @@ class FetcherReaperTest < Wurk::Test::UnitCase
           conn.call(*args)
         end
         proxy.define_singleton_method(:pipelined) { |&b| conn.pipelined(&b) }
+        proxy.define_singleton_method(:call_once) { |*args| conn.call_once(*args) }
         blk.call(proxy)
       end
     end

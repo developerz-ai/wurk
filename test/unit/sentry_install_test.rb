@@ -58,6 +58,29 @@ class SentryInstallTest < Wurk::Test::UnitCase
     assert_equal 'true', out
   end
 
+  # The documented snippet for a `Sentry.init` that never meets install!.
+  def test_excluded_exceptions_drops_the_retry_signals_in_the_real_sdk
+    script = <<~RUBY
+      require 'sentry-ruby'
+      require 'wurk/sentry'
+      Sentry.init do |c|
+        c.dsn = 'http://k@localhost/1'
+        c.excluded_exceptions += Wurk::Sentry.excluded_exceptions
+      end
+      signals = [Wurk::JobRetry::Handled.new, Wurk::JobRetry::Skip.new, Wurk::Shutdown.new]
+      print signals.map { |e| Sentry.configuration.exception_class_allowed?(e) }.inspect,
+            Sentry.configuration.exception_class_allowed?(RuntimeError.new)
+    RUBY
+    out, status = Open3.capture2e({ 'COVERAGE' => nil }, 'bundle', 'exec', 'ruby', '-Ilib', '-e', script)
+
+    assert_predicate status, :success?, out
+    assert_equal '[false, false, false]true', out
+  end
+
+  def test_excluded_exceptions_is_frozen
+    assert_predicate Wurk::Sentry.excluded_exceptions, :frozen?
+  end
+
   def test_registers_one_error_handler
     Wurk::Sentry.install!(config)
 

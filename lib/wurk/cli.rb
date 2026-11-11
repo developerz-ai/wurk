@@ -112,8 +112,10 @@ module Wurk
     ].freeze
 
     BOOT_CHECK_OPTION_FLAGS = [
-      ['-R', '--redis', :boot_check_redis, 'Also read Redis: version, eviction policy, live peers (read-only)']
+      ['-R', '--redis', :boot_check_redis, 'Also read Redis: version, eviction policy, live peers (read-only)'],
+      ['-n', '--runner NAME', :boot_check_runner, 'Boot as wurkswarm (default) or wurk, the runner you deploy']
     ].freeze
+    BOOT_CHECK_RUNNERS = %w[wurkswarm wurk].freeze
 
     HEALTH_OPTION_FLAGS = [
       ['-w', '--window SECONDS', :health_window, 'A heartbeat older than this does not count (default 60)', :to_i],
@@ -123,7 +125,7 @@ module Wurk
     ].freeze
 
     HELP_COMMANDS = "\nCommands:\n    " \
-                    "boot-check Boot the app the way wurkswarm does, then exit; no fork, no fetch (CI)\n    " \
+                    "boot-check Boot as wurkswarm (or --runner wurk) would, then exit; no fork, no fetch (CI)\n    " \
                     "health    Exit 0 if this host's workers are heartbeating\n    " \
                     "preflight Read a live Redis: what will carry over to Wurk (read-only)\n    " \
                     "verify    Post-cutover check of a live fleet (read-only)\n\nOptions:"
@@ -215,6 +217,7 @@ module Wurk
         validate_redis!
         validate_pool_sizes!
         BootChecks.run(@config, redis_info)
+        BootChecks.warn_on_ignored_topology(@config, 'wurk')
         BootChecks.log_process_role(@config, 'wurk')
         @config[:identity] = identity
         # Force lazy server-middleware chain so worker threads don't race
@@ -273,25 +276,25 @@ module Wurk
       exit(1) if @swarm.crash_looped?
     end
 
-    # `wurk boot-check` — #run_swarm's boot up to the fork: the same require
-    # order, config file and checks, plus what a worker reaches only later (every
-    # constant, the routes), so a CI step finds what would crash-loop a deploy.
-    # Forks nothing, fetches nothing, fires no lifecycle event, and reads Redis
-    # only with --redis. Returns the exit code; a boot that raises is the binary's
+    # `wurk boot-check` — the boot of the runner named by --runner up to where it
+    # would fork or fetch: #run_swarm's (the default) or #run's, with the same
+    # require order, config file and checks, plus what a worker reaches only later
+    # (every constant, the routes), so a CI step finds what would crash-loop a
+    # deploy. `configure_server` blocks run, since their load errors are the point;
+    # no lifecycle event fires (`:startup` included) and periodic loops are never
+    # applied. Wurk's Redis pools refuse every command without --redis and every
+    # write with it (Preflight::RedisGuard), so boot-time app code cannot touch a
+    # real server. Returns the exit code; a boot that raises is the binary's
     # failure report.
     def run_boot_check(boot_app: true)
+      require_relative 'preflight/redis_guard'
+      Preflight::RedisGuard.install(@config[:boot_check_redis] ? :read_only : :closed, label: 'wurk boot-check')
       enter_server_mode
-      Health.options_from_env
-      if boot_app
-        boot_swarm_application
-        eager_load_rails
-        draw_routes
-      end
-      validate_pool_sizes!
-      BootChecks.run(@config, boot_check_redis_info)
-      log_swarm_role
-      logger.info { "wurk boot-check: #{@config[:require]} booted as wurkswarm would" }
+      boot_check_runner == 'wurk' ? boot_check_as_wurk(boot_app) : boot_check_as_swarm(boot_app)
+      logger.info { "wurk boot-check: #{@config[:require]} booted as #{boot_check_runner} would" }
       0
+    ensure
+      Preflight::RedisGuard.uninstall
     end
 
     # `wurk health` — see Wurk::HealthProbe. Boots nothing; returns the exit code.
@@ -465,6 +468,36 @@ module Wurk
                             "concurrency of #{cap.concurrency}. Set `config.redis = { size: #{cap.concurrency} }` " \
                             'or more, or drop `size:` and Wurk sizes the pool itself (concurrency + 5).'
       end
+    end
+
+    def boot_check_runner = @config[:boot_check_runner] || BOOT_CHECK_RUNNERS.first
+
+    def boot_check_as_swarm(boot_app)
+      Health.options_from_env
+      if boot_app
+        boot_swarm_application
+        boot_check_reach
+      end
+      validate_pool_sizes!
+      BootChecks.run(@config, boot_check_redis_info)
+      log_swarm_role
+    end
+
+    def boot_check_as_wurk(boot_app)
+      if boot_app
+        boot_application
+        boot_check_reach
+      end
+      validate_pool_sizes!
+      BootChecks.run(@config, boot_check_redis_info)
+      BootChecks.warn_on_ignored_topology(@config, 'wurk')
+      BootChecks.log_process_role(@config, 'boot-check (as wurk)')
+    end
+
+    # What a worker loads only later: every constant, and the routes.
+    def boot_check_reach
+      eager_load_rails
+      draw_routes
     end
 
     def boot_check_redis_info
@@ -808,6 +841,11 @@ module Wurk
     def validate!
       reason = require_path_problem(@config[:require].to_s)
       return print_help_and_die(reason) if reason
+
+      runner = @config[:boot_check_runner]
+      if runner && !BOOT_CHECK_RUNNERS.include?(runner)
+        raise StartupError, "--runner: #{runner.inspect} is not one of #{BOOT_CHECK_RUNNERS.join(', ')}"
+      end
 
       %i[concurrency timeout].each do |opt|
         raise StartupError, "#{opt}: #{@config[opt]} is not a valid value" if @config[opt].to_i <= 0

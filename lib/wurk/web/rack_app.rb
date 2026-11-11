@@ -2,17 +2,19 @@
 
 require_relative 'extension'
 require_relative 'pool_scope'
+require_relative 'stats_routes'
 
 module Wurk
   class Web
     # Upstream-compatible class-level Rack surface (#204): Sidekiq apps do
     # `run Sidekiq::Web`, `mount Sidekiq::Web => "/sidekiq"`, and rack-test
     # ecosystem suites call `Sidekiq::Web.call(env)` directly. This entry serves
-    # the registered third-party Web extensions (#187's renderer) under their own
-    # route paths. Everything else is the dashboard, which is the engine's: in a
-    # booted Rails app the request goes there, through the engine's own copy of
-    # the gates below, so the stock install line shows the dashboard. Without an
-    # engine those paths 404 rather than half-serve the SPA.
+    # the machine-readable routes (StatsRoutes) and the registered third-party
+    # Web extensions (#187's renderer) under their own route paths. Everything
+    # else is the dashboard, which is the engine's: in a booted Rails app the
+    # request goes there, through the engine's own copy of the gates below, so
+    # the stock install line shows the dashboard. Without an engine those paths
+    # 404 rather than half-serve the SPA.
     #
     # Same CSRF model as upstream Sidekiq 8 and ExtensionsController (spec
     # §25.1): unsafe methods must carry `Sec-Fetch-Site: same-origin`.
@@ -54,7 +56,7 @@ module Wurk
       def dispatch(env)
         return [403, NOT_FOUND_HEADERS.dup, ['Forbidden']] unless safe_request?(env)
 
-        dispatch_to_extensions(env)
+        StatsRoutes.serve(env) || dispatch_to_extensions(env)
       end
 
       def safe_request?(env)

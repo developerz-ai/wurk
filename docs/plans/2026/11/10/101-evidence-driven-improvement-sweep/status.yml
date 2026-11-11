@@ -4,24 +4,24 @@ status: in_progress        # not_started | in_progress | blocked | complete | su
 created_by: sebi
 worked_by: "sebi (Claude Code)"
 owner: sebi
-percent: 18
-current_focus: "wave 2 PR (measurement tooling + numbers); next: adopter bumps to 1.12.0 (14-18), 24h soak, then wave 3 (drop-in + errors, incl. job-log elapsed units)"
+percent: 30
+current_focus: "wave 3 PR; then release 1.13.0, adopter bumps, wave 4 (cut cost: 06 L1-L4/P2-P6, 08, 07 A1-A6, 21 K1-K5)"
 slices:
   - file: 01-ci-green-doc-truth.md
     status: in_progress
     percent: 80
   - file: 02-reclaim-correctness.md
     status: in_progress
-    percent: 40
+    percent: 90
   - file: 03-boot-guards-preflight.md
     status: in_progress
-    percent: 35
+    percent: 85
   - file: 04-drop-in-surface.md
-    status: not_started
-    percent: 0
+    status: in_progress
+    percent: 55
   - file: 05-errors-and-test-mode.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
   - file: 06-perf-hot-path-boot.md
     status: in_progress
     percent: 25
@@ -48,7 +48,7 @@ slices:
     percent: 0
   - file: 14-adopter-tesote-com.md
     status: in_progress
-    percent: 60
+    percent: 80
   - file: 15-adopter-sales.md
     status: in_progress
     percent: 50
@@ -71,6 +71,10 @@ slices:
     status: in_progress
     percent: 10
 decisions:
+  - id: U3
+    date: 2026-11-11
+    by: executor (delegated full authority by owner)
+    decision: "Ship a `sidekiq` executable from the wurk gem (04 D1): additive, not breaking - `bundle exec sidekiq -C ...` keeps working after the gem swap; the real-gem clash is already an ERROR via 03 G2. Breaking rows U4-U6 stay open for the owner."
   - id: U11
     date: 2026-11-11
     by: sebi (owner, in-session instruction)
@@ -89,6 +93,9 @@ decisions:
     by: sebi (owner, in-session instruction)
     decision: "Public surfaces (README, docs/site/llms.txt, docs/site/index.html) may state that teams running billions of jobs a month on Wurk in production recommend it, labelled user-reported. Supersedes audit 2026-10-04 H8/R11 for user-reported volume only; published throughput still needs docs/benchmarks.md numbers (12 T1 soak). Guard: test/unit/forbidden_claims_test.rb SCALE_SOURCE."
 evidence:
+  - "wave 3 (branch wave3-dropin-errors): boot-check can no longer write Redis (Preflight::RedisGuard; preflight --app too), --runner wurk, configure_client WARN -> DEBUG + client-only WARN, G5(boot part)/G7/G8/G11-G15 guards, G6+G9 proven unnecessary with regression tests; D1 sidekiq exe (U3), D2 pinned shim, D3/D4, D5 /stats + HEAD / routes, D7 tests, D8 checklist, job-log elapsed in seconds (oracle vs 8.1.6); E1-E8 (E2 excluded_exceptions, E4 interrupted-job WARN + docs/idempotency.md, rest matched upstream by oracle) + timeout string read side; R3-R6 + D6 proctitle + #908 fixed without a new key. Full-suite leak found+guarded: require sidekiq/testing at load flipped a worker into fake mode (global_test_mode_guard_test). Gate: suite 6434/0 (98.21/91.78), parity 407/0, ecosystem + frontend green."
+  - "U2/C2 closed: PR #912 merged (16484e9) - watcher job bound to environment sidekiq-release-watcher (main-only). Dry-run dispatch 42961393721 on main: key check passed, POST step ran (gated on API_KEY), `filed=0 skipped=0 dry_run=true`; first scheduled run will file one ask per fetched release (no prior marker)."
+  - "14 tesote.com: tesote/tesote.com#521 merged (66715b0) + deployed (Deploy run 42959265542, ArgoCD Synced/Healthy 04:30Z, worker `Wurk 1.12.0 on dragonfly 1.34.0`): wurk ~> 1.12, unique_for back to 5.minutes (test fails on 1.11.1), S5 boot-check in CI + bin/check (env parity test). S4 workarounds all still needed (none retired by 1.12.0). WAVE-3 PRIORITY wurk bug: `wurk boot-check` runs server-mode initializers/configure_server blocks, so app code that writes Redis (tesote.com dev flushdb in config/initializers/wurk/2server.rb) runs during the check; it must not write without --redis (read-only/refusing client like preflight) and the docs must say so."
   - "wave 2: PR #911 merged (11cd262) incl. review fixes (soak verdict, usage Redis isolation, vs_sidekiq edge race)."
   - "15 sales: tesote/sales#377 merged (f67f4c41) + live (/version f67f4c4, worker pod 1/1 `Wurk 1.12.0 on dragonfly 1.34.0`, no WARN): wurk 1.12.0; worker-image boot-check step in CI via rails/bin/deploy/wurk boot-check; WorkerBootTest uses public `wurk boot-check`. Workarounds still needed (1.12.0 retires none): pool built before config.redis= keeps 1s read_timeout (03 G9); `unless Wurk.server?` around configure_client (same false-positive WARN as gringotts); reliable_scheduler! (default poller can double-run; LLM jobs billed twice); Sentry ignore list (05 E2); unconsumed-queue tests (03 G5). Deferred S3, S4 (05 E4)."
   - "16 gringotts: tesote/gringotts-wizarding-bank#12 merged (2f31df6) + deployed (Deploy run 42957382632; worker pod 1/1, log `Wurk 1.12.0 on dragonfly 1.34.0`, /up 200): wurk 1.12.0, boot-check stage in bin/check (catches the cc2a24f Dotenv crash), Rails 8.1.4.1 (bundler-audit), image healthcheck -> wurk health. Local ~/workspace/tesote/gringotts-wizarding-bank is env files only (its rails/.env.test points REDIS_URL at DB 0); clone at gringotts-wizarding-bank.git-clone. Wave-3 wurk false positive: `configure_client block skipped` WARN (lib/wurk/configuration.rb ~905) fires for the standard client+server block pattern that Sidekiq skips silently -> DEBUG or suppress when a server block exists. S2/S3/S5 deferred on 11 K3-K5."

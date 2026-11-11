@@ -12,7 +12,7 @@ module Wurk
   #   1. prepare(job_hash) { ... }  → sets thread-local context, applies
   #      per-job log_level, yields to the rest of dispatch.
   #   2. call(item, queue) { ... }  → wraps the actual perform with the
-  #      start/done/fail log line trio and the elapsed-ms measurement.
+  #      start/done/fail log line trio and the elapsed-seconds measurement.
   #
   # Skipping default logging is controlled by config[:skip_default_job_logging];
   # the prepare step still runs so context/log_level still apply.
@@ -68,8 +68,10 @@ module Wurk
 
     private
 
+    # Seconds, as upstream logs it (`elapsed=0.007`): log scrapers and
+    # dashboards built on Sidekiq's line read the field that way.
     def elapsed(start)
-      ((::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - start) * 1000).round(3)
+      (::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - start).round(3)
     end
 
     # The attribute list is a host setting (defaults to %w[bid tags]), so the

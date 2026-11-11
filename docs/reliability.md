@@ -223,15 +223,25 @@ by one process in ten would wait about 13 intervals for its turn. It also covers
 decommissioned or renamed queue. The jobs go back to the list's own queue, whichever
 process moves them.
 
-There's also a **boot-time sweep**: every process runs one sweep on a background
-thread at startup, with no cluster lock. A SIGKILLed sibling's jobs are recovered as
-soon as the replacement boots.
+A **swarm child** does not wait for a sweep. The swarm parent reaps it, so it
+knows the child is dead and which queues it served, and it drains the child's
+private lists by exact key right there (`Reaper#reclaim_exited`): no `SCAN`, no
+liveness check, no lock. That covers a crash, a `kill -9`, an OOM kill, and a
+straggler the parent SIGKILLs at the end of a drain. A child that drained
+gracefully costs one pipelined `LLEN`. If Redis is unreachable at that moment, the
+lists stay where they are for the periodic sweep.
+
+There's also a **boot-time sweep**: every process tries for the same
+`super_fetch:reaper` lock at startup, on a background thread, and sweeps if it gets
+it. A deploy, a rolling restart (`USR1`) or a memory recycle of N processes is one
+keyspace pass, not N. Its job is the lists of other incarnations (a restarted pod,
+a previous deploy). Those wait on the heartbeat TTL either way.
 
 **How long reclaim takes**, measured at the defaults on Redis 7:
 
 | What died | Replaced by | Back on the queue after |
 |---|---|---|
-| A swarm child | A child of the same swarm, same nonce: the OS answers | **1.2s** |
+| A swarm child | Its parent, the moment it reaps the child (the supervise loop ticks every 0.2s) | **0.15-0.17s** (5 runs, Redis 8) |
 | A standalone `wurk` (a pod restart) | A new process, new nonce: only the heartbeat can answer, and the boot sweep is too early for it | **about 91s** |
 | A whole host, for good | Nothing, a survivor elsewhere sweeps | **90-141s** (bound: 80-150s; a sweeper that dies during its 30s grace restarts the clock, up to about 240s) |
 
@@ -271,16 +281,14 @@ Per private-list owner, and the answer now turns on nonce, not just host:
   as dead.
 
 **The remaining blind spot, unchanged by the nonce:** pid reuse *within* the
-same boot generation. If the swarm respawns a replacement and the OS hands it
-the exact pid a just-reaped sibling held — same host, same inherited
-nonce — the new occupant reads as the old one, alive. In practice the
-supervisor's own bookkeeping means this doesn't arise (a respawned child
-gets a fresh pid before its predecessor's is even eligible for reuse), so it
-stays a theoretical gap rather than an operational one. This is the same
-class of weakness Sidekiq Pro's `super_fetch` has never closed — see
-[Parity Divergences](idea/parity-divergences.md) — recorded there as
-deliberate rather than fixed, since eliminating it would mean tracking pid
-generation numbers the OS doesn't expose.
+same boot generation. If the OS hands a just-reaped sibling's pid to another
+process — same host, same inherited nonce — the `kill(0)` check reads the old
+owner as alive. A swarm child no longer depends on that check: its parent drains
+its lists when it reaps it, before the pid can be reused. The check is left as
+the fallback for when that drain fails (Redis unreachable at that moment), and
+only then can pid reuse strand the lists, until the new occupant exits. This is
+the same class of weakness Sidekiq Pro's `super_fetch` has never closed — see
+[Parity Divergences](idea/parity-divergences.md).
 
 ### The unparseable-key warning
 
@@ -346,6 +354,30 @@ written last, so a write refused part way through leaves the job in place, or at
 leaves it requeued with its count short. A crash mid-drain leaves every job either still
 in the private list or already moved — at-least-once, never lost. Death handlers,
 `super_fetch!` and `on_poison` fire after the script returns.
+
+The script is sent once: the client never re-sends it on a fresh socket, because a
+second run would find the job gone and report someone else's move. When the
+connection drops around it, the reaper reads back what happened (the payload's
+place in the private list and its dead-set score, which is the exact timestamp this
+call chose). A kill it made fires the notifications as usual. A job still in the
+private list is left for the next pass.
+
+**The notifications after a kill are at-most-once.** The kill and the notifications
+can't be one atomic step: the script runs in Redis, the handlers in Ruby. Two
+windows remain in which the job is in the dead set and no death handler, `:death`
+batch callback, unique-lock release, `super_fetch!` or `on_poison` ever runs for it:
+
+- the process running the reclaim dies between the script and the handlers, or
+- the connection drops around the script and Redis stays unreachable through the
+  read-back (the pool's retries, a few seconds).
+
+The job is never lost: it sits in the dead set and can be retried from there. A
+batch holding it stays pending until someone does. A requeue whose reply was lost is
+not reported either (no `jobs.recovered.fetch`, no `super_fetch!` call), since it
+can't be told from another reaper's move; the job is on its queue. Closing these
+windows would take a durable record written by the same script, which is a new
+Redis key. Sidekiq Pro's spec (§3.2) defines no such key and says nothing about
+notifying on a poison kill at all.
 
 ### A live worker's own private list
 

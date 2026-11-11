@@ -162,6 +162,33 @@ class RedisOptionsTest < Wurk::Test::UnitCase
     assert_includes keys, :sentinels
   end
 
+  # Three adopters raised read_timeout to 5s because a ~2s BLMOVE tripped a 1s
+  # client timeout. The fetcher's blocking_call adds read_timeout on top of the
+  # block window, so even a read_timeout far below it never times a parked fetch out.
+  def test_a_read_timeout_below_the_blmove_window_does_not_time_out_the_fetch
+    config = Wurk::Configuration.new
+    config.redis = { url: Wurk::Test.redis_url, read_timeout: 0.2 }
+    config[:fetch_poll_interval] = 1
+    capsule = Wurk::Capsule.new('read-timeout', config)
+    capsule.queues = ['g9-empty']
+    fetcher = Wurk::Fetcher::Reliable.new(capsule)
+
+    assert_nil fetcher.send(:blmove, 'queue:g9-empty')
+    # The same block through a plain call is what the 1s-timeout apps saw.
+    assert_raises(RedisClient::ReadTimeoutError) do
+      capsule.fetch_redis { |conn| conn.call('BLMOVE', 'queue:g9-empty', 'g9-private', 'RIGHT', 'LEFT', 1) }
+    end
+  ensure
+    config&.reset_redis_pools!
+  end
+
+  def test_fiber_blocking_driver_matches_hiredis
+    assert Wurk::RedisOptions.fiber_blocking_driver?(:hiredis)
+    assert Wurk::RedisOptions.fiber_blocking_driver?('hiredis')
+    refute Wurk::RedisOptions.fiber_blocking_driver?(:ruby)
+    refute Wurk::RedisOptions.fiber_blocking_driver?(nil)
+  end
+
   private
 
   def normalize(options)

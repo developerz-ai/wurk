@@ -10,16 +10,21 @@ With it, bundler resolves that dependency to wurk:
 ```ruby
 # Gemfile
 gem "wurk"
-gem "sidekiq", github: "developerz-ai/wurk", glob: "ecosystem/sidekiq-shim/*.gemspec"
+gem "sidekiq", github: "developerz-ai/wurk", tag: "v1.12.0", glob: "ecosystem/sidekiq-shim/*.gemspec"
 gem "sidekiq-cron" # or any other ecosystem gem
 ```
 
-The shim's version mirrors the Sidekiq release wurk targets
+Pin `tag:` to the wurk release in your bundle (tags are `v<wurk version>`).
+The shim depends on exactly the wurk version it was cut with, so a floating
+`main` checkout or a `bundle update` that moves only one of the two fails to
+resolve instead of mixing versions.
+
+The shim's own version mirrors the Sidekiq release wurk targets
 (`Sidekiq::VERSION` in `lib/wurk/compat.rb`), so ecosystem gems' version
 gates resolve exactly as they would upstream.
 
-It also ships the `sidekiq` executable, so `bundle exec sidekiq -C config/sidekiq.yml`
-keeps working and runs the wurk CLI.
+The `sidekiq` executable comes from wurk itself, so `bundle exec sidekiq -C config/sidekiq.yml`
+works with or without this shim.
 
 **Never published to rubygems.org** — the `sidekiq` name belongs to Sidekiq.
 Git/path consumption only. This is the standard bundler mechanism for

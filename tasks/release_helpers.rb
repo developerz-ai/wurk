@@ -135,6 +135,23 @@ module ReleaseHelpers
           'run `bundle exec rake release:relock_demo` and commit the lock'
   end
 
+  # Every doc that prints the `sidekiq` shim recipe. The shim depends on exactly
+  # the wurk it was cut with, so each recipe pins `tag:` to the current release.
+  SHIM_RECIPE_FILES = %w[
+    README.md docs/migrate-from-sidekiq.md docs/sentry.md docs/site/llms.txt ecosystem/sidekiq-shim/README.md
+  ].freeze
+  SHIM_RECIPE_TAG = %r{(github: "developerz-ai/wurk", tag: ")[^"]+(", glob: "ecosystem/sidekiq-shim)}
+
+  # Rewrites each recipe's tag to the one the release lane cuts for `version`.
+  def stamp_shim_recipes!(root, version)
+    tag = git_tag_for(version)
+    SHIM_RECIPE_FILES.each do |rel|
+      path = File.join(root, rel)
+      text = File.read(path)
+      File.write(path, text.gsub(SHIM_RECIPE_TAG, "\\1#{tag}\\2"))
+    end
+  end
+
   # Read the packaged file list straight out of the built .gem (no install) and
   # assert the precompiled dashboard actually shipped inside it.
   def gem_contains_dashboard!(gem_path)

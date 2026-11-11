@@ -34,6 +34,28 @@ Common flags (same as Sidekiq): `-c` concurrency, `-q queue[,weight]`, `-r` requ
 path, `-t` shutdown timeout (seconds), `-e` environment, `-C` config YAML. With no
 `-C`, Wurk auto-discovers `config/wurk.yml` then `config/sidekiq.yml` (`.erb` ok).
 
+### Process titles
+
+Every worker process titles itself the way stock Sidekiq does, program name
+included, and rewrites the title on every heartbeat (10s):
+
+```
+sidekiq 8.1.5 myapp [3 of 10 busy]
+sidekiq 8.1.5 myapp [0 of 10 busy] stopping
+```
+
+`8.1.5` is `Sidekiq::VERSION`, the upstream release Wurk is compatible with, not
+the Wurk version; `myapp` is the tag (`-g`, default the directory name). A
+`ps | grep '^sidekiq'` probe or runbook keeps working after the gem swap. The
+Wurk version is in each process's heartbeat `info` hash (`version`). Code that appends a segment to `Sidekiq::Launcher::PROCTITLES`
+still works. A worker embedded in a web server (`config.wurk.embed_in_web`,
+`Wurk::Embedded`) leaves the server's title alone, as upstream does.
+
+A `wurkswarm` parent titles itself after the binary that started it:
+`wurkswarm myapp [3 of 3 processes]`, or `sidekiqswarm myapp [3 of 3 processes]`
+when started as `sidekiqswarm`. A swarm the Rails engine starts inside a web
+server leaves the server's title alone; its children are titled as above.
+
 ---
 
 ## Signals
@@ -413,7 +435,7 @@ within `--window` seconds (default 60), `--min COUNT` raises how many must be be
 passes when Redis cannot be read, so a store outage does not restart your workers, unless you
 add `--strict`.
 
-Prefer either to a `ps | grep wurk` exec probe. That probe passes as long as the swarm parent
+Prefer either to a `ps | grep` exec probe ([process titles](#process-titles)). That probe passes as long as the swarm parent
 is alive, including while every child crash-loops and nothing is being processed. `wurkswarm`
 itself gives up too: when every child has been crashing for `swarm_crash_exit_after` seconds
 (default 600), it exits 1, so restartPolicy and CrashLoopBackOff can see the failure.

@@ -28,9 +28,20 @@ module Wurk
   #
   # See docs/sentry.md.
   module Sentry
+    # Sentry matches an excluded name by ancestry, so Handled also covers
+    # `JobRetry::Skip`, its subclass.
     CONTROL_FLOW_ERRORS = %w[Wurk::JobRetry::Handled Wurk::Shutdown].freeze
 
     class << self
+      # The retry machinery's own signals, for a Sentry setup that does not run
+      # {install!} (the web process, a `Sentry.init` that runs first):
+      #
+      #   config.excluded_exceptions += Wurk::Sentry.excluded_exceptions
+      #
+      # A `Rails.error` subscriber sees these cross the reloader on every failed
+      # attempt, as it does under Sidekiq.
+      def excluded_exceptions = CONTROL_FLOW_ERRORS
+
       # Registers the server middleware and the error handler. Idempotent:
       # `Chain#add` dedupes by class, and a previously-installed
       # {ErrorHandler} is replaced rather than stacked, so calling this twice

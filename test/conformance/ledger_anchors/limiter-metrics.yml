@@ -115,7 +115,7 @@
     Wurk.configuration.server_middleware.add(Wurk::Metrics::History)
 
 - entry: '`timeout:`/`deadline:` add `timeout`, `deadline`, and `deadline_at` as top-level job-JSON keys, opt-in only'
-  anchor: lib/wurk/job_util.rb#L255-L260
+  anchor: lib/wurk/job_util.rb#L269-L274
   fragment: |-
     return unless JobUtil.positive_seconds?(d)
 
@@ -141,6 +141,6 @@
     max_iteration_runtime: nil,
 
 - entry: '`:max_iteration_runtime` is accepted but not consumed'
-  anchor: docs/configuration.md#L151
+  anchor: docs/configuration.md#L155
   fragment: |-
     | `:max_iteration_runtime` | Integer / nil | `nil` | Accepted for drop-in compatibility; **not consumed by Wurk** |

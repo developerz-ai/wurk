@@ -109,6 +109,11 @@ module Wurk
               "#{unknown.map(&:inspect).join(', ')}. Supported keys: #{known_keys.sort.join(', ')}."
       end
 
+      # `driver: :hiredis`, the C driver a fiber scheduler cannot switch away from.
+      def fiber_blocking_driver?(driver)
+        driver.to_s.include?('hiredis')
+      end
+
       # Sentinel sets go through RedisClient.sentinel — RedisClient.config
       # rejects `sentinels:` outright. Same routing Sidekiq does.
       def sentinel?(client_config)

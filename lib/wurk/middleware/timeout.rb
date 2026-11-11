@@ -86,7 +86,7 @@ module Wurk
       def within_attempt(timer, job, seconds, &)
         return yield unless seconds
 
-        timer.watch(seconds, ::Wurk::Job::TimedOut, timeout_message(job, seconds), &)
+        timer.watch(seconds, ::Wurk::Job::TimedOut, timeout_message(job), &)
       end
 
       # A bound written through Wurk is type-checked at declaration, where the
@@ -95,8 +95,7 @@ module Wurk
       # passed that check, and a bound we can't use on one of those has to leave
       # the job unbounded rather than break it.
       def bound_for(job)
-        seconds = job['timeout']
-        seconds if ::Wurk::JobUtil.positive_seconds?(seconds)
+        ::Wurk::JobUtil.payload_seconds(job['timeout'])
       end
 
       # What is left of the absolute cutoff, in seconds. Negative is not an
@@ -122,9 +121,10 @@ module Wurk
 
       # What an operator reads in the retry set, the dead set, a tracked job's
       # status row, and their error tracker — so each names the class and the
-      # bound it broke.
-      def timeout_message(job, seconds)
-        "#{job['class']} timed out after #{seconds}s"
+      # bound it broke, as the payload carries it: `timeout: 5` reads "5s", not
+      # the Float it was armed as.
+      def timeout_message(job)
+        "#{job['class']} timed out after #{job['timeout']}s"
       end
 
       def deadline_message(job)

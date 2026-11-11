@@ -215,8 +215,25 @@ ERB is evaluated, so `<%= ENV["..."] %>` works inside the file.
 A process that runs jobs says what it is in one INFO line, and every boot path
 checks a few things that otherwise surface only under load. `bundle exec wurk
 boot-check -r .` runs the same boot and the same checks, then exits without
-forking or fetching, so a CI step sees them first (`--redis` adds a read-only
-look at the server).
+forking or fetching, so a CI step sees them first. It boots as `wurkswarm` by
+default; `--runner wurk` boots the single-process path instead, for an app that
+deploys `wurk`.
+
+What boot-check runs, and what it does not:
+
+- The app's initializers and `configure_server` blocks run: their load errors
+  are what it is for.
+- No lifecycle event fires (`:startup` included), no periodic loop is
+  registered, nothing is forked and nothing is fetched.
+- Without `--redis`, every Redis pool Wurk builds refuses to open a connection,
+  so boot code that writes Redis (a dev-only `flushdb`, a seed) fails the check,
+  naming its file and line, instead of reaching a server. With `--redis` those
+  pools send reads only (the allowlist `wurk preflight` uses), and the check also
+  reports the server version, eviction policy and live peers. A client the app
+  opens itself (`Redis.new`, `Rails.cache`) is not Wurk's and is not covered.
+  Redis work that belongs to a running worker goes in `config.on(:startup)`.
+
+`wurk preflight --app` boots the app behind the same read-only guard.
 
 | Message | Level | Cause | Fix |
 |---|---|---|---|
@@ -227,9 +244,21 @@ look at the server).
 | `The bundle holds the real sidekiq <version> gem…` | ERROR | A gem that depends on `sidekiq` pulled the real gem in beside Wurk, so `Sidekiq::*` is part theirs, part Wurk's. Logged as Wurk loads, in every process | Replace it with the shim line the message prints (pinned to your Wurk version). `WURK_STRICT=1` turns the message into a raise that refuses to boot |
 | `The Active Record pool holds A connections but this process runs up to M job threads…` | WARN | `pool:` in `config/database.yml` is below the job threads one process runs; jobs that use the database wait, then raise `ActiveRecord::ConnectionTimeoutError` | Set `pool:` to at least M, plus the web server's threads when jobs run in the web process. Worker processes also log an ERROR (`ActiveRecord connection pool size … is smaller than…`) for the same condition |
 | `the Redis pool for capsule <name> holds S connections, fewer than its concurrency of C…` | refuses to start | `config.redis = { size: S }` is below a capsule's concurrency (`wurk`, `wurkswarm`, `wurk boot-check`) | Raise `size:` to at least C, or drop `size:` and Wurk sizes the pool itself (concurrency + 5, at least 10) |
+| `Wurk swarm size: N children (<source>)` | INFO | How many children a swarm without a declared topology runs, and where the number came from (`WURK_COUNT`, `SIDEKIQ_COUNT`, or the CPU count) | Set `WURK_COUNT` if it is not the number you meant |
+| `wurk boot-check: <file>:<line> opened a Redis connection while the app booted…` / `…sent <COMMAND> while the app booted…` | fails the check | Boot code touched Redis under `wurk boot-check` (or wrote it under `--redis`, or under `wurk preflight --app`) | Move the Redis work into `config.on(:startup)`; pass `--redis` if the boot only needs to read |
+| `This is a server process, so its configure_client blocks were skipped, and no configure_server block ran…` | WARN | The app configures Wurk only in `configure_client`, so the workers got none of it (Redis settings, middleware, handlers). A client block skipped next to a server block is the normal Sidekiq shape and logs only at DEBUG | Repeat the settings in a `configure_server` block, or set them outside both |
+| `config.topology is set, but wurk runs a single process and ignores it…` | WARN | A topology only shapes what `wurkswarm` forks; `wurk` and a worker embedded in the web server run the capsules' threads in one process | Run `wurkswarm`, or set queues and concurrency on the capsules |
+| `Rails enqueues to <queue> (<what>), which neither this process nor any live one listens to…` | WARN | ActiveJob runs on Wurk, and a queue Rails sends its own jobs to (mail delivery, Active Storage, Action Mailbox) is in no process's queue list, so those jobs wait forever. Checked when Redis is read: `wurk`, `wurkswarm`, `wurk boot-check --redis` | Add the queue to a worker. A leader also warns, once a queue has held jobs unconsumed for five minutes |
+| `Redis pool <name> uses the hiredis driver under a fiber scheduler…` | WARN | `driver: :hiredis` in a process with a fiber scheduler (Falcon, Async): hiredis waits in C, so one slow reply stalls every fiber on the thread | Use `driver: :ruby` in that process's `config.redis` |
 
 The `lock:` and `unique_for:` checks see only job classes loaded by then: under
 lazy loading, a class first touched later is not listed.
+
+A `read_timeout` below the fetch's block window is fine: the reliable fetcher's
+`BLMOVE` is a blocking call, and redis-client waits for the window plus
+`read_timeout`. Wurk's default is 2.5s. Set Redis options before anything uses
+Redis, though: a pool built before `config.redis=` keeps the settings it was built
+with (a WARN says so), and only a swarm child rebuilds its pools.
 
 ---
 

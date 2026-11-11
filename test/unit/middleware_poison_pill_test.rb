@@ -40,6 +40,15 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
 
   # --- counter lifecycle -------------------------------------------------
 
+  # Not a chain middleware: its producer is the reaper and its consumer the ACK,
+  # so the file lives with the fetcher. The constant keeps the Middleware path
+  # Pro initializers name.
+  def test_lives_with_the_fetcher_under_its_pro_constant
+    path = Wurk::Middleware::PoisonPill.method(:recovered!).source_location.first
+
+    assert_equal File.expand_path('../../lib/wurk/fetcher/poison_pill.rb', __dir__), path
+  end
+
   def test_first_recovery_increments_to_one
     json = payload_json
 

@@ -230,5 +230,22 @@ run on both sides, and anything a host wraps around `Sidekiq::Web` runs first. T
 machine API is not served under this mount; `mount Wurk::Engine` or `mount Wurk::API`
 serves it.
 
-`run Sidekiq::Web` outside Rails serves extension routes only. Anything else is a 404
+`run Sidekiq::Web` outside Rails serves extension routes and the
+[probe and stats routes](#probe-and-stats-routes) only. Anything else is a 404
 whose body names the fix, plus one WARN in the log.
+
+## Probe and stats routes
+
+Every mount (`mount Wurk::Engine`, `mount Sidekiq::Web`, and `run Sidekiq::Web` outside
+Rails) answers Sidekiq Web's machine-readable routes with upstream's shapes, so an uptime
+check or script written against `/sidekiq/stats` keeps working. They sit behind the same
+gates as the dashboard.
+
+| Request | Answer |
+|---|---|
+| `HEAD /` | `200` after one `LLEN queue:default`; an error when Redis is unreachable |
+| `GET /stats` | JSON: `sidekiq` (`processed`, `failed`, `busy`, `processes`, `enqueued`, `scheduled`, `retries`, `dead`, `default_latency`), `redis` (`redis_version`, `uptime_in_days`, `connected_clients`, `used_memory_human`, `used_memory_peak_human`, `store_name`, `store_version`), `server_utc_time` |
+| `GET /stats/queues` | JSON object, queue name to size, largest first |
+| `GET /dashboard/stats` | `302` to `/stats` |
+
+The dashboard's own JSON (`/api/stats`) is a different, SPA-shaped payload.

@@ -4,6 +4,7 @@ require 'logger'
 require 'optparse'
 require_relative '../preflight'
 require_relative 'verify'
+require_relative 'redis_guard'
 
 module Wurk
   module Preflight
@@ -81,7 +82,7 @@ module Wurk
 
       def run_preflight(config)
         Preflight.run(config, limit: @opts[:limit], sample: @opts[:sample], pause: pause, progress: progress,
-                              app: @opts[:app] ? true : false)
+                              app: @app_root)
       end
 
       def run_verify(config)
@@ -93,15 +94,30 @@ module Wurk
 
       # WURK_DISABLED keeps the railtie from forking a swarm in this process. Server
       # mode makes `configure_server` blocks run, so the Redis read is the one this
-      # app's workers would use.
+      # app's workers would use. Wurk's pools refuse writes while the app boots
+      # (RedisGuard), so an initializer that writes fails this run instead.
       def boot_app
         path = ::File.expand_path(@opts[:app])
-        @err.puts("wurk #{@name}: --app boots #{path} and runs its initializers. Anything they do is not read-only, " \
-                  "and an enqueue goes to the app's Redis, whatever --redis-url says.")
+        @err.puts("wurk #{@name}: --app boots #{path} and runs its initializers. Wurk's Redis clients refuse writes " \
+                  'while it boots; a client the app opens itself is not covered.')
         ::ENV['WURK_DISABLED'] = '1'
+        RedisGuard.install(:read_only, label: "wurk #{@name} --app")
         @config.enter_server_mode
         ::Kernel.require(::File.directory?(path) ? ::File.join(path, 'config/environment') : path)
-        ::Rails.application.eager_load! if defined?(::Rails) && ::Rails.respond_to?(:application) && ::Rails.application
+        ::Rails.application.eager_load! if rails_app
+        @app_root = app_root(path)
+      ensure
+        RedisGuard.uninstall
+      end
+
+      def rails_app = defined?(::Rails) && ::Rails.respond_to?(:application) && ::Rails.application
+
+      # Where the source rows read: the directory named, else the booted Rails
+      # app's root, else the named file's directory.
+      def app_root(path)
+        return path if ::File.directory?(path)
+
+        rails_app ? ::Rails.root.to_s : ::File.dirname(path)
       end
 
       def parser

@@ -1,0 +1,8 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Drop-in alias for `wurk`. Sidekiq apps start workers with `bundle exec sidekiq
+# -C config/sidekiq.yml` in a Procfile, systemd unit or k8s manifest; this keeps
+# that exact command working after a one-line gem swap. Spec:
+# docs/target/sidekiq-free.md §21.
+load File.expand_path('wurk', __dir__)

@@ -25,9 +25,11 @@ module Wurk
       if info
         log_backend(config.logger, info)
         warn_on_foreign_processes(config)
+        warn_on_unconsumed_framework_queues(config)
       end
       warn_on_ignored_locks(config.logger)
       warn_on_ignored_unique(config.logger)
+      warn_on_client_config_only(config)
     rescue StandardError => e
       config.logger.warn { "wurk boot checks skipped: #{e.class}: #{e.message}" }
     end
@@ -95,6 +97,84 @@ module Wurk
           "nothing and duplicates enqueue: #{listing(classes)}. Enable them once at boot, in an initializer: " \
           '`Sidekiq::Enterprise.unique!`.'
       end
+    end
+
+    # Stock Sidekiq skips a configure_client block in a server without a word,
+    # and so does Configuration: an app normally configures both roles. A
+    # server where only client blocks were written ran none of them, so the
+    # Redis settings, middleware and handlers they hold are all absent here.
+    def warn_on_client_config_only(config)
+      return unless config.client_config_only?
+
+      config.logger.warn do
+        'This is a server process, so its configure_client blocks were skipped, and no configure_server block ran: ' \
+          'whatever those blocks set (config.redis, middleware, handlers) does not apply to these workers. Set it ' \
+          'in a configure_server block too, or outside both.'
+      end
+    end
+
+    # The topology only shapes what a swarm forks; `wurk` and an embedded
+    # worker run one process with the capsules' threads, so a declared one
+    # silently does nothing there.
+    def warn_on_ignored_topology(config, runner)
+      return unless config.topology_assigned?
+
+      config.logger.warn do
+        "config.topology is set, but #{runner} runs a single process and ignores it: its slots' queues and " \
+          'concurrency are not used here. Run wurkswarm to fork it, or set the queues and concurrency on the capsules.'
+      end
+    end
+
+    # Rails enqueues its own jobs (mail delivery, Active Storage analysis and
+    # purge, Action Mailbox routing) to queues an app never names itself, so
+    # they are the ones that go unlistened. Read from Redis, so only with it.
+    def warn_on_unconsumed_framework_queues(config)
+      wanted = framework_queues
+      return if wanted.empty?
+
+      listened = own_queues(config) | config.redis(idempotent: true) { |conn| QueueConsumers.counts(conn).keys }
+      missing = wanted.except(*listened)
+      return if missing.empty?
+
+      config.logger.warn do
+        "Rails enqueues to #{listing(missing.map { |queue, what| "#{queue} (#{what})" })}, which neither this " \
+          'process nor any live one listens to, so those jobs wait forever. Add the queues to a worker.'
+      end
+    end
+
+    # `{ queue => what Rails sends there }`, for apps whose ActiveJob adapter is Wurk.
+    def framework_queues
+      return {} unless wurk_active_job?
+
+      named = {}
+      named['mail delivery'] = ::ActionMailer::Base.deliver_later_queue_name if defined?(::ActionMailer::Base)
+      named.merge!(framework_queue_set('Active Storage', defined?(::ActiveStorage) && ::ActiveStorage))
+      named.merge!(framework_queue_set('Action Mailbox', defined?(::ActionMailbox) && ::ActionMailbox))
+      named.compact.to_h { |what, queue| [active_job_queue_name(queue), what] }
+    end
+
+    def framework_queue_set(framework, mod)
+      return {} unless mod.respond_to?(:queues) && mod.queues.respond_to?(:to_h)
+
+      mod.queues.to_h.transform_keys { |kind| "#{framework} #{kind}" }
+    end
+
+    def wurk_active_job?
+      return false unless defined?(::ActiveJob::Base)
+
+      ::ActiveJob::Base.queue_adapter.class.name.to_s.match?(/Wurk|Sidekiq/)
+    end
+
+    def active_job_queue_name(queue)
+      prefix = ::ActiveJob::Base.queue_name_prefix
+      prefix ? "#{prefix}#{::ActiveJob::Base.queue_name_delimiter}#{queue}" : queue.to_s
+    end
+
+    def own_queues(config)
+      queues = config.capsules.each_value.flat_map { |cap| cap.weights.keys }
+      return queues unless config.topology_assigned?
+
+      queues | config.topology.slots.flat_map { |slot| Array(slot.queues).map { |entry| entry.to_s.split(',').first } }
     end
 
     def locked_job_classes = job_classes_setting(%w[lock])

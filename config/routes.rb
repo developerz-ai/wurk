@@ -1,6 +1,14 @@
 # frozen_string_literal: true
 
 Wurk::Engine.routes.draw do
+  # Sidekiq Web's machine-readable routes (free §25.4), upstream's shapes, for
+  # uptime checks and scripts. `HEAD /` is declared before `root`, which would
+  # otherwise answer it with the SPA shell and never touch Redis.
+  match '/', to: Wurk::Web::StatsRoutes, via: :head
+  get 'stats', to: Wurk::Web::StatsRoutes, format: false
+  get 'stats/queues', to: Wurk::Web::StatsRoutes, format: false
+  get 'dashboard/stats', to: Wurk::Web::StatsRoutes, format: false
+
   root to: 'dashboard#index'
 
   # JSON APIs consumed by the SPA. Nested under whatever mount the host chose.

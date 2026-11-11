@@ -9,6 +9,7 @@ require_relative 'orphan_grace'
 require_relative 'oom_drain'
 require_relative 'orphan_reclaim'
 require_relative 'self_reconcile'
+require_relative 'reliable'
 
 module Wurk
   class Fetcher
@@ -28,9 +29,10 @@ module Wurk
     #     ignores a stale `processes` SET member — the SET carries no TTL, so
     #     the member lingers after its heartbeat hash expires (60s) until
     #     `ProcessSet#cleanup` prunes it. A `kill -9`ed sibling is reclaimed
-    #     the moment the supervisor reaps it, not 60s later. (Pid reuse by an
-    #     unrelated process in the same tree is the one blind spot — the
-    #     supervisor respawns with a fresh pid, so it does not arise in practice.)
+    #     the moment the supervisor reaps it, not 60s later. Pid reuse by an
+    #     unrelated process reads a dead owner as live; a swarm child does not
+    #     depend on this check, since its parent drains its lists by exact key
+    #     the moment it reaps it (#reclaim_exited), before the pid can be reused.
     #   * any other incarnation — its pid means nothing in our namespace, so we
     #     trust the heartbeat: the owner is alive iff its identity's `info`
     #     hash still exists. Such reclaim waits out the 60s heartbeat TTL, the
@@ -172,13 +174,30 @@ module Wurk
         sweep.tap { wake_for_settling }
       end
 
-      # #reclaim! for a booting process. Deliberately under no lock, not even a
-      # short one: a replacement's sweep is what recovers the sibling it replaces,
-      # and the sibling may have died a moment after another process booted (a
-      # 2s lock turned a child killed right after boot from 1s into 61s). One
-      # pass per process costs keyspace / SCAN_COUNT calls.
+      # The sweep a booting process runs, under the same lock as the periodic one:
+      # a rolling restart or a deploy of N processes is one keyspace pass, not N.
+      # A replacement's sweep is no longer what recovers the swarm child it
+      # replaces; the parent did that by exact key when it reaped the child
+      # (#reclaim_exited). What this pass still finds is other incarnations'
+      # lists, which wait on the heartbeat TTL and the grace either way.
       def boot_reclaim!
-        reclaim!
+        reap
+      end
+
+      # Drains the private lists of a process known to be dead: a swarm child its
+      # parent has just reaped. The parent knows the pid, the queues the child
+      # served and, since the nonce is inherited across fork, the rest of each
+      # list's name, so neither a SCAN nor a liveness check is needed. One
+      # pipelined LLEN finds the lists holding anything (none, after a drained
+      # exit) and raises rather than paying the pool's backoff once per list
+      # when Redis is away. Returns the jobs moved.
+      def reclaim_exited(pid, queue_names)
+        lists = queue_names.to_h do |name|
+          public_q = Keys.queue(name)
+          [Reliable.private_queue_name(public_q, pid: pid), public_q]
+        end
+        lengths = redis(idempotent: true) { |c| c.pipelined { |p| lists.each_key { |l| p.call('LLEN', l) } } }
+        lists.zip(lengths).sum { |(list, public_q), len| len.positive? ? drain(list, public_q) : 0 }
       end
 
       # Lists whose grace has run out, whichever sweep started it. Runs on every

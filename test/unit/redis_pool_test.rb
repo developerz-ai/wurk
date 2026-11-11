@@ -13,6 +13,33 @@ class RedisPoolTest < Wurk::Test::UnitCase
     super
   end
 
+  # --- hiredis under a fiber scheduler ---
+
+  # Stands in for :hiredis, which needs the hiredis-client gem.
+  RedisClient.register_driver(:hiredis_test_double) { RedisClient::RubyConnection }
+
+  def test_hiredis_under_a_fiber_scheduler_warns_once_per_pool
+    log = StringIO.new
+    with_logger(::Logger.new(log)) do
+      @pool = Wurk::RedisPool.new(size: 2, name: 'falcon', url: Wurk::Test.redis_url, driver: :hiredis_test_double)
+      # Two checkouts at once build both connections.
+      with_fiber_scheduler(Object.new) { @pool.with { |a| @pool.with { |b| [a.call('PING'), b.call('PING')] } } }
+    end
+
+    assert_equal 1, log.string.scan('uses the hiredis driver under a fiber scheduler').size
+    assert_includes log.string, 'Redis pool falcon'
+  end
+
+  def test_hiredis_without_a_fiber_scheduler_is_quiet
+    log = StringIO.new
+    with_logger(::Logger.new(log)) do
+      @pool = Wurk::RedisPool.new(size: 1, url: Wurk::Test.redis_url, driver: :hiredis_test_double)
+      @pool.with { |conn| conn.call('PING') }
+    end
+
+    assert_empty log.string
+  end
+
   # --- RedisConnection.create (#163, spec §26) ---
 
   def test_redis_connection_create_returns_usable_pool
@@ -634,6 +661,22 @@ class RedisPoolTest < Wurk::Test::UnitCase
       @closes += 1
       raise 'boom' if @close_raises
     end
+  end
+
+  def with_logger(logger)
+    was = Wurk.logger
+    Wurk.logger = logger
+    yield
+  ensure
+    Wurk.logger = was
+  end
+
+  def with_fiber_scheduler(scheduler)
+    original = ::Fiber.method(:scheduler)
+    ::Fiber.define_singleton_method(:scheduler) { scheduler }
+    yield
+  ensure
+    ::Fiber.define_singleton_method(:scheduler, original)
   end
 
   # A connection whose block lands `deliver` round trips and *then* fails —
