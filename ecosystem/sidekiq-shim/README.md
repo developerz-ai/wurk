@@ -10,7 +10,7 @@ With it, bundler resolves that dependency to wurk:
 ```ruby
 # Gemfile
 gem "wurk"
-gem "sidekiq", github: "developerz-ai/wurk", tag: "v1.12.0", glob: "ecosystem/sidekiq-shim/*.gemspec"
+gem "sidekiq", github: "developerz-ai/wurk", tag: "v1.13.0", glob: "ecosystem/sidekiq-shim/*.gemspec"
 gem "sidekiq-cron" # or any other ecosystem gem
 ```
 
