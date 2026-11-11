@@ -88,8 +88,9 @@ decisions, and measurements: `docs/plans/2026/08/07/101-beyond-sidekiq/`.
 
 ## M6 — 1.0
 
-1.0.0 was tagged and published to RubyGems on 2026-06-11 (`CHANGELOG.md`); the
-1.x line has shipped continuously since. Where each original exit criterion
+1.0.0 was tagged and published to RubyGems on 2026-06-11
+([`changelog/1.0.0.md`](../changelog/1.0.0.md)); the 1.x line has shipped
+continuously since. Where each original exit criterion
 actually stands:
 
 - Benchmark suite published with comparisons to stock Sidekiq — **done**

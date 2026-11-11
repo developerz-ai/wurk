@@ -256,7 +256,7 @@ release:
   #   1. a version bump to lib/wurk/version.rb lands on main
   #   2. .github/workflows/release.yml fires on that path, publishes to RubyGems
   #      via OIDC trusted publishing, and only then cuts the tag + GitHub Release
-  #      from the CHANGELOG section
+  #      from docs/changelog/<version>.md
   #
   # `none` is the only value in the enum (release-please | none) that describes
   # that, and it means "no release MANAGER" — it does not govern the agent's
@@ -269,7 +269,7 @@ release:
   # GitHub Release marked "Latest" with no gem behind it, while `gem install
   # wurk` kept serving the previous version — and a red release run each time.
   # release.yml owns the whole lane end to end (gem first, then tag + Release
-  # from the CHANGELOG), so there is no channel left for the agent to publish on.
+  # from docs/changelog/), so there is no channel left for the agent to publish on.
   # The registry channels (incl. rubygems) are reserved and REJECTED at
   # validation time regardless; RubyGems is declared by release.yml's OIDC step.
   channels: []

@@ -18,7 +18,7 @@ $ARGUMENTS
 
 ## 2. Run a wave
 - One wave = one branch off fresh `main` = one PR. Create the branch yourself before any agent starts; agents never switch it.
-- Brief each agent with: its plan rows by ID, its **exclusive file set**, every other live agent's file set, "no git, no spawning, no worktrees", `eval "$(bin/redis env agent-<k>)"` for its own Redis, "finish the slice; a blocker is a report", and a **"DX friction"** section in its report. Agents never edit `CHANGELOG.md`, `CLAUDE.md` files or `.claude/`: they report proposed text and you apply it.
+- Brief each agent with: its plan rows by ID, its **exclusive file set**, every other live agent's file set, "no git, no spawning, no worktrees", `eval "$(bin/redis env agent-<k>)"` for its own Redis, "finish the slice; a blocker is a report", and a **"DX friction"** section in its report. Agents never edit `CHANGELOG.md`, `docs/changelog/`, `CLAUDE.md` files or `.claude/`: they report proposed text and you apply it.
 - Other repos (adopters, infra) run in parallel from their own checkouts: each agent follows that repo's own CLAUDE.md and merge rules (some forbid `gh pr merge`; a bot merges).
 - Read-only surveys (perf ideas, inventories) can run while a wave builds: they feed later waves, never the current PR.
 

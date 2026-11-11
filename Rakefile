@@ -255,16 +255,15 @@ task 'test:engine' => 'frontend:ensure_build' # rubocop:disable Rake/Desc
 
 namespace :release do
   desc 'Pre-release gate: on main (in CI), tag matches version, bundle present, ' \
-       'version matches CHANGELOG + demo lock, clean tree, tests green'
+       'version matches its changelog notes + demo lock, clean tree, tests green'
   task :check do
     version = Wurk::VERSION
     puts "release:check — Wurk #{version}"
     ReleaseHelpers.ref_is_main!
     ReleaseHelpers.tag_matches_version!(version)
     ReleaseHelpers.dashboard_bundle_present!(DASHBOARD_BUNDLE_DIR)
-    changelog = File.read(File.join(GEM_ROOT, 'CHANGELOG.md'))
-    ReleaseHelpers.changelog_has_version!(changelog, version)
-    ReleaseHelpers.changelog_unreleased_link_current!(changelog, version)
+    ReleaseHelpers.changelog_has_version!(GEM_ROOT, version)
+    ReleaseHelpers.changelog_unreleased_link_current!(File.read(File.join(GEM_ROOT, 'CHANGELOG.md')), version)
     ReleaseHelpers.demo_lock_matches_version!(File.read(File.join(DEMO_DIR, 'Gemfile.lock')), version)
     release_tree_clean!
     puts 'release:check — static checks passed; running tests…'

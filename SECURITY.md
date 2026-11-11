@@ -5,7 +5,8 @@
 Wurk follows semantic versioning. Security fixes ship in a new release on top
 of the **latest** 1.x version; there are no backport branches and no long-term
 support line. To pick up a fix, upgrade to the newest 1.x release (within 1.x
-an upgrade is meant to be drop-in; check `CHANGELOG.md`).
+an upgrade is meant to be drop-in; check `CHANGELOG.md`, which links each
+release's notes).
 
 | Version | Supported |
 |---|---|
@@ -37,7 +38,7 @@ paid support tier behind it. What we aim for, on a best-effort basis:
 - **Acknowledgement** within 3 business days.
 - An initial assessment and severity within 7 days.
 - Coordinated disclosure: we'll agree on a timeline with you, ship a patched
-  release, and credit you in the advisory and `CHANGELOG.md` unless you prefer
+  release, and credit you in the advisory and the release notes unless you prefer
   to remain anonymous.
 
 If your deployment needs a guaranteed response time, that requires a separate

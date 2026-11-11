@@ -72,7 +72,7 @@ module PostEdit
   def version_note(path)
     return unless path == 'lib/wurk/version.rb'
 
-    'A merged bump IS the release: `bundle exec rake release:relock_demo`, move [Unreleased] in CHANGELOG, ' \
+    'A merged bump IS the release: `bundle exec rake release:relock_demo`, cut docs/changelog/unreleased.md, ' \
       'one `release: x.y.z` PR with nothing else, never tag (RELEASE.md).'
   end
 

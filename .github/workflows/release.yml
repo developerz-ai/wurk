@@ -233,7 +233,7 @@ jobs:
           bin/rails db:prepare
 
       # Gate: derived tag ↔ Wurk::VERSION, dashboard bundle + manifest present,
-      # CHANGELOG section exists, clean tree, tests green.
+      # changelog notes + index entry exist, clean tree, tests green.
       - name: release gate
         run: bundle exec rake release:check
 
@@ -393,13 +393,13 @@ jobs:
       # Tag and GitHub Release in one step, LAST — `gh release create` creates the
       # tag at --target. Cutting it only after the gem is live is what guarantees
       # a tag always has a gem behind it, so "Latest" on GitHub can never
-      # disagree with RubyGems. Notes come from the CHANGELOG section, the .gem
+      # disagree with RubyGems. Notes come from docs/changelog/<version>.md, the .gem
       # is attached.
       #
       # It reconciles rather than aborting when a release for the tag is already
       # there, because `gem push` is irreversible. A release someone else started
       # is finished here instead: published at this commit, notes reset from the
-      # CHANGELOG, the .gem attached. The one case that still fails is a tag
+      # changelog notes, the .gem attached. The one case that still fails is a tag
       # already pointing at a different commit — moving it is never this job's
       # call.
       - name: tag & create GitHub Release

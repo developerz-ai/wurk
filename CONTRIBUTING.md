@@ -269,6 +269,7 @@ Open an issue before a large feature PR so the direction is agreed first.
    auto-merging. See `.dz/maintainer/maintainer.yml` for the ruleset citation.
 2. Branch off `main`.
 3. Keep the change focused; add tests at the right layer.
+   A user-visible change adds its line to `docs/changelog/unreleased.md`.
 4. Run `bin/check` (or `bin/check full` if you touched the compat surface or
    anything under `clients/python/`).
 5. Open the PR — the required suite is one Ruby run on the newest Ruby +

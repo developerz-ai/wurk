@@ -74,7 +74,7 @@ $ARGUMENTS
 
 ## Hard rules
 
-Every pillar and *Never* in `CLAUDE.md` binds this flow, wire compatibility first. The agent always discloses it is a bot — no human impersonation. **No bot-on-bot loops** — answer a CodeRabbit or review-agent finding once, with evidence; don't argue. Bot findings can be wrong: verify each against the code before changing anything. No abstractions before consumers; default to deletion. Ruby: frozen string literals, rubocop clean. Dashboard: bun (consumers never run Node or bun), oxlint, every user-facing string in every locale under `frontend/src/i18n/`. Tests with the code, against real Redis. User-visible change → CHANGELOG `## [Unreleased]`. Destructive or irreversible actions need approval — autonomy removes questions, not judgment.
+Every pillar and *Never* in `CLAUDE.md` binds this flow, wire compatibility first. The agent always discloses it is a bot — no human impersonation. **No bot-on-bot loops** — answer a CodeRabbit or review-agent finding once, with evidence; don't argue. Bot findings can be wrong: verify each against the code before changing anything. No abstractions before consumers; default to deletion. Ruby: frozen string literals, rubocop clean. Dashboard: bun (consumers never run Node or bun), oxlint, every user-facing string in every locale under `frontend/src/i18n/`. Tests with the code, against real Redis. User-visible change → a line in `docs/changelog/unreleased.md`. Destructive or irreversible actions need approval — autonomy removes questions, not judgment.
 
 ## Output
 

@@ -242,7 +242,7 @@ class ForbiddenClaimsTest < Minitest::Test
     guide = read_doc('docs/benchmarks.md')
 
     assert_command_builder_attribution(guide)
-    ['~2.1µs', '~0.48µs', 'historical measurement', '../CHANGELOG.md#170---2026-08-10'].each do |token|
+    ['~2.1µs', '~0.48µs', 'historical measurement', 'changelog/1.7.0.md'].each do |token|
       assert_raises(Minitest::Assertion) { assert_command_builder_attribution(guide.gsub(token, 'drift')) }
     end
   end
@@ -395,7 +395,7 @@ class ForbiddenClaimsTest < Minitest::Test
   end
 
   def assert_command_builder_attribution(text)
-    notes = read_doc('CHANGELOG.md').lines.find { |line| line.start_with?('- **`Wurk::CommandBuilder`') }
+    notes = read_doc('docs/changelog/1.7.0.md').lines.find { |line| line.start_with?('- **`Wurk::CommandBuilder`') }
 
     refute_nil notes
     timing = notes[/~[\d.]+µs → ~[\d.]+µs per command/]
@@ -404,7 +404,7 @@ class ForbiddenClaimsTest < Minitest::Test
     paragraph = text[/The \[1\.7\.0 release notes\].*?timing run here\./m]
 
     refute_nil paragraph
-    assert_includes paragraph, '../CHANGELOG.md#170---2026-08-10'
+    assert_includes paragraph, '(changelog/1.7.0.md)'
     assert_includes paragraph, timing
     assert_includes paragraph, 'historical measurement, not a new'
   end
