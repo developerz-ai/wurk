@@ -133,7 +133,7 @@ module WurkSoak
         lost, dead = @book.pending_jids.partition { |jid| !@dead.key?(jid) }
         dups = duplicates
         {
-          balanced: lost.empty? && dups[:unattributed].empty? && unledgered.empty? && batch_report[:missing].empty?,
+          balanced: balanced?(lost, dups),
           pushed: @book.pushes.size, completed: @book.pushes.keys.count { |j| @book.dones.key?(j) },
           lost: lost.sort, dead: dead.to_h { |j| [j, @dead[j]] },
           duplicates: dups, reruns: reruns, unledgered: unledgered,
@@ -146,6 +146,13 @@ module WurkSoak
       end
 
       private
+
+      # A leaked unique push is a broken lock and an out-of-order callback a
+      # broken batch promise; neither is an at-least-once window.
+      def balanced?(lost, dups)
+        lost.empty? && dups[:unattributed].empty? && unledgered.empty? && batch_report[:missing].empty? &&
+          batch_report[:out_of_order].empty? && @book.counters['uniq_leak'].zero?
+      end
 
       # A jid completed more than once, each extra completion explained by a
       # documented at-least-once window or listed as unattributed.
@@ -170,17 +177,20 @@ module WurkSoak
       end
 
       def attribute(first, again, kind)
-        return 'deferred_ack' if killed_after?(first)
+        return 'deferred_ack' if killed_between?(first, again)
         return 'redis_outage' if outage_between?(first.time - OUTAGE_SLACK, again.time)
         return 'scheduler_lease' if ZSET_KINDS.include?(kind) && kill_between?(first.time - SCHEDULER_LEASE, again.time)
 
         nil
       end
 
-      # The process that completed it was SIGKILLed afterwards: the ACK rode
-      # the next fetch and died with it.
-      def killed_after?(evt)
-        @book.chaos.any? { |c| c.kind == 'kill9' && c.id.to_i == evt.pid && c.time >= evt.time }
+      # The process that completed it was SIGKILLed before the job completed
+      # again: the ACK rode the next fetch and died with it. A kill after the
+      # second completion cannot have caused it.
+      def killed_between?(first, again)
+        @book.chaos.any? do |c|
+          c.kind == 'kill9' && c.id.to_i == first.pid && c.time.between?(first.time, again.time)
+        end
       end
 
       def kill_between?(from, upto)

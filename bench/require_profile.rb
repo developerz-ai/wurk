@@ -42,9 +42,9 @@
 #                                             [--usage] [--json PATH]
 #                                             [--entries a,b,…]
 #
-# Redis: wurk:server, sidekiq:server and --usage use a dedicated logical DB
-# (default 12, `WURK_BENCH_DB` overrides), FLUSHDB'd before each run. DB 0 is
-# never touched.
+# Redis: wurk:server, sidekiq:server and every --usage run (the client's
+# enqueues too) use a dedicated logical DB (default 12, `WURK_BENCH_DB`
+# overrides), FLUSHDB'd before each run. DB 0 is never touched.
 module RequireProfile
   HOOK_ENV = 'WURK_REQPROF_OUT'
 
@@ -395,7 +395,7 @@ module RequireProfile
     # :usage (hooked plus method coverage, with the entry's usage script).
     def spawn_entry(entry, dir, tag, mode: :hooked, seed: false, stop_count: 1)
       base = File.join(dir, "#{entry.name.tr(':', '_')}-#{tag}")
-      prepare_redis(seed) if entry.redis
+      prepare_redis(seed) if redis?(entry, mode)
       argv = (mode == :usage ? entry.usage_argv : entry.argv).map { |a| a == :sidekiq_bin ? sidekiq_bin : a }
       cmd = [RbConfig.ruby, '-rbundler/setup', '-r', File.expand_path(__FILE__), *argv]
       env = child_env(entry, "#{base}.bin", mode, stop_count)
@@ -413,9 +413,14 @@ module RequireProfile
               'WURK_REQPROF_STOP' => entry.stop, 'WURK_REQPROF_STOP_COUNT' => stop_count.to_s,
               'WURK_REQPROF_PRELOAD' => entry.preload, 'WURK_REQPROF_COVERAGE' => mode == :usage ? '1' : nil,
               'WURK_REQPROF_PLAIN' => mode == :plain ? '1' : nil }
-      env['REDIS_URL'] = redis_url if entry.redis
+      env['REDIS_URL'] = redis_url if redis?(entry, mode)
       env
     end
+
+    # A usage run enqueues (the client) or fetches (the server), so it gets
+    # the benchmark DB whatever the entry's own runs need: an inherited
+    # REDIS_URL would land its jobs in the caller's store.
+    def redis?(entry, mode) = entry.redis || mode == :usage
 
     def gemfile(bundle)
       bundle == :wurk ? File.join(root, 'Gemfile') : File.join(root, 'bench', 'vs_sidekiq', 'Gemfile')

@@ -124,6 +124,19 @@ class RequireProfileTest < Wurk::Test::UnitCase
     assert_equal 'unused', RequireProfile::Stats.usage_tier('/d.rb', client, server)
   end
 
+  # The client's usage script enqueues: it must write to the benchmark DB, not
+  # to whatever store the caller's REDIS_URL names.
+  def test_client_usage_run_gets_the_benchmark_db
+    client = RequireProfile::Runner.entries('app.rb').find { |e| e.name == 'wurk:client' }
+    usage = RequireProfile::Runner.child_env(client, 'out.bin', :usage, 1)
+    hooked = RequireProfile::Runner.child_env(client, 'out.bin', :hooked, 1)
+
+    assert RequireProfile::Runner.redis?(client, :usage)
+    assert_equal "/#{ENV.fetch('WURK_BENCH_DB', '12')}", URI(usage.fetch('REDIS_URL')).path
+    refute RequireProfile::Runner.redis?(client, :hooked)
+    refute hooked.key?('REDIS_URL')
+  end
+
   private
 
   def write(name, body) = File.write(File.join(@dir, name), body)

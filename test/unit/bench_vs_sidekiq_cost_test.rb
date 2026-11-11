@@ -28,6 +28,50 @@ class BenchVsSidekiqCostTest < Wurk::Test::UnitCase
     assert_nil Cost.per_job(snapshot(pid: 1), snapshot(pid: 2), 10)
   end
 
+  def test_await_edges_returns_once_every_edge_is_written
+    reads = [{}, { 'last' => 'l' }, { 'last' => 'l', 'first' => 'f' }]
+
+    edges = Cost.await_edges(%w[first last], timeout: 5, interval: 0) { reads.shift }
+
+    assert_equal({ 'last' => 'l', 'first' => 'f' }, edges)
+    assert_empty reads
+  end
+
+  # The driver must not compute a cost from half a window.
+  def test_await_edges_names_the_missing_edge_past_its_deadline
+    error = assert_raises(RuntimeError) do
+      Cost.await_edges(%w[first last], timeout: 0.01, interval: 0) { { 'last' => 'l' } }
+    end
+
+    assert_match(/no first CPU snapshot/, error.message)
+  end
+
+  # The job that saw completion 1 is descheduled before it writes `first`;
+  # the last job must not snapshot (or stop the profiler) until it has.
+  def test_the_last_edge_waits_for_a_descheduled_first
+    edges = {}
+    lock = Mutex.new
+    polls = Queue.new
+    order = Queue.new
+    last = Thread.new do
+      Cost.await_edges(%w[first], timeout: 5, interval: 0.001) do
+        polls << true
+        lock.synchronize { edges.dup }
+      end
+      order << :last
+    end
+
+    2.times { assert polls.pop(timeout: 5), 'the last edge never polled' }
+
+    assert_empty order
+
+    order << :first
+    lock.synchronize { edges['first'] = 'f' }
+    last.join(5)
+
+    assert_equal %i[first last], Array.new(2) { order.pop(timeout: 1) }
+  end
+
   def test_median_of_takes_each_field_independently
     costs = [{ cpu_us: 3.0, utime_us: 1, stime_us: 1, allocs: 9, gc_per_1k: 0 },
              { cpu_us: 1.0, utime_us: 2, stime_us: 1, allocs: 7, gc_per_1k: 0 },

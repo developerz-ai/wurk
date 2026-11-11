@@ -70,6 +70,18 @@ class SoakLedgerTest < Wurk::Test::UnitCase
     assert_empty dups[:unattributed]
   end
 
+  # The second completion came first, so a later kill cannot have swallowed
+  # the first one's ACK.
+  def test_a_kill_after_the_second_completion_does_not_explain_a_duplicate
+    write %w[push 1.0 10 j1 plain], %w[done 2.0 20 j1 plain], %w[done 4.0 30 j1 plain],
+          %w[chaos 5.0 10 20 kill9]
+
+    verdict = judge
+
+    refute verdict[:balanced]
+    assert_equal %w[j1], verdict[:duplicates][:unattributed]
+  end
+
   def test_a_kill_of_another_process_does_not_explain_a_plain_duplicate
     write %w[push 1.0 10 j1 plain], %w[done 2.0 20 j1 plain], %w[chaos 2.5 10 99 kill9],
           %w[done 4.0 30 j1 plain]
@@ -127,7 +139,20 @@ class SoakLedgerTest < Wurk::Test::UnitCase
     write %w[batch 1.0 10 b1 batch -], %w[batch 1.0 10 b2 batch b1], %w[cb 4.0 20 b1 success -],
           %w[cb 5.0 20 b2 success b1]
 
-    assert_equal %w[b1], judge[:batches][:out_of_order]
+    verdict = judge
+
+    refute verdict[:balanced]
+    assert_equal %w[b1], verdict[:batches][:out_of_order]
+  end
+
+  def test_a_leaked_unique_push_is_not_balanced
+    write %w[push 1.0 10 j1 unique], %w[push 1.0 10 j2 unique], %w[uniq_leak 1.0 10 j2 unique],
+          %w[done 5.0 20 j1 unique], %w[done 5.0 20 j2 unique]
+
+    verdict = judge
+
+    refute verdict[:balanced]
+    assert_equal({ rejected: 0, leaked: 1 }, verdict[:unique])
   end
 
   def test_reruns_count_attempts_beyond_the_first

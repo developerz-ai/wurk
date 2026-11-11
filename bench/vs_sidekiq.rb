@@ -212,17 +212,14 @@ def raise_timeout(log, done)
   raise "bench/vs_sidekiq: only #{done}/#{JOBS} jobs finished in #{TIMEOUT}s.\n#{tail}"
 end
 
-# The last job writes its snapshot just after the INCR the driver saw, so give
-# it a moment to land. Multi-process runs have no single window: nil.
+# The last job writes its snapshot after the INCR the driver saw, and only
+# once the first one's is in, so wait for both, and longer than the last job
+# waits for the first. Multi-process runs have no single window: nil.
 def cost_window(redis)
   return nil unless PROCESSES == 1
 
-  deadline = monotonic + 5
-  until (edges = redis.call('HGETALL', CPU_KEY)).key?('last')
-    raise 'bench/vs_sidekiq: the last job never wrote its CPU snapshot' if monotonic > deadline
-
-    sleep 0.002
-  end
+  timeout = BenchVsSidekiq::Cost::EDGE_TIMEOUT * 2
+  edges = BenchVsSidekiq::Cost.await_edges(%w[first last], timeout: timeout) { redis.call('HGETALL', CPU_KEY) }
   BenchVsSidekiq::Cost.per_job(edges.fetch('first'), edges.fetch('last'), JOBS)
 end
 

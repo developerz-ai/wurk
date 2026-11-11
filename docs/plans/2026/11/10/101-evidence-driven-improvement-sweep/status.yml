@@ -56,8 +56,8 @@ slices:
     status: not_started
     percent: 0
   - file: 17-adopter-hiscore.md
-    status: not_started
-    percent: 0
+    status: in_progress
+    percent: 60
   - file: 18-adopter-legald.md
     status: not_started
     percent: 0
@@ -71,6 +71,15 @@ slices:
     status: in_progress
     percent: 10
 decisions:
+  - id: U11
+    date: 2026-11-11
+    by: sebi (owner, in-session instruction)
+    decision: "Treasury is NOT migrated off Sidekiq; it stays read-only reference. Adopter work covers tesote.com, sales, gringotts, hiscore, legald only."
+  - id: U2b
+    date: 2026-11-11
+    by: sebi (owner, in-session instruction)
+    decision: "Executor may mint credentials/secrets needed by the plan (e.g. DEVELOPERZ_API_KEY for the ecosystem release watcher)."
+    outcome: "DEVELOPERZ_API_KEY cannot be minted by an agent: developerz.ai's mint gate requires a signed-in human session or user-bound token (apps/api/src/routes/tokens-mint-human.test.ts); the MCP header credential on this machine is rejected (401). Owner action: mint a write:tasks PAT, then `gh secret set DEVELOPERZ_API_KEY -R developerz-ai/wurk`. Superseded 2026-11-11 on owner instruction: the developerz-ai org token from the workspace server (qa/.env DEVELOPERZ_API_KEY_DEVELOPERZ_AI; verified /v1/me 200, write:tasks, sees developerz-ai repos) is stored as DEVELOPERZ_API_KEY in GitHub environment `sidekiq-release-watcher` (deployment branches: main only), never at repo level. The token is broad (also write:billing/account/webhooks); a narrow write:tasks PAT should replace it when the owner can mint one (org tokens get 403 on POST /v1/tokens). Follow-up: ecosystem.yml watcher job needs `environment: sidekiq-release-watcher`."
   - id: U2
     date: 2026-11-10
     by: executor (precedent)
@@ -80,6 +89,7 @@ decisions:
     by: sebi (owner, in-session instruction)
     decision: "Public surfaces (README, docs/site/llms.txt, docs/site/index.html) may state that teams running billions of jobs a month on Wurk in production recommend it, labelled user-reported. Supersedes audit 2026-10-04 H8/R11 for user-reported volume only; published throughput still needs docs/benchmarks.md numbers (12 T1 soak). Guard: test/unit/forbidden_claims_test.rb SCALE_SOURCE."
 evidence:
+  - "17 hiscore: hiscore-ro/hiscore.ro#114 merged (cdd5889): wurk 1.12.0, CI boot-check job (wired into ci-ok; not a required check - owner call), dead config.topology + require wurk/engine removed; deployed 2026-11-11 04:08Z via bin/deploy (release 20261111040820, rev cdd5889): hiscore_wurk active, log `Wurk 1.12.0 on redis 8.10.2` + role line `wurk; 1 process x 3 threads (redis pool 10, fetch 3); AR pool 5`; hiscore.ro 200; pre-existing app errors only (template digest at boot, Anaf::ImportInvoices invoice 8842131813 hourly). Wave-3 wurk bug: boot-check always logs a wurkswarm-parent role and boots the swarm path, even for single-process `wurk` apps (needs a runner flag)."
   - "wave 2 measured serially on a quiet host @ 8a4eda4 (docs/benchmarks.md Re-run 2026-11-11 + docs/benchmarks/2026-11-11/): vs Sidekiq 8.1.6 noop 0.86x, cpu 0.98x, io 1.00x, boot 0.49s vs 0.35s; noop gap 21.9us/job (fetch 58%, logger 17%, ACK 14%, middleware ~16%); short soak BALANCED (19,435 jobs, 0 lost, 0 unattributed, 12 faults); per-child Pss +160-220 kB/10k jobs after warmup. 24h soak still pending."
   - "wave 2 (algobench): 7 benches + bench/algo/support.rb; deterministic before-values recorded for 07 A1-A11/A14/A16 and 21 K1-K5 (bench:algo_counts, CI step in bench.yml). Plan corrections: A19 DROPPED (ProcessSet cleanup lock is cluster-wide -> O(P)/min, not O(P^2)); A8 cost = classes x FOREIGN loops only; NEW for A7: never-fired loops walk next_fire_at minute-by-minute each tick (50 yearly loops -> ~1.2s tick)."
   - "wave 2 (boot): bench/require_profile.rb; require 'wurk' = 248 features/159 own files/60.6k allocs vs sidekiq 100/20/27.9k; gap is Wurk's own files; L2 must use autoload (not const_missing: sidekiq-cron/failures probe defined?(Sidekiq::Web)); client tier ~33 files."

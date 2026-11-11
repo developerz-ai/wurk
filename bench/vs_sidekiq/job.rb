@@ -32,6 +32,7 @@ PROFILE    = ENV.fetch('WURK_BENCH_VS_PROFILE_OUT', nil)
 PROFILE_US = Integer(ENV.fetch('WURK_BENCH_VS_PROFILE_INTERVAL', '1000'))
 require 'json'
 require 'stackprof' if PROFILE
+require_relative 'cost'
 
 # BenchJob is the job class name baked into the payloads the driver enqueues.
 class BenchJob
@@ -55,13 +56,24 @@ class BenchJob
   # CPU mode: an idle thread parked in BLMOVE/BRPOP costs nothing and is not
   # sampled, and a busy one is sampled whichever engine thread it is.
   def mark(done)
-    edge = done == 1 ? 'first' : 'last'
-    snapshot = cost_snapshot
-    StackProf.start(mode: :cpu, raw: true, interval: PROFILE_US) if PROFILE && edge == 'first'
-    if PROFILE && edge == 'last'
-      StackProf.stop
-      StackProf.results(PROFILE)
+    if done == 1
+      snapshot = cost_snapshot
+      StackProf.start(mode: :cpu, raw: true, interval: PROFILE_US) if PROFILE
+      write_edge('first', snapshot)
+    else
+      BenchVsSidekiq::Cost.await_edges(%w[first], timeout: BenchVsSidekiq::Cost::EDGE_TIMEOUT) do
+        Sidekiq.redis { |conn| conn.call('HGETALL', CPU_KEY) }
+      end
+      snapshot = cost_snapshot
+      if PROFILE
+        StackProf.stop
+        StackProf.results(PROFILE)
+      end
+      write_edge('last', snapshot)
     end
+  end
+
+  def write_edge(edge, snapshot)
     Sidekiq.redis { |conn| conn.call('HSET', CPU_KEY, edge, snapshot) }
   end
 

@@ -36,6 +36,29 @@ module BenchVsSidekiq
     ].freeze
     UNCLASSIFIED = 'unclassified'
     STAGE_NAMES = (STAGES.map(&:first) << UNCLASSIFIED).freeze
+    # How long the last job waits for the first one's snapshot.
+    EDGE_TIMEOUT = 10.0
+
+    # Polls the block (the edge hash as Redis holds it) until it has every
+    # name in `edges`, and returns it. With few jobs and several threads the
+    # job that saw completion 1 can be descheduled before it writes its edge
+    # while the last job is already finishing: the last job waits here for
+    # `first` so the window and the profile open before they close, and the
+    # driver waits for both. Past `timeout` it raises instead of handing back
+    # half a window.
+    def self.await_edges(edges, timeout:, interval: 0.002)
+      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+      loop do
+        found = yield
+        missing = edges - found.keys
+        return found if missing.empty?
+        if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+          raise "bench/vs_sidekiq: no #{missing.join(' or ')} CPU snapshot after #{timeout}s"
+        end
+
+        sleep interval
+      end
+    end
 
     # `first` and `last` are the JSON snapshots bench/vs_sidekiq/job.rb writes
     # at the first and last completion. Between them `jobs - 1` jobs finished.
