@@ -452,6 +452,24 @@ class JobSetTest < Wurk::Test::UnitCase
     @pool.with { |c| c.call('DEL', private_set, "queue:#{queue}") }
   end
 
+  # Review of #917: the page's ZREMs run in one pipeline, then a miss falls
+  # back to #delete_by_jid. When that fallback raises, the entries the
+  # pipeline already removed must go back, or they are gone for good.
+  def test_batched_take_puts_back_what_it_removed_when_a_fallback_raises
+    private_set = test_private_set
+    payloads = seed_private(private_set, (0...3).map { |i| [10 + i, "tkf-#{i}-#{@ns}"] })
+    set = private_job_set(private_set)
+    entries = set.to_a.sort_by(&:score)
+    # Same jid, other bytes: its ZREM misses and the fallback runs.
+    entries[1] = Wurk::SortedEntry.new(set, entries[1].score, "#{entries[1].value} ")
+    set.define_singleton_method(:delete_by_jid) { |*| raise RedisClient::ConnectionError, 'gone' }
+
+    assert_raises(RedisClient::ConnectionError) { set.send(:take, entries) }
+    assert_equal payloads.sort, @pool.with { |c| c.call('ZRANGE', private_set, 0, -1) }.sort
+  ensure
+    @pool.with { |c| c.call('DEL', private_set) }
+  end
+
   def test_batched_retry_all_counts_a_job_middleware_halted_as_retried
     queue = unique_queue
     private_set = test_private_set
