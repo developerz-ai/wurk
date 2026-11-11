@@ -63,7 +63,7 @@ bundle install
 >
 > ```ruby
 > gem "wurk"
-> gem "sidekiq", github: "developerz-ai/wurk", tag: "v1.12.0", glob: "ecosystem/sidekiq-shim/*.gemspec"
+> gem "sidekiq", github: "developerz-ai/wurk", tag: "v1.13.0", glob: "ecosystem/sidekiq-shim/*.gemspec"
 > gem "sidekiq-cron"   # any add-on you keep
 > ```
 >
@@ -1202,7 +1202,7 @@ the shim, cut over, and replace them later, or not at all.
 ```ruby
 # Gemfile
 gem "wurk"
-gem "sidekiq", github: "developerz-ai/wurk", tag: "v1.12.0", glob: "ecosystem/sidekiq-shim/*.gemspec"
+gem "sidekiq", github: "developerz-ai/wurk", tag: "v1.13.0", glob: "ecosystem/sidekiq-shim/*.gemspec"
 gem "sidekiq-unique-jobs"
 gem "sidekiq-cron"
 gem "sidekiq-failures"
