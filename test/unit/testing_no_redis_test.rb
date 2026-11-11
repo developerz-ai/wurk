@@ -46,9 +46,12 @@ class TestingNoRedisTest < Wurk::Test::UnitCase
     assert_operator elapsed, :<, BOUND, "inline push took #{elapsed.round(3)}s: it opened a socket"
   end
 
-  # The control: the same pool does dial, and is slow to fail, outside a mode.
+  # The control: the same pool does dial outside a mode. Asked of the pool
+  # itself, not through a push: a push's outcome also depends on the client's
+  # configured reliability (an earlier test in the worker may leave
+  # reliable_push on, which buffers the failed push instead of raising).
   def test_the_pool_would_have_dialed_outside_a_test_mode
-    assert_raises(RedisClient::CannotConnectError) { Sidekiq::Client.via(@pool) { NoopJob.perform_async(1) } }
+    assert_raises(RedisClient::CannotConnectError) { @pool.with { |conn| conn.call('PING') } }
   end
 
   private
