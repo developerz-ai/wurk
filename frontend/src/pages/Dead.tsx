@@ -53,8 +53,8 @@ export default function Dead() {
   const meta = useMeta();
   const readOnly = () => meta.data?.read_only ?? false;
   const sel = useSelection();
-  const { single, bulk, all } = useJobSetActions('dead');
-  const pending = () => single.isPending || bulk.isPending || all.isPending;
+  const { single, bulk, all, sweep, swept } = useJobSetActions('dead');
+  const pending = () => single.isPending || bulk.isPending || all.isPending || sweep.isPending;
 
   onMount(() => {
     document.title = `${t('nav.dead')} — Wurk`;
@@ -73,7 +73,7 @@ export default function Dead() {
         </Show>
       </PageHeader>
 
-      <FilterBox value={list.filter()} onChange={list.onFilterChange} placeholder={t('common.filter_placeholder')} />
+      <FilterBox value={list.filter()} onChange={list.onFilterChange} placeholder={t('common.filter_placeholder_errors')} />
 
       <Switch>
         <Match when={query.isPending}>
@@ -97,7 +97,12 @@ export default function Dead() {
                       matching={list.matching()}
                       pending={pending()}
                       onBulk={(cmd) => bulk.mutate({ keys: [...sel.selected()], cmd }, { onSuccess: sel.clear })}
-                      onAll={(cmd) => all.mutate(cmd, { onSuccess: sel.clear })}
+                      progress={swept()}
+                      onAll={(cmd) =>
+                        list.filtered()
+                          ? sweep.mutate({ cmd, substr: list.filter() }, { onSuccess: sel.clear })
+                          : all.mutate(cmd, { onSuccess: sel.clear })
+                      }
                     />
                   </Show>
                   <div class="table-wrapper">

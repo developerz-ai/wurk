@@ -42,11 +42,11 @@ class CsrfSameOriginTest < Wurk::Test::EngineCase
                    .difference(::Wurk::SameOriginGuard::SAFE_METHODS).freeze
 
   # The guard-protected controllers, keyed by the engine-relative controller
-  # name route.defaults carries. DashboardController and ProfilesController
-  # serve GET-only routes; the Wurk::API mount answers nil (no :controller
+  # name route.defaults carries. DashboardController serves GET-only routes;
+  # the Wurk::API mount answers nil (no :controller
   # default) and is token-authenticated, not cookie-ambient — outside the CSRF
   # surface by design.
-  GUARDED_CONTROLLERS = { 'wurk/api' => true, 'wurk/extensions' => true }.freeze
+  GUARDED_CONTROLLERS = { 'wurk/api' => true, 'wurk/extensions' => true, 'wurk/profiles' => true }.freeze
 
   # `/wurk` — where test/dummy mounts the engine. Route path specs are
   # engine-relative; the probes hit the full app.
@@ -105,10 +105,12 @@ class CsrfSameOriginTest < Wurk::Test::EngineCase
   end
 
   # `.../all/:cmd` bulk-drain routes wipe the whole global zset — excluded
-  # here (see class comment); everything else must reach the controller and
-  # succeed for a genuine same-origin request.
+  # here (see class comment), as is the profile upload, which answers a 302 to
+  # a third party (ProfilesEndpointsTest drives it with the store stubbed);
+  # everything else must reach the controller and succeed for a genuine
+  # same-origin request.
   def safe_2xx_routes
-    all_mutating_routes.reject { |r| r[:path].include?('/all/') }
+    all_mutating_routes.reject { |r| r[:path].include?('/all/') || r[:path].start_with?("#{ENGINE_MOUNT}/profiles/") }
   end
 
   def test_every_mutating_route_403s_without_same_origin_header
@@ -117,7 +119,46 @@ class CsrfSameOriginTest < Wurk::Test::EngineCase
 
       assert_equal 403, last_response.status,
                    "expected 403 for POST #{route[:path]} without Sec-Fetch-Site, got #{last_response.status}"
+      assert_equal({ 'error' => 'cross_origin' }, ::JSON.parse(last_response.body), route[:path])
     end
+  end
+
+  # Plain-HTTP dashboards get no Fetch Metadata; the guard then compares
+  # Origin (else Referer) with the request's own scheme, host and port.
+  # Rack::Test's requests are http://example.org:80.
+  def test_without_fetch_metadata_a_same_origin_origin_header_is_allowed
+    post pause_path, {}, 'HTTP_ORIGIN' => 'http://example.org'
+
+    assert_equal 200, last_response.status, last_response.body
+  end
+
+  def test_without_fetch_metadata_a_same_origin_referer_is_allowed
+    post pause_path, {}, 'HTTP_REFERER' => 'http://example.org/wurk/queues'
+
+    assert_equal 200, last_response.status, last_response.body
+  end
+
+  def test_without_fetch_metadata_any_other_origin_is_denied
+    origins = ['http://evil.example', 'https://example.org', 'http://example.org:8080', 'null', 'http://exa mple.org']
+    origins.each do |origin|
+      post pause_path, {}, 'HTTP_ORIGIN' => origin
+
+      assert_equal 403, last_response.status, origin
+    end
+  end
+
+  # Origin is authoritative when present: a forged-looking same-host Referer
+  # cannot rescue a cross-origin Origin.
+  def test_a_cross_origin_origin_is_denied_even_with_a_same_origin_referer
+    post pause_path, {}, 'HTTP_ORIGIN' => 'http://evil.example', 'HTTP_REFERER' => 'http://example.org/wurk'
+
+    assert_equal 403, last_response.status
+  end
+
+  def test_fetch_metadata_wins_over_a_matching_origin
+    post pause_path, {}, 'HTTP_SEC_FETCH_SITE' => 'cross-site', 'HTTP_ORIGIN' => 'http://example.org'
+
+    assert_equal 403, last_response.status
   end
 
   def test_every_safe_route_succeeds_with_same_origin_header
@@ -142,6 +183,8 @@ class CsrfSameOriginTest < Wurk::Test::EngineCase
   end
 
   private
+
+  def pause_path = "#{ENGINE_MOUNT}/api/queues/#{@queue}/pause"
 
   # Turns one derived route into a concrete probe. A route whose spec no
   # PROBED_SPECS entry claims raises — never skips — so a new mutating route
@@ -181,6 +224,7 @@ class CsrfSameOriginTest < Wurk::Test::EngineCase
     '/api/cron/:lid/pause' => { lid: :lid },
     '/api/cron/:lid/unpause' => { lid: :lid },
     '/api/cron/:lid/enqueue' => { lid: :lid },
+    '/profiles/:key' => { key: 'csrf-profile' },
     # path.spec spells the glob as Journey stores it: /*subpath, one segment.
     '/ext/:name(/*subpath)' => { name: :unregistered_ext }
   }.freeze

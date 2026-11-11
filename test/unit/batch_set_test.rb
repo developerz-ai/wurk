@@ -33,6 +33,29 @@ class BatchSetTest < Wurk::Test::UnitCase
 
   # --- BatchSet ---------------------------------------------------------
 
+  # Newest first by score, then member, as ZRANGE REV orders them; an index
+  # member no longer in the set is not listed; a page past the end is empty.
+  def test_tagged_snapshot_pages_the_tagged_batches_newest_first
+    tag = "#{@ns}-tagged"
+    @big_tag = tag
+    bids = %w[a b c d].map { |s| "#{@ns}-#{s}" }
+    @bids.concat(bids)
+    @pool.with do |c|
+      bids.zip([1, 2, 2, 3]).first(3).each { |bid, score| c.call('ZADD', 'batches', score, bid) }
+      bids.each { |bid| c.call('HSET', "b-#{bid}", 'total', '1', 'pending', '1') }
+      c.call('SADD', "tags:#{tag}", *bids)
+    end
+    set = Wurk::BatchSet.new
+
+    total, rows = set.tagged_snapshot(tag, 0, 2)
+
+    assert_equal 3, total
+    assert_equal(bids.values_at(2, 1), rows.map { |row| row['bid'] })
+    assert_equal([bids[0]], set.tagged_snapshot(tag, 2, 2).last.map { |row| row['bid'] })
+    assert_equal [3, []], set.tagged_snapshot(tag, 9, 2)
+    assert_equal [0, []], set.tagged_snapshot("#{tag}-none", 0, 2)
+  end
+
   def test_size_returns_count_of_indexed_batches
     # `batches` ZSET is globally shared — siblings may both add AND remove
     # entries between our reads. A `pre + 2` snapshot-and-diff is brittle:

@@ -48,8 +48,8 @@ export default function Scheduled() {
   const meta = useMeta();
   const readOnly = () => meta.data?.read_only ?? false;
   const sel = useSelection();
-  const { single, bulk, all } = useJobSetActions('scheduled');
-  const pending = () => single.isPending || bulk.isPending || all.isPending;
+  const { single, bulk, all, sweep, swept } = useJobSetActions('scheduled');
+  const pending = () => single.isPending || bulk.isPending || all.isPending || sweep.isPending;
 
   onMount(() => {
     document.title = `${t('nav.scheduled')} — Wurk`;
@@ -92,7 +92,12 @@ export default function Scheduled() {
                       matching={list.matching()}
                       pending={pending()}
                       onBulk={(cmd) => bulk.mutate({ keys: [...sel.selected()], cmd }, { onSuccess: sel.clear })}
-                      onAll={(cmd) => all.mutate(cmd, { onSuccess: sel.clear })}
+                      progress={swept()}
+                      onAll={(cmd) =>
+                        list.filtered()
+                          ? sweep.mutate({ cmd, substr: list.filter() }, { onSuccess: sel.clear })
+                          : all.mutate(cmd, { onSuccess: sel.clear })
+                      }
                     />
                   </Show>
                   <div class="table-wrapper">

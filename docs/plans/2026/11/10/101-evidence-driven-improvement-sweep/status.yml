@@ -5,7 +5,7 @@ created_by: sebi
 worked_by: "sebi (Claude Code)"
 owner: sebi
 percent: 45
-current_focus: "wave 4b PR (lazy load tiers + dashboard bytes); then release 1.14.0, adopter bumps, wave 5 long tail"
+current_focus: "wave 5 PR (dashboard W1-W6/W9/W10, API A1-A4, observability O1-O7/K1-K5, algo A12/A13/A15/A17/A18, P3/P6, M9); adopter bumps to 1.14.0 in flight; then release 1.15.0, wave 6 soak"
 slices:
   - file: 01-ci-green-doc-truth.md
     status: in_progress
@@ -24,28 +24,28 @@ slices:
     percent: 100
   - file: 06-perf-hot-path-boot.md
     status: in_progress
-    percent: 80
+    percent: 90
   - file: 07-algorithms.md
     status: in_progress
-    percent: 65
+    percent: 95
   - file: 08-memory.md
     status: in_progress
-    percent: 85
+    percent: 95
   - file: 09-dashboard.md
-    status: not_started
-    percent: 0
+    status: in_progress
+    percent: 90
   - file: 10-http-api-clients.md
-    status: not_started
-    percent: 0
+    status: in_progress
+    percent: 95
   - file: 11-observability-ops.md
-    status: not_started
-    percent: 0
+    status: in_progress
+    percent: 95
   - file: 12-proof-harness.md
     status: in_progress
     percent: 40
   - file: 13-human-decisions.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
   - file: 14-adopter-tesote-com.md
     status: in_progress
     percent: 80
@@ -125,6 +125,8 @@ decisions:
     by: executor (owner granted full authority incl. HITL rows, 2026-11-11 in-session)
     decision: "Real Pro/Ent Redis dump from a customer: closed. It is customer data and treasury is read-only; key shapes stay validated by the documented-shape parity oracles (test/parity) instead."
 evidence:
+  - "wave 5 (branch wave5): 09 W1 CSP nonce on every script, W2 sub-path mount (relative asset URLs), W3 per U9 (Origin/Referer == own scheme+host+port when Sec-Fetch-Site absent, neither -> 403 {error:cross_origin} + own toast), W5 profiles upload POST-only (GET 405/redirect, read-only denied), W6 health notices from existing data (no heartbeat field), W4/W9 filters + Matching bulk via cursor (<=1000/req), batches ?tag/?dead=1, queue ?direction=asc, ?days=N, W10 page tests + docs/dashboard-guide.md, View All i18n, Geist Sans font now applies (W7 left: needs owner design sign-off). 10 A1 openapi.yaml + 2-way route parity test, A2 python e2e vs real wurk api (+ non-required python-e2e CI job), A3 admin retry/dead-retry/queue-clear/GET batches (idempotent), A4 docs/job-format.md + parity round-trip. 07 A12 bulk lookup 100->1 RT, A13 batch tree 162->3 RT, A17 ZSCAN 1000 + ?score= direct lookup, A15 metrics_retention (TTL only, 3d floor, default 30d), A18 outage replay 250->3 pushes. 06 P3 fetch-pass allocs 4->0 (strict+paused), 4-5->2 (weighted/random), 3.00 cmds/job unchanged; P6 heartbeat JSON built once (byte-identical test), statsd queue.size leader-only; L5/L6 skipped by measurement (lua.rb 2.4-2.7ms < 3ms bar; redis-client loads openssl itself). 11 O1 wurk_swarm_child_restarts_total{reason} + wurk_swarm_crash_streak (parent-owned unlinked file inherited by children, no Redis key; integration test SIGKILLs a child), O2-O7 (RTT, pool, poison/reclaim/leader/promotions+lag/buffer drops, oldest job + health --max-job-age, PSS, per-class histograms capped 20+other), K1 capistrano + StartLimit, K2/K3/K5. 08 M9 allocation budgets in metrics_query/dashboard_paging benches. Left: P6 heartbeat section in bench/command_count.rb; standalone Sidekiq::Web rack_app keeps strict Sec-Fetch-Site (U9 applied to the engine only)."
+  - "release 1.14.0: PR #919 merged (9f70c45); rubygems wurk 1.14.0; tag v1.14.0 -> 9f70c45; GitHub Release; demo /demo/build 9f70c45. Carries waves 4a (#916/#917) + 4b (#918, review: 40 threads answered, 7 fixed)."
   - "19 X2: tesote/infrastructure#780 merged (b1dd5148): WURK_HEALTH_PORT=7433 on tesote-com, gringotts, sales (+staging) workers, prometheus.io annotations, per-stack NetworkPolicy; `wurk` alert group (MetricsMissing, ChildrenMissing, QueueLatencyHigh, QueueHasNoConsumers, WorkerRestarted, RedisUnreachable, NoLeader, DeadSetGrowing, FetchErrors) with promtool tests. Live: up=1 for all 5 worker pods, children fresh==expected, leader=1 per namespace, 9 rules health=ok inactive. Forced staging crash loop NOT run (would break shared staging; rules covered by promtool cases). Child-restart counter needs Wurk 11 O1 (wurk_swarm_child_restarts_total)."
   - "20 X1 already shipped: developerz-ai/infrastructure#2266 (ed671d23), legald worker liveness+startup `wurk health --window 60`, grace 40s > 25s timeout + 5. X3: #2276 (2dd7ce3c) wurk-demo Dragonfly drops --cache_mode (now cache_mode:store, noeviction) + ServiceMonitor + tests/stacks/wurk-job-stores.test.ts; #2277 (8ac8f421) WurkJobStoreMemoryHigh (>75% maxmemory 5m, critical). dragonfly-jobs (legald) already compliant (512mb, no cache_mode, persisted). X2: #2278 (2b6a6f37) records U8 declined. Finding outside scope: Sidekiq apps sitelocaleai + venom-is queue on shared dragonfly-prod with --cache_mode=true (jobs evictable)."
   - "sales 1.13.0 live: #381 (visual QA 48/760 -> 0: preview 500, external image, demo video 404s, a11y contrast/touch-target/overflow fixes with existing tokens; preview-only diffs now trigger the browser QA job + previews_render_test) merged f480b67; #380 (wurk 1.13.0, configure_client wrapper removed) merged 2fa4231, Deploy run 42998034939, ArgoCD sales-production Synced/Healthy, worker sha256:f2f515fb, log `Wurk 1.13.0 on dragonfly 1.34.0`, deploy-status Live 2fa4231. All 5 adopters on 1.13.0. Open in sales: manual_start_test.rb:47 flake on main."

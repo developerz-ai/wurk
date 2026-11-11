@@ -143,13 +143,16 @@ class Client:
         response = self._call("POST", "/jobs/bulk", body=payload, idempotency_key=idempotency_key)
         return response.get("jids", [])
 
-    def cancel(self, jid: str) -> dict:
+    def cancel(self, jid: str, *, score: float | None = None) -> dict:
         """`DELETE /jobs/:jid`. Removes a not-yet-run job from `schedule` or
         `retry` — not a cancel of one already handed to a processor.
         Requires the `admin` scope. Raises WurkAPIError(type="job_not_found")
         if it already ran, already died, or never existed.
+
+        ``score`` is the row's ``at`` from `scheduled()`/`retries()`-style
+        listings; with it the server finds the job without scanning the set.
         """
-        return self._call("DELETE", f"/jobs/{_path_segment(jid)}")
+        return self._call("DELETE", f"/jobs/{_path_segment(jid)}", query={"score": score})
 
     # -- status ------------------------------------------------------------
 
@@ -178,6 +181,37 @@ class Client:
     def unpause_queue(self, name: str) -> dict:
         """`POST /queues/:name/unpause`. Requires the `admin` scope."""
         return self._call("POST", f"/queues/{_path_segment(name)}/unpause")
+
+    def clear_queue(self, name: str, *, idempotency_key: str | None = None) -> dict:
+        """`POST /queues/:name/clear`. Deletes every job waiting in the queue.
+        Requires the `admin` scope. Send an ``idempotency_key`` if you may
+        resend: a blind resend would clear jobs enqueued after the first.
+        """
+        return self._call("POST", f"/queues/{_path_segment(name)}/clear", idempotency_key=idempotency_key)
+
+    # -- retry and dead sets ---------------------------------------------
+
+    def retry_retrying(
+        self, jid: str, *, score: float | None = None, idempotency_key: str | None = None
+    ) -> dict:
+        """`POST /retries/:jid/retry`. Puts a retrying job back on its queue
+        now, refunding the attempt. Requires the `admin` scope.
+        """
+        return self._call("POST", f"/retries/{_path_segment(jid)}/retry", query={"score": score},
+                          idempotency_key=idempotency_key)
+
+    def retry_dead(self, jid: str, *, score: float | None = None, idempotency_key: str | None = None) -> dict:
+        """`POST /dead/:jid/retry`. Puts a dead job back on its queue.
+        Requires the `admin` scope.
+        """
+        return self._call("POST", f"/dead/{_path_segment(jid)}/retry", query={"score": score},
+                          idempotency_key=idempotency_key)
+
+    # -- batches -----------------------------------------------------------
+
+    def batches(self, *, page: int = 0, count: int = 25) -> dict:
+        """`GET /batches` — newest first; failed and dead jids are counted."""
+        return self._call("GET", "/batches", query={"page": page, "count": count})
 
     def stats(self) -> dict:
         """`GET /stats` — the same counters `Wurk::Stats` feeds the dashboard."""
@@ -212,8 +246,9 @@ class Client:
         idempotency_key: str | None,
     ) -> _Response:
         url = f"{self._base_url}{path}"
-        if query:
-            url += "?" + urllib.parse.urlencode({k: v for k, v in query.items() if v is not None})
+        present = {k: v for k, v in (query or {}).items() if v is not None}
+        if present:
+            url += "?" + urllib.parse.urlencode(present)
 
         headers = {"Authorization": f"Bearer {self._token}", "Accept": "application/json"}
         data = None
@@ -233,7 +268,8 @@ class Client:
             with urllib.request.urlopen(request, timeout=self._timeout) as raw:
                 return _Response(status=raw.status, body=_parse(raw.read()))
         except urllib.error.HTTPError as error:
-            return _Response(status=error.code, body=_parse(error.read()))
+            with error:
+                return _Response(status=error.code, body=_parse(error.read()))
 
 
 def _path_segment(value: str) -> str:

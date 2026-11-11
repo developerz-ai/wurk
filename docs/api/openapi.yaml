@@ -1,0 +1,953 @@
+openapi: 3.1.0
+info:
+  title: Wurk HTTP API
+  version: v1
+  description: |
+    Machine-facing HTTP API over the same Redis a Wurk (or stock Sidekiq) fleet
+    reads and writes. Prose guide: docs/api-http.md.
+
+    Off unless a token is configured (`config.api_token`). Every request needs
+    `Authorization: Bearer <token>`. Each operation's `security` entry names the
+    one scope it requires; `admin` implies `enqueue` and `read`, and an empty
+    list means any valid token.
+
+    Every error is an RFC 9457 problem document (`application/problem+json`)
+    whose `type` is a bare, stable slug.
+
+    test/unit/api_openapi_parity_test.rb holds this file to the routers in
+    lib/wurk/api/: every route, verb and scope here exists there, and the
+    reverse.
+  license:
+    name: MIT
+    identifier: MIT
+servers:
+  - url: '{mount}/v1'
+    description: Engine-nested (`/wurk/api`), separately mounted, or standalone (`wurk api`, empty mount).
+    variables:
+      mount:
+        default: /wurk/api
+security:
+  - bearer: []
+
+paths:
+  /:
+    get:
+      operationId: discover
+      summary: Which contract and mount this is, and its deployment-wide refusals.
+      security: [{ bearer: [] }]
+      responses:
+        '200':
+          description: Discovery document.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Discovery' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /jobs:
+    post:
+      operationId: enqueue
+      summary: Enqueue one job. The body is the Sidekiq job hash.
+      security: [{ bearer: [enqueue] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/JobRequest' }
+      responses:
+        '201':
+          description: Enqueued.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Jid' }
+        '200':
+          description: Client middleware (`collapse:`, `unique_for:`) dropped the push; `jid` is null.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Jid' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /jobs/bulk:
+    post:
+      operationId: enqueueBulk
+      summary: Enqueue many jobs of one class (the `push_bulk` shape).
+      security: [{ bearer: [enqueue] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BulkRequest' }
+      responses:
+        '201':
+          description: At least one job enqueued.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Jids' }
+        '200':
+          description: Every push was dropped by middleware.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Jids' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /jobs/{jid}:
+    parameters: [{ $ref: '#/components/parameters/Jid' }]
+    get:
+      operationId: jobStatus
+      summary: 'Wurk::Status record for a `track: true` job.'
+      security: [{ bearer: [read] }]
+      responses:
+        '200':
+          description: The status record.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StatusRecord' }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      operationId: cancelJob
+      summary: Remove a not-yet-run job from `schedule` or `retry`.
+      security: [{ bearer: [admin] }]
+      parameters: [{ $ref: '#/components/parameters/Score' }]
+      responses:
+        '200':
+          description: Removed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobInSet' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /stats:
+    get:
+      operationId: stats
+      summary: Cluster counters and queue summaries.
+      security: [{ bearer: [read] }]
+      responses:
+        '200':
+          description: Stats.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Stats' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /queues:
+    get:
+      operationId: queues
+      summary: Every queue, size-descending.
+      security: [{ bearer: [read] }]
+      responses:
+        '200':
+          description: Queue summaries.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [queues]
+                properties:
+                  queues:
+                    type: array
+                    items: { $ref: '#/components/schemas/QueueSummary' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /queues/{name}:
+    parameters: [{ $ref: '#/components/parameters/QueueName' }]
+    get:
+      operationId: queue
+      summary: One queue's gauges and a page of its waiting jobs.
+      security: [{ bearer: [read] }]
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Count' }
+      responses:
+        '200':
+          description: Gauges plus a page of jobs.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/QueueSummary' }
+                  - type: object
+                    required: [page, count, jobs]
+                    properties:
+                      page: { type: integer }
+                      count: { type: integer }
+                      jobs:
+                        type: array
+                        items: { $ref: '#/components/schemas/JobRecord' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /queues/{name}/pause:
+    parameters: [{ $ref: '#/components/parameters/QueueName' }]
+    post:
+      operationId: pauseQueue
+      summary: Stop the fleet fetching from this queue.
+      security: [{ bearer: [admin] }]
+      responses:
+        '200': { $ref: '#/components/responses/PauseState' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /queues/{name}/unpause:
+    parameters: [{ $ref: '#/components/parameters/QueueName' }]
+    post:
+      operationId: unpauseQueue
+      summary: Resume fetching from this queue.
+      security: [{ bearer: [admin] }]
+      responses:
+        '200': { $ref: '#/components/responses/PauseState' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /queues/{name}/clear:
+    parameters: [{ $ref: '#/components/parameters/QueueName' }]
+    post:
+      operationId: clearQueue
+      summary: Delete every job waiting in this queue (Queue#clear).
+      security: [{ bearer: [admin] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      responses:
+        '200':
+          description: Cleared.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [name, cleared]
+                properties:
+                  name: { type: string }
+                  cleared: { type: boolean, const: true }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /retries:
+    get:
+      operationId: retries
+      summary: Paged `retry` set.
+      security: [{ bearer: [read] }]
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Count' }
+      responses:
+        '200': { $ref: '#/components/responses/SortedSetPage' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /retries/{jid}/retry:
+    parameters: [{ $ref: '#/components/parameters/Jid' }]
+    post:
+      operationId: retryRetrying
+      summary: Put one retrying job back on its queue now (SortedEntry#retry; refunds one attempt).
+      security: [{ bearer: [admin] }]
+      parameters:
+        - { $ref: '#/components/parameters/Score' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200': { $ref: '#/components/responses/Requeued' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /scheduled:
+    get:
+      operationId: scheduled
+      summary: Paged `schedule` set.
+      security: [{ bearer: [read] }]
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Count' }
+      responses:
+        '200': { $ref: '#/components/responses/SortedSetPage' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /dead:
+    get:
+      operationId: dead
+      summary: Paged `dead` set.
+      security: [{ bearer: [read] }]
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Count' }
+      responses:
+        '200': { $ref: '#/components/responses/SortedSetPage' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /dead/{jid}/retry:
+    parameters: [{ $ref: '#/components/parameters/Jid' }]
+    post:
+      operationId: retryDead
+      summary: Put one dead job back on its queue (SortedEntry#retry).
+      security: [{ bearer: [admin] }]
+      parameters:
+        - { $ref: '#/components/parameters/Score' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200': { $ref: '#/components/responses/Requeued' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /batches:
+    get:
+      operationId: batches
+      summary: Paged batches, newest first; failed and dead jids counted, not listed.
+      security: [{ bearer: [read] }]
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Count' }
+      responses:
+        '200':
+          description: A page of batch summaries.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [total, page, count, batches]
+                properties:
+                  total: { type: integer }
+                  page: { type: integer }
+                  count: { type: integer }
+                  batches:
+                    type: array
+                    items: { $ref: '#/components/schemas/BatchSummary' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /batches/{bid}:
+    parameters:
+      - name: bid
+        in: path
+        required: true
+        schema: { $ref: '#/components/schemas/Token' }
+    get:
+      operationId: batch
+      summary: One batch's status, with its failed and dead jids.
+      security: [{ bearer: [read] }]
+      responses:
+        '200':
+          description: Batch status.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BatchData' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /flows/{fid}:
+    parameters:
+      - name: fid
+        in: path
+        required: true
+        schema: { $ref: '#/components/schemas/Token' }
+    get:
+      operationId: flow
+      summary: A flow's state, counters and node graph.
+      security: [{ bearer: [read] }]
+      responses:
+        '200':
+          description: Flow.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Flow' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /swarm:
+    get:
+      operationId: swarm
+      summary: Cluster roll-up of every live process.
+      security: [{ bearer: [read] }]
+      responses:
+        '200':
+          description: Roll-up.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Cluster' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /processes:
+    get:
+      operationId: processes
+      summary: Paged live processes.
+      security: [{ bearer: [read] }]
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Count' }
+      responses:
+        '200':
+          description: A page of processes.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [total, page, count, processes]
+                properties:
+                  total: { type: integer }
+                  page: { type: integer }
+                  count: { type: integer }
+                  processes:
+                    type: array
+                    items: { $ref: '#/components/schemas/Process' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /processes/{identity}:
+    parameters: [{ $ref: '#/components/parameters/Identity' }]
+    get:
+      operationId: process
+      summary: One process and its in-flight work.
+      security: [{ bearer: [read] }]
+      responses:
+        '200':
+          description: Process row plus work.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [process, work]
+                properties:
+                  process: { $ref: '#/components/schemas/Process' }
+                  work:
+                    type: array
+                    items: { $ref: '#/components/schemas/Work' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /processes/{identity}/quiet:
+    parameters: [{ $ref: '#/components/parameters/Identity' }]
+    post:
+      operationId: quietProcess
+      summary: Queue a TSTP-equivalent for one process, or `all`. Applied on its next beat.
+      security: [{ bearer: [admin] }]
+      responses:
+        '200': { $ref: '#/components/responses/Signalled' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /processes/{identity}/stop:
+    parameters: [{ $ref: '#/components/parameters/Identity' }]
+    post:
+      operationId: stopProcess
+      summary: Queue a TERM-equivalent for one process, or `all`. Applied on its next beat.
+      security: [{ bearer: [admin] }]
+      responses:
+        '200': { $ref: '#/components/responses/Signalled' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /busy:
+    get:
+      operationId: busy
+      summary: Paged in-flight jobs, cluster-wide.
+      security: [{ bearer: [read] }]
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Count' }
+      responses:
+        '200':
+          description: A page of work rows.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [total, page, count, jobs]
+                properties:
+                  total: { type: integer }
+                  page: { type: integer }
+                  count: { type: integer }
+                  jobs:
+                    type: array
+                    items: { $ref: '#/components/schemas/Work' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /health:
+    get:
+      operationId: health
+      summary: Redis reachability and live process counts. Not a Kubernetes probe.
+      security: [{ bearer: [read] }]
+      responses:
+        '200':
+          description: Healthy.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+        '503':
+          description: Redis unreachable or no live process; the body is the same report plus `reason`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /limiters:
+    get:
+      operationId: limiters
+      summary: Paged registered limiters.
+      security: [{ bearer: [read] }]
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Count' }
+        - name: filter
+          in: query
+          description: Substring match on the limiter name.
+          schema: { type: string }
+      responses:
+        '200':
+          description: A page of limiters.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [total, page, count, limiters]
+                properties:
+                  total: { type: integer }
+                  page: { type: integer }
+                  count: { type: integer }
+                  limiters:
+                    type: array
+                    items: { $ref: '#/components/schemas/Limiter' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /cron:
+    get:
+      operationId: cron
+      summary: Paged registered cron loops.
+      security: [{ bearer: [read] }]
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Count' }
+      responses:
+        '200':
+          description: A page of loops.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [total, page, count, cron]
+                properties:
+                  total: { type: integer }
+                  page: { type: integer }
+                  count: { type: integer }
+                  cron:
+                    type: array
+                    items: { $ref: '#/components/schemas/CronLoop' }
+        default: { $ref: '#/components/responses/Problem' }
+
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      description: Scopes are `enqueue`, `read`, `admin`; `admin` implies the other two.
+
+  parameters:
+    Jid:
+      name: jid
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Token' }
+    QueueName:
+      name: name
+      in: path
+      required: true
+      description: Percent-encode `/` and other reserved characters; the router unescapes per segment.
+      schema: { type: string, maxLength: 255 }
+    Identity:
+      name: identity
+      in: path
+      required: true
+      description: A process identity, or `all` to broadcast (quiet/stop only).
+      schema: { type: string, maxLength: 255 }
+    Page:
+      name: page
+      in: query
+      description: 0-based page, clamped to 0..1000.
+      schema: { type: integer, default: 0 }
+    Count:
+      name: count
+      in: query
+      description: Rows per page, clamped to 1..200.
+      schema: { type: integer, default: 25 }
+    Score:
+      name: score
+      in: query
+      description: |
+        The member's sorted-set score (a listing row's `at`). With it the job is
+        found by one ZRANGEBYSCORE at that score instead of a ZSCAN of the set.
+      schema: { type: number }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      description: 'A resend under the same key and body replays the first 2xx response with `Idempotency-Replayed: true`.'
+      schema: { type: string, pattern: '^[\x21-\x7e]{1,255}$' }
+
+  responses:
+    Problem:
+      description: RFC 9457 problem document.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    SortedSetPage:
+      description: A page of a retry, schedule or dead set.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [name, total, page, count, jobs]
+            properties:
+              name: { type: string, enum: [retry, schedule, dead] }
+              total: { type: integer }
+              page: { type: integer }
+              count: { type: integer }
+              jobs:
+                type: array
+                items: { $ref: '#/components/schemas/SortedEntry' }
+    PauseState:
+      description: The resulting pause state.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [name, paused]
+            properties:
+              name: { type: string }
+              paused: { type: boolean }
+    Requeued:
+      description: The job is back on its queue.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [jid, set, queue]
+            properties:
+              jid: { type: string }
+              set: { type: string, enum: [retry, dead] }
+              queue: { type: string }
+    Signalled:
+      description: The signal is queued for the named processes.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [signal, signalled, skipped]
+            properties:
+              signal: { type: string }
+              signalled: { type: array, items: { type: string } }
+              skipped:
+                type: array
+                description: Embedded processes a broadcast skipped.
+                items: { type: string }
+
+  schemas:
+    Token:
+      type: string
+      pattern: '^[A-Za-z0-9_-]{1,255}$'
+    Problem:
+      type: object
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          enum:
+            - not_found
+            - method_not_allowed
+            - unsupported_api_version
+            - internal_error
+            - unauthorized
+            - invalid_request
+            - job_not_found
+            - batch_not_found
+            - flow_not_found
+            - process_not_found
+            - process_not_signalable
+            - insufficient_scope
+            - payload_too_large
+            - class_not_allowed
+            - idempotency_key_reused
+            - request_in_progress
+            - read_only
+            - rate_limited
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
+      additionalProperties: true
+    Discovery:
+      type: object
+      required: [api_version, wurk_version, url, read_only, rate_limit]
+      properties:
+        api_version: { type: string, const: v1 }
+        wurk_version: { type: string }
+        url: { type: string }
+        read_only: { type: boolean }
+        rate_limit:
+          type: [object, 'null']
+          properties:
+            limit: { type: integer }
+            interval_seconds: { type: number }
+    JobRequest:
+      type: object
+      description: The Sidekiq job hash (docs/job-format.md). Unknown top-level keys are refused.
+      required: [class]
+      properties:
+        class: { type: string }
+        args: { type: array }
+        queue: { type: string, default: default }
+        at: { type: number, description: Epoch seconds to run at. }
+        retry: { type: [boolean, integer] }
+        jid: { $ref: '#/components/schemas/Token' }
+        backtrace: { type: [boolean, integer] }
+        tags: { type: array, items: { type: string } }
+        dead: { type: boolean }
+        retry_for: { type: number }
+        retry_queue: { type: string }
+        expires_in: { type: number }
+        track: { type: boolean }
+        timeout: { type: number }
+        deadline: { type: number }
+        encrypt: { type: boolean }
+        unique_for: { type: number }
+        unique_until: { type: string }
+        collapse: { type: string }
+        log_level: { type: string }
+        locale: { type: string }
+        wrapped: { type: string }
+    BulkRequest:
+      allOf:
+        - { $ref: '#/components/schemas/JobRequest' }
+        - type: object
+          required: [args]
+          properties:
+            args:
+              type: array
+              items: { type: array }
+            batch_size: { type: integer }
+            spread_interval: { type: number }
+    Jid:
+      type: object
+      required: [jid]
+      properties:
+        jid: { type: [string, 'null'] }
+    Jids:
+      type: object
+      required: [jids]
+      properties:
+        jids:
+          type: array
+          items: { type: [string, 'null'] }
+    JobInSet:
+      type: object
+      required: [jid, set]
+      properties:
+        jid: { type: string }
+        set: { type: string, enum: [schedule, retry] }
+    StatusRecord:
+      type: object
+      properties:
+        jid: { type: string }
+        state: { type: string }
+        queue: { type: [string, 'null'] }
+        class: { type: [string, 'null'] }
+        enqueued_at: { type: [number, 'null'] }
+        started_at: { type: [number, 'null'] }
+        finished_at: { type: [number, 'null'] }
+        progress: { type: [number, 'null'] }
+        total: { type: [number, 'null'] }
+        message: { type: [string, 'null'] }
+        result: {}
+        result_truncated: { type: boolean }
+        result_withheld: { type: boolean }
+        error_class: { type: [string, 'null'] }
+        error_message: { type: [string, 'null'] }
+        attempt: { type: [integer, 'null'] }
+    QueueSummary:
+      type: object
+      required: [name, size, latency, paused]
+      properties:
+        name: { type: string }
+        size: { type: integer }
+        latency: { type: number }
+        paused: { type: boolean }
+    Stats:
+      type: object
+      properties:
+        processed: { type: integer }
+        failed: { type: integer }
+        expired: { type: integer }
+        enqueued: { type: integer }
+        busy: { type: integer }
+        scheduled: { type: integer }
+        retries: { type: integer }
+        dead: { type: integer }
+        processes: { type: integer }
+        default_queue_latency: { type: number }
+        queues:
+          type: array
+          items: { $ref: '#/components/schemas/QueueSummary' }
+    JobRecord:
+      type: object
+      description: Display view; ActiveJob wrappers unwrapped, encrypted arguments masked.
+      properties:
+        jid: { type: string }
+        class: { type: string }
+        args: { type: array }
+        queue: { type: string }
+        enqueued_at: { type: [number, 'null'] }
+        created_at: { type: [number, 'null'] }
+    SortedEntry:
+      allOf:
+        - { $ref: '#/components/schemas/JobRecord' }
+        - type: object
+          properties:
+            at: { type: number, description: The member's score; pass it back as `?score=`. }
+            retry_count: { type: [integer, 'null'] }
+            error_class: { type: [string, 'null'] }
+            error_message: { type: [string, 'null'] }
+            failed_at: { type: [number, 'null'] }
+            retried_at: { type: [number, 'null'] }
+            error_backtrace: { type: [array, 'null'], items: { type: string } }
+    BatchSummary:
+      type: object
+      properties:
+        bid: { type: string }
+        total: { type: integer }
+        pending: { type: integer }
+        failures: { type: integer }
+        created_at: { type: [number, 'null'] }
+        complete_at: { type: [number, 'null'] }
+        success_at: { type: [number, 'null'] }
+        death_at: { type: [number, 'null'] }
+        complete: { type: boolean }
+        invalidated: { type: boolean }
+        description: { type: [string, 'null'] }
+        parent_bid: { type: [string, 'null'] }
+        tags: { type: array, items: { type: string } }
+        failed_count: { type: integer }
+        dead_count: { type: integer }
+        child_count: { type: integer }
+    BatchData:
+      type: object
+      description: BatchSummary's header fields with the jid sets listed instead of counted.
+      properties:
+        bid: { type: string }
+        total: { type: integer }
+        pending: { type: integer }
+        failures: { type: integer }
+        complete: { type: boolean }
+        failed_jids: { type: array, items: { type: string } }
+        dead_jids: { type: array, items: { type: string } }
+        child_count: { type: integer }
+      additionalProperties: true
+    Flow:
+      type: object
+      properties:
+        fid: { type: string }
+        state: { type: string }
+        terminal: { type: boolean }
+        total: { type: integer }
+        pending: { type: integer }
+        succeeded: { type: integer }
+        depth: { type: integer }
+        width: { type: integer }
+        created_at: { type: [number, 'null'] }
+        finished_at: { type: [number, 'null'] }
+        failed_at: { type: [number, 'null'] }
+        abandoned_at: { type: [number, 'null'] }
+        dead_nodes: { type: array, items: { type: integer } }
+        nodes:
+          type: array
+          items:
+            type: object
+            properties:
+              index: { type: integer }
+              name: { type: [string, 'null'] }
+              class: { type: string }
+              queue: { type: string }
+              jid: { type: [string, 'null'] }
+              bid: { type: [string, 'null'] }
+              state: { type: string }
+              depends_on: { type: array, items: { type: integer } }
+              dependents: { type: array, items: { type: integer } }
+              remaining: { type: integer }
+              piped: { type: boolean }
+              error: {}
+    Process:
+      type: object
+      properties:
+        identity: { type: string }
+        hostname: { type: string }
+        pid: { type: integer }
+        tag: { type: [string, 'null'] }
+        version: { type: [string, 'null'] }
+        embedded: { type: boolean }
+        concurrency: { type: integer }
+        queues: { type: array, items: { type: string } }
+        weights: {}
+        labels: { type: array, items: { type: string } }
+        started_at: { type: [number, 'null'] }
+        uptime_seconds: { type: [number, 'null'] }
+        busy: { type: integer }
+        rss_kb: { type: [integer, 'null'] }
+        rtt_us: { type: [integer, 'null'] }
+        beat: { type: number }
+        beat_age_seconds: { type: number }
+        stale: { type: boolean }
+        quiet: { type: boolean }
+        leader: { type: boolean }
+    Work:
+      type: object
+      properties:
+        process_id: { type: string }
+        thread_id: { type: string }
+        queue: { type: string }
+        jid: { type: string }
+        class: { type: string }
+        args: { type: array }
+        run_at: { type: number }
+        elapsed_seconds: { type: number }
+    Cluster:
+      type: object
+      properties:
+        processes:
+          type: object
+          properties:
+            total: { type: integer }
+            quiet: { type: integer }
+            stale: { type: integer }
+        concurrency: { type: integer }
+        busy: { type: integer }
+        utilization: { type: number }
+        rss_kb: { type: integer }
+        queues: { type: array, items: { type: string } }
+        versions: { type: array, items: { type: string } }
+        leader: {}
+        hosts: {}
+        slots: {}
+        beat: {}
+    Health:
+      type: object
+      required: [status, redis]
+      properties:
+        status: { type: string, enum: [ok, down] }
+        redis:
+          type: object
+          properties:
+            ok: { type: boolean }
+            rtt_ms: { type: [number, 'null'] }
+        processes:
+          type: [object, 'null']
+          properties:
+            total: { type: integer }
+            live: { type: integer }
+            stale: { type: integer }
+            quiet: { type: integer }
+        stale_after_seconds: { type: number }
+        reason: { type: string }
+    Limiter:
+      type: object
+      properties:
+        name: { type: string }
+        type: { type: string }
+        fingerprint: { type: string }
+        options: { type: object }
+        status:
+          type: [object, 'null']
+          properties:
+            used: { type: number }
+            limit: { type: number }
+            reset_at: { type: [number, 'null'] }
+            available: { type: boolean }
+    CronLoop:
+      type: object
+      properties:
+        lid: { type: string }
+        schedule: { type: string }
+        class: { type: string }
+        queue: { type: string }
+        args: { type: array }
+        tz: { type: [string, 'null'] }
+        paused: { type: boolean }
+        last_fired_at: { type: [number, 'null'] }
+        next_fire_at: { type: [number, 'null'] }

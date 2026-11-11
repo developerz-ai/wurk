@@ -16,10 +16,34 @@
   Every family is listed in `docs/metrics.md`. The restart counters live in the swarm parent's memory and add no Redis key.
 - **`wurk health --max-job-age SECONDS`** fails the probe when a job has run longer than that.
 - **`config.metrics_retention=`** sets how long the 10-minute metrics buckets are kept. It changes the TTL only, has a 3-day floor, and the default stays 30 days.
+- **`/v1` HTTP API:**
+  - `docs/api/openapi.yaml`, an OpenAPI 3.1 spec that a test keeps in step with the routes;
+  - operator routes `POST /retries/:jid/retry`, `POST /dead/:jid/retry` and `POST /queues/:name/clear` (admin scope, accept `Idempotency-Key`), plus `GET /batches`;
+  - an optional `?score=` on `DELETE /jobs/:jid` and the retry routes, which finds the job with one `ZRANGEBYSCORE` instead of scanning the set.
+- **Python client:** `clear_queue`, `retry_retrying`, `retry_dead`, `batches` and `cancel(score=)`, plus an end-to-end test against a real `wurk api`.
+- **`docs/job-format.md`** documents the job JSON contract for producers in other languages; a parity test checks it.
+- **Dashboard:**
+  - health notices for queues nothing consumes, non-Wurk processes, mixed Wurk versions and embedded processes;
+  - Retries, Scheduled and Dead filter on error class, message and args, and "Matching" actions act on every match (up to 1,000 per request, following a cursor);
+  - Batches has a Dead tab (`?dead=1`) and a tag filter (`?tag=`);
+  - queue pages list oldest first with `?direction=asc`;
+  - `?days=N` (1–180) works on the history endpoints and opens the matching range in the dashboard.
+- `docs/dashboard-guide.md`.
 - Ops examples: `examples/capistrano/wurk.rake`, plus `StartLimit*` settings in `examples/wurk.service`. `docs/deployment.md` gains a sizing table, and `RELEASE.md` sets an "Upgrade notes" convention for release notes.
 
 ### Changed
 
+- **Profile upload** to the Firefox profiler is a same-origin `POST`. `GET /profiles/:key` no longer uploads: it redirects to an existing upload or answers 405.
+- **Dashboard bulk actions** look up all their keys in one Redis round trip (100 keys: 100 → 1).
+- **Batch checks read children in pipelines.** A batch's child-death check and `invalidate_all` on a tree with 40 children and 40 grandchildren take 3 round trips instead of 162.
+- Finding a job by jid in a retry, scheduled or dead set scans 1,000 entries per `ZSCAN` instead of 100.
+- **Fetcher allocations:** weighted, random and paused-queue fetchers allocate less per fetch pass (strict mode with a paused queue: 4 → 0 objects; weighted and random: 4–5 → 2). Each job still takes 3 Redis commands.
 - **`reliable_push` outage replay** sends 100 jobs per push instead of one (250 buffered jobs: 250 pushes → 3).
 - The heartbeat info JSON is built once per process, byte-identical to before.
 - The statsd `queue.size` gauge is sent by the leader only.
+
+### Fixed
+
+- **Dashboard compatibility:** it works under a strict nonce-based CSP and when the host app is mounted under a path prefix.
+- **Dashboard actions over plain HTTP** (not localhost) are accepted when Origin (or Referer) matches the request's own scheme, host and port. They are refused when neither header is present. A refusal returns `{"error":"cross_origin"}` and shows its own toast.
+- **Geist Sans now applies.** The dashboard asked for a font family name the package does not register, so the UI fell back to the system font.

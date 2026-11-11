@@ -126,12 +126,14 @@ Wurk::Engine.routes.draw do
   mount Wurk::API => Wurk::API::ENGINE_MOUNT, constraints: ->(request) { Wurk::API.serves?(request.path_info) }
 
   # Profiles (v8.0+) — not under /api: `:key/data` streams the gzipped gecko
-  # blob with a gzip Content-Encoding, and `:key` POST-uploads the profile to
-  # the Firefox profiler then 302s to its public view. `:key` is "<token>-<jid>".
-  # The `/data` route is declared first so it wins over the bare `:key` match.
-  # Spec: docs/target/sidekiq-free.md §25.4.
-  get 'profiles/:key/data', to: 'profiles#data', as: :profile_data, constraints: { key: %r{[^/]+} }
-  get 'profiles/:key',      to: 'profiles#show', as: :profile,      constraints: { key: %r{[^/]+} }
+  # blob with a gzip Content-Encoding; `POST :key` uploads the profile to the
+  # Firefox profiler then 302s to its public view, and `GET :key` only follows
+  # an upload already made (Sidekiq uploads on the GET; #101 W5). `:key` is
+  # "<token>-<jid>". The `/data` route is declared first so it wins over the
+  # bare `:key` match. Spec: docs/target/sidekiq-free.md §25.4.
+  get  'profiles/:key/data', to: 'profiles#data',   as: :profile_data, constraints: { key: %r{[^/]+} }
+  get  'profiles/:key',      to: 'profiles#show',   as: :profile,      constraints: { key: %r{[^/]+} }
+  post 'profiles/:key',      to: 'profiles#upload', as: :profile_upload, constraints: { key: %r{[^/]+} }
 
   # Third-party Web extensions (#187): server-rendered route + assets. The SPA's
   # Extension page fetches `ext/:name/<subpath>` and embeds the returned HTML;

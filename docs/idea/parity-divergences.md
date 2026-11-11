@@ -747,11 +747,11 @@ particular content type.
 
 **Anchor:** [Wurk route scope](../../config/routes.rb#L15) and
 [job-set routes](../../config/routes.rb#L39-L50),
-[command whitelists](../../app/controllers/wurk/api_controller.rb#L40-L45),
+[command whitelists](../../app/controllers/wurk/api_controller.rb#L43-L48),
 [single/all dispatch](../../app/controllers/wurk/api_controller.rb#L110-L148),
-[bulk parameter lookup and rejection](../../app/controllers/wurk/api_controller.rb#L399-L414),
-[frontend key builder](../../frontend/src/hooks/useJobSetActions.ts#L11-L16),
-[single/bulk/all requests](../../frontend/src/hooks/useJobSetActions.ts#L40-L56),
+[bulk parameter lookup and rejection](../../app/controllers/wurk/api_controller.rb#L413-L428),
+[frontend key builder](../../frontend/src/hooks/useJobSetActions.ts#L25-L30),
+[single/bulk/all requests](../../frontend/src/hooks/useJobSetActions.ts#L48-L64),
 [JSON encoding](../../frontend/src/http.ts#L33-L41), and
 [free §25.4 Routes — retries/scheduled/morgue rows](../target/sidekiq-free.md#254-routes).
 
@@ -951,9 +951,9 @@ cleanup does not promise preservation, import or synchronization with the
 JSON field and reverse indexes.
 
 **Anchor:** [JSON and reverse-index writers](../../lib/wurk/batch.rb#L469-L496),
-[reopen reader](../../lib/wurk/batch.rb#L557-L560),
+[reopen reader](../../lib/wurk/batch.rb#L568-L571),
 [status reader](../../lib/wurk/batch/status.rb#L80-L86),
-[reverse-index scan](../../lib/wurk/batch_set.rb#L52-L64),
+[reverse-index scan](../../lib/wurk/batch_set.rb#L68-L80),
 [carried-over cleanup suffixes](../../lib/wurk/batch.rb#L77-L84),
 [delete key selection](../../lib/wurk/batch/status.rb#L130-L136),
 [linger expiry](../../lib/wurk/batch/callbacks.rb#L191-L195), and
@@ -1110,11 +1110,11 @@ gem that reads `Sidekiq::Pro::VERSION` raises `NameError` and must gate on
 (`config/routes.rb:15,57-58`). The action is selected by the path:
 `ApiController#quiet_process` calls `signal_processes(:quiet!)` and
 `#stop_process` calls `signal_processes(:stop!)`
-(`app/controllers/wurk/api_controller.rb:177-178`). The helper reads only
+(`app/controllers/wurk/api_controller.rb:189-190`). The helper reads only
 `identity`: absent or empty, or `"all"`, targets every live non-embedded
 process; a named identity targets that process. An unknown identity returns
 404, and a named embedded process is not signalled and returns count 0
-(`app/controllers/wurk/api_controller.rb:450-461`). It does not select the
+(`app/controllers/wurk/api_controller.rb:464-475`). It does not select the
 action using `quiet` or `stop` request parameters.
 
 **Spec:** free [§25.4](../target/sidekiq-free.md#254-routes) specifies
@@ -1132,7 +1132,7 @@ or a compatibility handler; it does not infer unspecified flag semantics.
 
 **Anchor:** free §25.4 ([free §25.4 Routes — `POST /busy`](../target/sidekiq-free.md#254-routes));
 `config/routes.rb:15,65-70`;
-`app/controllers/wurk/api_controller.rb:177-178,450-461`
+`app/controllers/wurk/api_controller.rb:189-190,464-475`
 (`quiet_process`, `stop_process`, `signal_processes`).
 
 ## `Sidekiq.redis` retries a refused connect with backoff
@@ -1172,57 +1172,38 @@ on every boot.
 **Anchor:** [`Configuration#configure_client`](../../lib/wurk/configuration.rb),
 [`BootChecks.warn_on_client_config_only`](../../lib/wurk/boot_checks.rb).
 
-## Queue `?direction=asc` is unimplemented
+## Dashboard listing filters and filtered bulk actions are bounded
 
-**Wurk:** `GET /queues/:name?direction=asc` does not change queue-wide
-ordering or pagination. The queue API reads `page`, `count`, and `substr`,
-then slices jobs in enumeration order without reading `direction`. The SPA
-requests only `page` and `count`; its column sorting rearranges the fetched
-page, not the entire queue.
+**Wurk:** the Retries, Scheduled and Dead listings' `?substr=` filter is
+case-insensitive and matches a row's class, jid, error class, error message or
+JSON-rendered args, examining at most 20,000 entries a request (the
+`Wurk::Web::Search` budget); past that the page comes back short with
+`filtered_total_exact: false`. `POST /api/<set>/all/:cmd?substr=` acts on the
+matching entries only, at most 1,000 a request within the same budget, and
+answers `done` plus a `cursor` to send back as `?cursor=` to continue. The
+Batches listing takes `?tag=` (tagged batches, newest first, reading at most
+20,000 members of the `tags:<tag>` index) and `?dead=1` (the `dead-batches`
+set); `?tag=` replaces `?substr=` rather than combining with it.
 
-**Spec:** free [§25.4 Routes](../target/sidekiq-free.md#254-routes),
-`GET /queues/:name` row, lists `?count=`, `?page=`, and `?direction=asc`
-for queue contents.
+**Spec:** Pro's search box is a substring over job payloads via `ZSCAN`
+([Pro §10.1](../target/sidekiq-pro.md#101-mount)), the free `all/*` routes act
+on the whole set ([free §25.4](../target/sidekiq-free.md#254-routes)), and Pro
+lists a Dead batches tab and a tag filter without bounds or request shapes.
 
-**Why:** an operator following a link with `direction=asc` still gets normal
-queue pagination, not the requested queue-wide ordering. Sorting a column on
-one fetched page is not equivalent support: it does not change which jobs
-belong on each page. This entry records an unsupported contract, not a claim
-that the gap is safe.
+**Why:** an unbounded filter or sweep lets one request hold a Puma thread over
+a multi-million-entry set; the cursor keeps a large filtered sweep going
+without that. Without `?substr=`, `all/*` still acts on the whole set as
+upstream does.
 
-**Anchor:** [free §25.4 Routes](../target/sidekiq-free.md#254-routes)
-(`GET /queues/:name` query parameters);
-[queue API pagination](../../app/controllers/wurk/api_controller.rb#L68-L76);
-[accepted pagination parameters](../../app/controllers/wurk/api/pagination.rb#L29-L35);
-[enumeration-order slicing](../../app/controllers/wurk/api/pagination.rb#L70-L95);
-[SPA queue request](../../frontend/src/pages/Queues.tsx#L59-L72); and
-[page-local sorting](../../frontend/src/pages/Queues.tsx#L91).
-
-## Dashboard `?days=N` is unimplemented
-
-**Wurk:** `GET /?days=N` does not select the requested historical horizon.
-The dashboard defaults to a `1h` view and offers its own `1h`, `24h`, `7d`,
-and `30d` range controls. It requests history using the selected range's
-bucket and window, without reading `days`.
-
-**Spec:** free [§25.4 Routes](../target/sidekiq-free.md#254-routes),
-`GET /` dashboard row, specifies `?days=N` with `N` in `1..180`.
-
-**Why:** bookmarks and shared dashboard links carrying `days=N` do not open
-the requested horizon; operators instead see the default `1h` view and must
-use Wurk's existing range controls. Those controls are not support for the
-specified URL parameter or its full range. This entry records an unsupported
-contract, not a claim that the gap is safe.
-
-**Anchor:** [free §25.4 Routes](../target/sidekiq-free.md#254-routes)
-(`GET /` dashboard `?days=N`);
-[available dashboard ranges](../../frontend/src/pages/Dashboard.tsx#L60-L65);
-[default range and history request](../../frontend/src/pages/Dashboard.tsx#L86-L109);
-and [range controls](../../frontend/src/pages/Dashboard.tsx#L213-L219).
+**Anchor:** [`Wurk::Api::Pagination`](../../app/controllers/wurk/api/pagination.rb)
+(`match?`, `walk`, `matching`), `ApiController#sweep_matching` and `#batches`
+(`app/controllers/wurk/api_controller.rb`),
+[`BatchSet#tagged_snapshot`](../../lib/wurk/batch_set.rb);
+`test/engine/api_filters_test.rb`.
 
 ## Dashboard and web extension differences
 
-**Wurk:** `GET /profiles/:key` requires same-origin, a typed URL, or a same-host Referer (Sidekiq answers any GET); extension `redirect_to` inside the SPA falls back to the extension root for off-site targets (the SPA loads extensions with `fetch`, which cannot follow cross-origin redirects); `reload_page` inside the SPA goes to the extension index; `Sidekiq::Web.views` is an accepted, ignored array; read-only mode answers TRACE with 403 on the standalone mount; the health server closes connections past 16 concurrent unanswered.
+**Wurk:** only `POST /profiles/:key` uploads a profile (same-origin, refused in read-only mode); `GET` follows an existing upload or answers 405 (Sidekiq uploads on any GET); an engine mutation without `Sec-Fetch-Site` is accepted when Origin (else Referer) matches the request's own scheme, host and port, and refused when neither header is present (owner decision U9; Sidekiq refuses it); extension `redirect_to` inside the SPA falls back to the extension root for off-site targets (the SPA loads extensions with `fetch`, which cannot follow cross-origin redirects); `reload_page` inside the SPA goes to the extension index; `Sidekiq::Web.views` is an accepted, ignored array; read-only mode answers TRACE with 403 on the standalone mount; the health server closes connections past 16 concurrent unanswered.
 
 **Why:** cross-site GETs must not trigger third-party uploads; the rest follow from the SPA architecture.
 
@@ -1253,11 +1234,11 @@ and [range controls](../../frontend/src/pages/Dashboard.tsx#L213-L219).
 block, relative to whatever mount the host chose (`config/routes.rb:15,21`;
 the dummy app mounts the engine at `/wurk`, `test/dummy/config/routes.rb:10`).
 `ApiController#delete_queue_job` reads `params[:jid].to_s` and calls
-`Wurk::Queue#delete_job(jid)` (`app/controllers/wurk/api_controller.rb:86-91`):
+`Wurk::Queue#delete_job(jid)` (`app/controllers/wurk/api_controller.rb:91-96`):
 a matched jid answers `{ok: true, deleted: true}`; an unmatched one answers
 404 `{error: 'unknown job'}`. The supported request form is
 `POST <mount>/api/queues/<name>/delete` with a `jid` parameter — the SolidJS
-SPA posts JSON `{ jid }` (`frontend/src/pages/Queues.tsx:77-84`) and the
+SPA posts JSON `{ jid }` (`frontend/src/pages/Queues.tsx:79-86`) and the
 engine tests pin form params (`test/engine/api_mutations_test.rb:487-500`,
 `test_delete_queue_job_by_jid`, `test_delete_queue_job_unknown_is_404`).
 
@@ -1277,16 +1258,16 @@ leaves `params[:jid]` blank, so `delete_job('')` raises
 `app/controllers/wurk/application_controller.rb:20`, class list at
 `lib/wurk/configuration.rb:122`) — an unhandled 500, not the
 `unknown job` 404, which is the unmatched-jid branch
-(`app/controllers/wurk/api_controller.rb:86-91`) and is reachable only when a
+(`app/controllers/wurk/api_controller.rb:91-96`) and is reachable only when a
 jid was supplied. The endpoint is the SolidJS SPA's wire contract, not
 upstream's ERB web. This entry records the divergence; it is not a sign-off
 to add `key_val` support.
 
 **Anchor:** free §25.4 ([free §25.4 Routes — `POST /queues/:name/delete`](../target/sidekiq-free.md#254-routes));
-`config/routes.rb:15,21`; `app/controllers/wurk/api_controller.rb:86-91`;
+`config/routes.rb:15,21`; `app/controllers/wurk/api_controller.rb:91-96`;
 `lib/wurk/api/fast.rb:20-31`;
 `app/controllers/wurk/application_controller.rb:20`;
-`lib/wurk/configuration.rb:122`; `frontend/src/pages/Queues.tsx:77-84`;
+`lib/wurk/configuration.rb:122`; `frontend/src/pages/Queues.tsx:79-86`;
 `test/engine/api_mutations_test.rb:487-500`.
 
 ## `:max_iteration_runtime` is accepted but not consumed
@@ -1599,7 +1580,7 @@ included (`lib/wurk/web/stats_routes.rb`).
 [CSRF check](../../lib/wurk/web/rack_app.rb#L55-L64), and
 [extension dispatch](../../lib/wurk/web/rack_app.rb#L58-L75);
 [engine root and JSON routes](../../config/routes.rb#L9-L16) and
-[extension embedding and SPA catch-all](../../config/routes.rb#L124-L142).
+[extension embedding and SPA catch-all](../../config/routes.rb#L126-L144).
 Existing routing tests in
 [`WebRackAppTest`](../../test/unit/web_rack_app_test.rb#L74-L107) pin
 `test_get_serves_extension_route_at_its_own_path`,

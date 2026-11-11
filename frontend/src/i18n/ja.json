@@ -53,7 +53,8 @@
     "range_1h_desc": "直近1時間",
     "range_24h_desc": "直近24時間",
     "range_7d_desc": "直近7日間",
-    "range_30d_desc": "直近30日間"
+    "range_30d_desc": "直近30日間",
+    "viewAll": "すべて表示"
   },
   "table": {
     "class": "クラス",
@@ -197,7 +198,9 @@
     "reset": "リセット",
     "enqueue": "エンキュー",
     "matching": "{n} 件がフィルターに一致",
-    "all_filtered_hint": "「すべて」はフィルター結果だけでなくセット全体に作用します。使うにはフィルターを解除してください。"
+    "matching_suffix": "（一致分）",
+    "scope_matching": "フィルターに一致する全ページのジョブ {n} 件",
+    "sweeping": "{n} 件処理済み…"
   },
   "readonly": {
     "banner": "読み取り専用モード"
@@ -209,7 +212,10 @@
     "unavailable": "現在Redisが利用できません。しばらくしてから再度お試しください。",
     "dismiss": "閉じる",
     "region": "通知",
-    "partial": "{count} 件を適用、{failed} 件が失敗しました。一覧を更新しました。"
+    "partial": "{count} 件を適用、{failed} 件が失敗しました。一覧を更新しました。",
+    "crossOrigin": "クロスオリジンのリクエストとして拒否されました。サーバーが認識するのと同じスキーム・ホスト・ポートでダッシュボードを開いてください（プロキシの Host と X-Forwarded-* ヘッダーを確認してください）。",
+    "swept": "一致したジョブ {n} 件を処理しました。",
+    "swept_partial": "一致したジョブ {n} 件を処理しました。まだ残りがあります。続けるにはもう一度実行してください。"
   },
   "common": {
     "loading": "読み込み中…",
@@ -221,9 +227,10 @@
     "load_failed": "このページを読み込めませんでした",
     "load_failed_hint": "アプリを開いてから更新された可能性があります。再読み込みすると最新版を取得します。",
     "reload": "再読み込み",
-    "filter_placeholder": "クラスまたはJIDで絞り込み…",
+    "filter_placeholder": "クラス・JID・引数で絞り込み…",
     "matching": "{n} 件一致",
-    "close": "閉じる"
+    "close": "閉じる",
+    "filter_placeholder_errors": "クラス・JID・エラー・引数で絞り込み…"
   },
   "limiters": {
     "exhausted": "枯渇",
@@ -233,7 +240,9 @@
     "no_consumer": "コンシューマーなし",
     "no_consumer_hint": "このキューを購読している稼働中のプロセスがないため、ジョブは実行されません。",
     "job_count": "{n} 件のジョブ",
-    "latency_label": "レイテンシ"
+    "latency_label": "レイテンシ",
+    "oldest_first": "古い順",
+    "newest_first": "新しい順"
   },
   "batches": {
     "children": "子バッチ",
@@ -243,7 +252,10 @@
     "failed_jobs": "失敗したジョブ",
     "dead_jobs": "デッドジョブ",
     "complete": "完了",
-    "invalidated": "無効化済み"
+    "invalidated": "無効化済み",
+    "active": "実行中",
+    "dead": "デッド",
+    "tag_placeholder": "タグで絞り込み…"
   },
   "flows": {
     "graph": "グラフ",
@@ -308,5 +320,12 @@
     "title": "ページが見つかりません",
     "hint": "このダッシュボードにはそのアドレスのページはありません。",
     "home": "ダッシュボードに戻る"
+  },
+  "notices": {
+    "title": "ヘルス通知",
+    "unconsumed": "稼働中のプロセスが購読していないキュー: {names}。ジョブはエラーなしで待機し続けます。",
+    "foreign": "この Redis で Wurk 以外のプロセスが稼働中: {names}。",
+    "mixed": "プロセスが異なる Wurk バージョンで稼働しています: {versions}。",
+    "embedded": "{n} 個のプロセスが Web サーバーに組み込まれて稼働しています。"
   }
 }

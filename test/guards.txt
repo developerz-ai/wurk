@@ -2,6 +2,7 @@
 test/integration/ecosystem_watcher_test.rb
 test/unit/ai_config_test.rb
 test/unit/anchor_repin_test.rb
+test/unit/api_openapi_parity_test.rb
 test/unit/bin_check_frontend_parity_test.rb
 test/unit/changelog_index_test.rb
 test/unit/changelog_section_test.rb

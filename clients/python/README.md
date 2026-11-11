@@ -34,10 +34,18 @@ record = wurk.status(jid)
 wurk.queues()             # every queue's name/size/latency/paused
 wurk.queue("default")     # one queue's gauges + a page of waiting jobs
 wurk.stats()              # processed/failed/enqueued/... counters
+wurk.batches()            # newest batches first, failures counted
 
-# Pull a not-yet-run job back out of schedule/retry (requires an admin token)
-wurk.cancel(jid)
+# Operator actions (require an admin token)
+wurk.cancel(jid)                    # pull a not-yet-run job out of schedule/retry
+wurk.retry_retrying(jid)            # retry a job in the retry set now
+wurk.retry_dead(jid)                # put a dead job back on its queue
+wurk.clear_queue("default", idempotency_key="clear-default-2026-11-11")
 ```
+
+`cancel`, `retry_retrying` and `retry_dead` take an optional `score=` (a
+listing row's `at`), which lets the server find the job without scanning the
+whole set.
 
 ### Idempotent enqueue
 
@@ -69,7 +77,8 @@ except WurkAPIError as e:
 ## What this is not
 
 Thin by design, matching the plan doc's brief: enqueue, bulk, status, queues
-— and a little more (`cancel`, `pause_queue`/`unpause_queue`, `stats`) since
+— and a little more (`cancel`, `pause_queue`/`unpause_queue`/`clear_queue`,
+`retry_retrying`/`retry_dead`, `batches`, `stats`) since
 they're nearly free once the transport exists. No retries, no connection
 pooling, no async, no framework integration. Wrap this client, or reach for
 `requests`/`httpx` yourself, if you need any of that — keeping this package
@@ -82,6 +91,17 @@ cd clients/python
 python -m unittest discover -s tests
 ```
 
-Tests mock at the `urllib.request.urlopen` boundary, so they exercise the
-client's real request-building (headers, JSON body, query string) and
-response-parsing code — not a stub standing in for the client itself.
+`tests/test_client.py` mocks at the `urllib.request.urlopen` boundary, so it
+exercises the client's real request-building (headers, JSON body, query
+string) and response-parsing code — not a stub standing in for the client
+itself.
+
+`tests/test_end_to_end.py` runs the client against a real `wurk api` server
+and Redis. It is skipped unless `WURK_E2E_REDIS_URL` names a Redis it may
+write to (never one holding real data); it needs Ruby and the repo's
+`test/dummy` bundle, which carries a web server:
+
+```bash
+(cd test/dummy && bundle install)
+WURK_E2E_REDIS_URL=redis://127.0.0.1:6390/3 python -m unittest discover -s clients/python/tests -v
+```

@@ -11,6 +11,7 @@ module Wurk
     include Enumerable
 
     PAGE_SIZE = 100
+    TAG_SCAN_LIMIT = 20_000
 
     def initialize(key: 'batches')
       @key = key
@@ -52,6 +53,21 @@ module Wurk
       end
     end
 
+    # #snapshot narrowed to the batches tagged `tag` and still indexed in
+    # this set: [how many, the page of summaries]. The tag index is a SET, so
+    # ordering it newest-first reads every member's score (one ZMSCORE) —
+    # bounded at TAG_SCAN_LIMIT members, past which the rest are not listed.
+    # Internal reader for the dashboard.
+    #
+    # @return [Array(Integer, Array<Hash>)]
+    def tagged_snapshot(tag, offset, count)
+      bids = scan_tags(tag).first(TAG_SCAN_LIMIT)
+      Wurk.redis do |conn|
+        ranked = newest_first(bids, bids.empty? ? [] : conn.call('ZMSCORE', @key, *bids))
+        [ranked.size, summaries(conn, ranked[offset, count] || [])]
+      end
+    end
+
     # Yields each BID indexed under the given tag (set at `tags:<tag>`).
     # No JSON parsing; cheap iteration. Caller wraps in `Status.new(bid)`
     # if it needs full state.
@@ -76,6 +92,12 @@ module Wurk
         pipe.call('ZCARD', @key)
         pipe.call('ZRANGE', @key, offset, offset + count - 1, 'REV')
       end
+    end
+
+    # The bids `scores` ranks, in ZRANGE REV order (score, then member,
+    # descending); an unscored bid is not in this set.
+    def newest_first(bids, scores)
+      bids.zip(scores).select(&:last).sort { |(a, sa), (b, sb)| [sb.to_f, b] <=> [sa.to_f, a] }.map(&:first)
     end
 
     def summaries(conn, bids)

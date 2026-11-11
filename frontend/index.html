@@ -44,11 +44,11 @@
       content="Wurk — a free, 100% drop-in replacement for Sidekiq + Sidekiq Pro + Sidekiq Enterprise. Real fork-based parallelism, mountable Rails engine, live dashboard."
     />
 
-    <!-- Icons (served by the engine under /wurk-assets/). -->
-    <link rel="icon" type="image/png" sizes="32x32" href="/wurk-assets/favicon-32.png" />
-    <link rel="icon" type="image/png" sizes="16x16" href="/wurk-assets/favicon-16.png" />
-    <link rel="icon" type="image/png" href="/wurk-assets/favicon.png" />
-    <link rel="apple-touch-icon" sizes="180x180" href="/wurk-assets/apple-touch-icon.png" />
+    <!-- Icons (served by the engine's asset mount; see vite.config.ts `base`). -->
+    <link rel="icon" type="image/png" sizes="32x32" href="%BASE_URL%favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="%BASE_URL%favicon-16.png" />
+    <link rel="icon" type="image/png" href="%BASE_URL%favicon.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="%BASE_URL%apple-touch-icon.png" />
 
     <title>Wurk — Background Jobs</title>
   </head>

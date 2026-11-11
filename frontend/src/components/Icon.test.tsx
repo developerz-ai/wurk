@@ -26,4 +26,20 @@ describe('Icon', () => {
       expect(glyph.path.length, name).toBeGreaterThan(0);
     }
   });
+
+  // The Font Awesome stylesheet is gone (#918), so a `fa-*` class left in
+  // markup or a selector now draws nothing. Locale tags like 'fa-IR' are
+  // upper-case after the dash and don't match.
+  it('leaves no Font Awesome classes in the sources', () => {
+    const sources = import.meta.glob(['../**/*.{ts,tsx,scss,css}', '!../**/*.test.{ts,tsx}'], {
+      query: '?raw',
+      import: 'default',
+      eager: true,
+    }) as Record<string, string>;
+    expect(Object.keys(sources).length).toBeGreaterThan(20);
+    const leftovers = Object.entries(sources).flatMap(([file, text]) =>
+      [...text.matchAll(/(?:^|[\s"'`.])(fa-[a-z][a-z0-9-]*)/gm)].map((m) => `${file}: ${m[1]}`),
+    );
+    expect(leftovers).toEqual([]);
+  });
 });

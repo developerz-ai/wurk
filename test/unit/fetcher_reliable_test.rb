@@ -536,6 +536,35 @@ class FetcherReliableTest < Wurk::Test::UnitCase
     assert_predicate status, :success?, 'the child must rebuild KEYS around its own pid'
   end
 
+  # A paused queue used to make the strict list a fresh array every pass, so
+  # the KEYS cache never hit; the filtered list now lives as long as the
+  # paused cache that produced it.
+  def test_strict_list_with_a_paused_queue_reuses_its_claim_keys
+    fetcher, queues = many_queue_fetcher(4)
+    Wurk::Queue.new(queues[2].delete_prefix(Wurk::Keys::QUEUE_PREFIX)).pause!
+    list = fetcher.queues_cmd
+
+    assert_same list, fetcher.queues_cmd
+    assert_equal [queues[0], queues[1], queues[3]], list
+    assert_same fetcher.send(:claim_keys, list), fetcher.send(:claim_keys, fetcher.queues_cmd)
+  end
+
+  # A shuffled list is new every pass: its KEYS fill one per-thread buffer
+  # rather than a new array, and never displace the strict cache.
+  def test_shuffled_claim_keys_refill_one_buffer_per_thread
+    fetcher, = many_queue_fetcher(4, mode: :weighted)
+    first_list = fetcher.queues_cmd
+    first = fetcher.send(:claim_keys, first_list)
+    expected = first_list.drop(1).flat_map { |q| [q, Wurk::Fetcher::Reliable.private_queue_name(q)] }
+
+    assert_equal expected, first
+    second = fetcher.send(:claim_keys, fetcher.queues_cmd)
+
+    assert_same first, second
+    assert_nil fetcher.instance_variable_get(:@claim_keys)
+    refute_same first, Thread.new { fetcher.send(:claim_keys, fetcher.queues_cmd) }.value
+  end
+
   # --- requeue (single) ----------------------------------------------
 
   def test_requeue_pushes_back_to_public_queue

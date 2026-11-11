@@ -9,7 +9,7 @@
     post 'retries',          to: 'api#retries_bulk',   as: :api_retries_bulk
     post 'retries/all/:cmd', to: 'api#retries_all',    as: :api_retries_all
 - entry: "Dashboard job-set HTTP request shapes differ from Sidekiq Web"
-  anchor: "app/controllers/wurk/api_controller.rb#L40-L45"
+  anchor: "app/controllers/wurk/api_controller.rb#L43-L48"
   fragment: |-
     RETRY_ACTIONS     = { 'retry' => :retry, 'delete' => :delete, 'kill' => :kill }.freeze
     SCHEDULED_ACTIONS = { 'delete' => :delete, 'add_to_queue' => :add_to_queue }.freeze
@@ -20,18 +20,18 @@
     def retry_job    = single_entry_action(::Wurk::RetrySet.new, RETRY_ACTIONS, params[:cmd])
     def retries_bulk = bulk_entry_action(::Wurk::RetrySet.new, RETRY_ACTIONS)
 - entry: "Dashboard job-set HTTP request shapes differ from Sidekiq Web"
-  anchor: "app/controllers/wurk/api_controller.rb#L399-L414"
+  anchor: "app/controllers/wurk/api_controller.rb#L413-L428"
   fragment: |-
     method = actions[params[:cmd].to_s]
     return render(json: { error: 'unknown action' }, status: :bad_request) unless method
 - entry: "Dashboard job-set HTTP request shapes differ from Sidekiq Web"
-  anchor: "frontend/src/hooks/useJobSetActions.ts#L11-L16"
+  anchor: "frontend/src/hooks/useJobSetActions.ts#L25-L30"
   fragment: |-
     export function entryKey(e: { score: number; jid: string }): string {
       return `${e.score}|${e.jid}`;
     }
 - entry: "Dashboard job-set HTTP request shapes differ from Sidekiq Web"
-  anchor: "frontend/src/hooks/useJobSetActions.ts#L40-L56"
+  anchor: "frontend/src/hooks/useJobSetActions.ts#L48-L64"
   fragment: |-
     const single = useMutation(() => ({
       mutationFn: ({ key, cmd }: { key: string; cmd: string }) =>
@@ -51,62 +51,16 @@
     post 'busy/quiet', to: 'api#quiet_process', as: :api_quiet_process
     post 'busy/stop',  to: 'api#stop_process',  as: :api_stop_process
 - entry: "Busy-control HTTP request-shape parity is unsupported"
-  anchor: "app/controllers/wurk/api_controller.rb#L177-L178"
+  anchor: "app/controllers/wurk/api_controller.rb#L189-L190"
   fragment: |-
     def quiet_process = signal_processes(:quiet!)
     def stop_process  = signal_processes(:stop!)
 - entry: "Busy-control HTTP request-shape parity is unsupported"
-  anchor: "app/controllers/wurk/api_controller.rb#L450-L461"
+  anchor: "app/controllers/wurk/api_controller.rb#L464-L475"
   fragment: |-
     identity = params[:identity].to_s
     if identity.empty? || identity == 'all'
       count = ::Wurk::ProcessSet.new.reject(&:embedded?).each { |p| p.public_send(method) }.size
-- entry: "Queue `?direction=asc` is unimplemented"
-  anchor: "app/controllers/wurk/api_controller.rb#L68-L76"
-  fragment: |-
-    q = ::Wurk::Queue.new(params[:name].to_s)
-    page = ::Wurk::Api::Pagination.window(params)
-    gauges, jobs = queue_page(q, page)
-- entry: "Queue `?direction=asc` is unimplemented"
-  anchor: "app/controllers/wurk/api/pagination.rb#L29-L35"
-  fragment: |-
-    page: clamp_int(params[:page], 0, MAX_PAGE, 0),
-    count: clamp_int(params[:count], 1, MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE),
-    substr: params[:substr].to_s
-- entry: "Queue `?direction=asc` is unimplemented"
-  anchor: "app/controllers/wurk/api/pagination.rb#L70-L95"
-  fragment: |-
-    def slice_raw(enumerable, offset, count)
-      results = []
-      seen = 0
-      enumerable.each do |member|
-- entry: "Queue `?direction=asc` is unimplemented"
-  anchor: "frontend/src/pages/Queues.tsx#L59-L72"
-  fragment: |-
-    getJSON<QueueDetail>(
-      `${basePath()}/api/queues/${encodeURIComponent(props.name)}?page=${page() - 1}&count=${PAGE_SIZE}`,
-    ),
-- entry: "Queue `?direction=asc` is unimplemented"
-  anchor: "frontend/src/pages/Queues.tsx#L91"
-  fragment: |-
-    const { sorted, sort, toggle } = useSort(() => query.data?.jobs ?? [], JOB_SORT);
-- entry: "Dashboard `?days=N` is unimplemented"
-  anchor: "frontend/src/pages/Dashboard.tsx#L60-L65"
-  fragment: |-
-    const RANGES = [
-      { key: '1h', bucket: '1m', window: '24h', slice: 60, desc_key: 'dashboard.range_1h_desc' },
-      { key: '24h', bucket: '1m', window: '24h', desc_key: 'dashboard.range_24h_desc' },
-- entry: "Dashboard `?days=N` is unimplemented"
-  anchor: "frontend/src/pages/Dashboard.tsx#L86-L109"
-  fragment: |-
-    queryFn: () =>
-      getJSON<HistoryResponse>(`${basePath()}/api/history/${range().bucket}?window=${range().window}`),
-- entry: "Dashboard `?days=N` is unimplemented"
-  anchor: "frontend/src/pages/Dashboard.tsx#L213-L219"
-  fragment: |-
-    <For each={RANGES}>
-      {(r, i) => (
-        <button
 - entry: "Queue job-delete takes `jid`, not the spec's `key_val`"
   anchor: "config/routes.rb#L15"
   fragment: |-
@@ -116,7 +70,7 @@
   fragment: |-
     post 'queues/:name/delete', to: 'api#delete_queue_job', as: :api_delete_queue_job, constraints: { name: %r{[^/]+} }
 - entry: "Queue job-delete takes `jid`, not the spec's `key_val`"
-  anchor: "app/controllers/wurk/api_controller.rb#L86-L91"
+  anchor: "app/controllers/wurk/api_controller.rb#L91-L96"
   fragment: |-
     def delete_queue_job
       removed = ::Wurk::Queue.new(params[:name].to_s).delete_job(params[:jid].to_s)
@@ -135,7 +89,7 @@
   fragment: |-
     REDIS_ERROR_CLASSES = [RedisClient::Error, ConnectionPool::TimeoutError].freeze
 - entry: "Queue job-delete takes `jid`, not the spec's `key_val`"
-  anchor: "frontend/src/pages/Queues.tsx#L77-L84"
+  anchor: "frontend/src/pages/Queues.tsx#L79-L86"
   fragment: |-
     mutationFn: (jid: string) =>
       post(`${basePath()}/api/queues/${encodeURIComponent(props.name)}/delete`, { jid }),

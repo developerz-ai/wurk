@@ -12,6 +12,17 @@
   promise: >-
     SecureRandom.hex(12)  # 24-char lowercase hex
   oracles: [ClientPushParityTest#test_jids_are_unique_lowercase_hex_24]
+- id: client.foreign-producer
+  area: client
+  behavior: A job pushed as hand-built JSON (no Ruby client) runs, schedules and retries like a client-pushed one.
+  source: docs/target/sidekiq-free.md#L153-L162
+  promise: >-
+    | `class` | String | class name (stringified from `Class` if passed) |
+  oracles:
+    - JobFormatParityTest#test_a_hand_built_immediate_job_runs_with_its_arguments_intact
+    - JobFormatParityTest#test_a_hand_built_scheduled_job_is_promoted_and_runs
+    - JobFormatParityTest#test_a_hand_built_job_that_fails_lands_in_retry_in_the_documented_shape
+    - JobFormatParityTest#test_float_second_timestamps_from_an_older_producer_still_run
 - id: client.default-queue
   area: client
   behavior: An unspecified queue defaults to default.
@@ -611,7 +622,7 @@
 - id: crypto.decrypt-failure
   area: encryption
   behavior: A decrypt failure dead-sets the job tagged with Wurk::Encryption::DecryptionError and never retries it.
-  source: docs/idea/parity-divergences.md#L1231-L1233
+  source: docs/idea/parity-divergences.md#L1212-L1214
   promise: >-
     a decrypt failure (unknown key version, a key resolver that returns nil or
     raises, a corrupt envelope) raises `Wurk::Encryption::DecryptionError`,
@@ -621,7 +632,7 @@
 - id: web.dashboard-auth
   area: dashboard
   behavior: A falsey authorization hook denies dashboard requests with 403.
-  source: docs/dashboard.md#L71-L74
+  source: docs/dashboard.md#L74-L77
   promise: >-
     A falsey return short-circuits to `403`. `path` is engine-relative
     (`/api/stats`, not the host's absolute `/wurk/api/stats`), matching Sidekiq's
@@ -630,7 +641,7 @@
 - id: web.dashboard-readonly
   area: dashboard
   behavior: Read-only mode denies every mutating request with 403.
-  source: docs/dashboard.md#L78-L80
+  source: docs/dashboard.md#L81-L83
   promise: >-
     `WURK_WEB_READ_ONLY=1` — every mutating request 403s and the SPA hides
     destructive actions.
@@ -638,7 +649,7 @@
 - id: web.dashboard-middleware
   area: dashboard
   behavior: Host middleware runs before the dashboard authorization hook.
-  source: docs/dashboard.md#L22-L24
+  source: docs/dashboard.md#L25-L27
   promise: >-
     The two compose. `Wurk::Web.use` middleware runs **first** (outermost), so by
     the time the `authorization` block runs, the host middleware has already
@@ -656,7 +667,7 @@
 - id: web.api-bearer
   area: machine-api
   behavior: Bearer tokens are compared in constant time against every configured token.
-  source: docs/api-http.md#L143-L145
+  source: docs/api-http.md#L148-L150
   promise: >-
     time against every registered token — no early exit on a match — so timing
     can't leak which token, or how much of one, a caller guessed right.
@@ -664,28 +675,28 @@
 - id: web.api-missing-token
   area: machine-api
   behavior: Missing credentials return 401 with a Bearer challenge.
-  source: docs/api-http.md#L160
+  source: docs/api-http.md#L168
   promise: >-
     - **No token presented** → `401`, `WWW-Authenticate: Bearer realm="wurk"`.
   oracles: [WebApiParityTest#test_a_missing_bearer_token_is_challenged]
 - id: web.api-scope
   area: machine-api
   behavior: Valid credentials with insufficient scope return 403, not 404.
-  source: docs/api-http.md#L162
+  source: docs/api-http.md#L170
   promise: >-
     - **Valid token, wrong scope** → `403` (`insufficient_scope`), `WWW-Authenticate` names the scope required
   oracles: [WebApiParityTest#test_a_token_without_the_required_scope_is_refused]
 - id: web.api-admin
   area: machine-api
   behavior: Admin scope implies enqueue and read permissions plus destructive routes.
-  source: docs/api-http.md#L153
+  source: docs/api-http.md#L158
   promise: >-
     | `admin` | everything — implies `enqueue` and `read`, plus the destructive routes (`DELETE /jobs/:jid`, queue pause/unpause, process quiet/stop) |
   oracles: [WebApiParityTest#test_the_admin_scope_implies_enqueue_and_read]
 - id: web.api-prefix
   area: machine-api
   behavior: Discovery URLs derive from the request mount prefix rather than a hardcoded path.
-  source: docs/api-http.md#L48-L51
+  source: docs/api-http.md#L53-L56
   promise: >-
     prefix — every URL it emits (including the discovery document's `url` field)
     is derived from `SCRIPT_NAME`.
@@ -947,7 +958,7 @@
 - id: module.server-flag
   area: module
   behavior: server? reports whether this process is running workers, false in a client process and true in a worker.
-  source: docs/idea/parity-divergences.md#L1878-L1886
+  source: docs/idea/parity-divergences.md#L1859-L1867
   promise: >-
     `Sidekiq.server?` reports whether this process is running workers. It is false in a client process and true in a worker process.
   oracles: [ModuleApiParityTest#test_server_flag]
@@ -1671,7 +1682,7 @@
 - id: logger.context-thread-local
   area: logging
   behavior: The logging context is thread-local and lives under Wurk's own context key.
-  source: docs/idea/parity-divergences.md#L1888-L1896
+  source: docs/idea/parity-divergences.md#L1869-L1877
   promise: >-
     `Sidekiq::Context` stores its thread-local logging context under `Thread.current[:wurk_context]`. A context added on one thread is not visible on another.
   oracles: [LoggerParityTest#test_context_thread_local]

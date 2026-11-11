@@ -164,6 +164,9 @@ class ClientTest(unittest.TestCase):
             (lambda: self.client.cancel("a/b"), "/v1/jobs/a%2Fb"),
             (lambda: self.client.pause_queue("a/b"), "/v1/queues/a%2Fb/pause"),
             (lambda: self.client.unpause_queue("a/b"), "/v1/queues/a%2Fb/unpause"),
+            (lambda: self.client.clear_queue("a/b"), "/v1/queues/a%2Fb/clear"),
+            (lambda: self.client.retry_retrying("a/b"), "/v1/retries/a%2Fb/retry"),
+            (lambda: self.client.retry_dead("a/b"), "/v1/dead/a%2Fb/retry"),
         ]
         for call, expected_path in calls:
             with unittest.mock.patch("urllib.request.urlopen") as urlopen:
@@ -175,6 +178,50 @@ class ClientTest(unittest.TestCase):
                     f"https://wurk.example.com/wurk/api{expected_path}",
                     urlopen.call_args[0][0].full_url,
                 )
+
+    # -- operator actions ----------------------------------------------------
+
+    def test_retry_sends_the_score_and_idempotency_key_when_given(self):
+        with unittest.mock.patch("urllib.request.urlopen") as urlopen:
+            urlopen.return_value = _json_response(200, {"jid": "abc", "set": "dead", "queue": "default"})
+
+            body = self.client.retry_dead("abc", score=1786000000.25, idempotency_key="k1")
+
+            request = urlopen.call_args[0][0]
+            self.assertEqual("POST", request.get_method())
+            self.assertEqual("https://wurk.example.com/wurk/api/v1/dead/abc/retry?score=1786000000.25",
+                             request.full_url)
+            self.assertEqual("k1", request.get_header("Idempotency-key"))
+            self.assertIsNone(request.data)
+            self.assertEqual("dead", body["set"])
+
+    # No score means no query string at all, not a dangling `?`.
+    def test_cancel_without_a_score_sends_no_query_string(self):
+        with unittest.mock.patch("urllib.request.urlopen") as urlopen:
+            urlopen.return_value = _json_response(200, {"jid": "abc", "set": "schedule"})
+
+            self.client.cancel("abc")
+
+            self.assertEqual("https://wurk.example.com/wurk/api/v1/jobs/abc", urlopen.call_args[0][0].full_url)
+
+    def test_cancel_with_a_score_sends_it(self):
+        with unittest.mock.patch("urllib.request.urlopen") as urlopen:
+            urlopen.return_value = _json_response(200, {"jid": "abc", "set": "schedule"})
+
+            self.client.cancel("abc", score=12.5)
+
+            self.assertEqual("https://wurk.example.com/wurk/api/v1/jobs/abc?score=12.5",
+                             urlopen.call_args[0][0].full_url)
+
+    def test_batches_pages_the_listing(self):
+        with unittest.mock.patch("urllib.request.urlopen") as urlopen:
+            urlopen.return_value = _json_response(200, {"total": 0, "page": 2, "count": 5, "batches": []})
+
+            body = self.client.batches(page=2, count=5)
+
+            self.assertEqual("https://wurk.example.com/wurk/api/v1/batches?page=2&count=5",
+                             urlopen.call_args[0][0].full_url)
+            self.assertEqual([], body["batches"])
 
     # -- serialization -----------------------------------------------------
 

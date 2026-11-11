@@ -53,7 +53,8 @@
     "range_1h_desc": "the last hour",
     "range_24h_desc": "the last 24 hours",
     "range_7d_desc": "the last 7 days",
-    "range_30d_desc": "the last 30 days"
+    "range_30d_desc": "the last 30 days",
+    "viewAll": "View all"
   },
   "table": {
     "class": "Class",
@@ -197,7 +198,9 @@
     "reset": "Reset",
     "enqueue": "Enqueue",
     "matching": "{n} match the filter",
-    "all_filtered_hint": "\"All\" acts on the whole set, not just the filtered rows. Clear the filter to use it."
+    "matching_suffix": "Matching",
+    "scope_matching": "the {n} job(s) matching the filter, across every page",
+    "sweeping": "{n} done…"
   },
   "readonly": {
     "banner": "Read-only mode"
@@ -209,7 +212,10 @@
     "unavailable": "Redis is unavailable right now. Try again in a moment.",
     "dismiss": "Dismiss",
     "region": "Notifications",
-    "partial": "{count} applied, {failed} failed. The list has been refreshed."
+    "partial": "{count} applied, {failed} failed. The list has been refreshed.",
+    "crossOrigin": "Refused as a cross-origin request. Open the dashboard at the same scheme, host and port the server sees (check your proxy's Host and X-Forwarded-* headers).",
+    "swept": "{n} matching job(s) done.",
+    "swept_partial": "{n} matching job(s) done; more remain. Run it again to continue."
   },
   "common": {
     "loading": "Loading…",
@@ -221,9 +227,10 @@
     "load_failed": "Couldn't load this page",
     "load_failed_hint": "The app may have updated since you opened it. Reloading will fetch the latest version.",
     "reload": "Reload",
-    "filter_placeholder": "Filter by class or JID…",
+    "filter_placeholder": "Filter by class, JID or args…",
     "matching": "{n} matching",
-    "close": "Close"
+    "close": "Close",
+    "filter_placeholder_errors": "Filter by class, JID, error or args…"
   },
   "limiters": {
     "exhausted": "exhausted",
@@ -233,7 +240,9 @@
     "no_consumer": "No consumer",
     "no_consumer_hint": "No live worker process subscribes to this queue, so its jobs are not being run.",
     "job_count": "{n} jobs",
-    "latency_label": "latency"
+    "latency_label": "latency",
+    "oldest_first": "Oldest first",
+    "newest_first": "Newest first"
   },
   "batches": {
     "children": "Children",
@@ -243,7 +252,10 @@
     "failed_jobs": "Failed jobs",
     "dead_jobs": "Dead jobs",
     "complete": "complete",
-    "invalidated": "invalidated"
+    "invalidated": "invalidated",
+    "active": "Active",
+    "dead": "Dead",
+    "tag_placeholder": "Filter by tag…"
   },
   "flows": {
     "graph": "Graph",
@@ -308,5 +320,12 @@
     "title": "Page not found",
     "hint": "This dashboard has no page at that address.",
     "home": "Back to the dashboard"
+  },
+  "notices": {
+    "title": "Health notices",
+    "unconsumed": "No live process subscribes to: {names}. Their jobs wait with no error.",
+    "foreign": "Non-Wurk processes are live on this Redis: {names}.",
+    "mixed": "Processes run different Wurk versions: {versions}.",
+    "embedded": "{n} process(es) run embedded in a web server."
   }
 }

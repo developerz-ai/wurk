@@ -504,6 +504,52 @@ jobs:
         if: env.RUN == 'true'
         run: python -m unittest discover -s clients/python/tests -v
 
+  # The Python client against a real `wurk api` and Redis
+  # (clients/python/tests/test_end_to_end.py). Not a required check: it boots
+  # the dummy app's bundle, so it is slower and has more moving parts than the
+  # unit legs above. Runs when the client or the Ruby server side changes.
+  python-e2e:
+    name: python-client e2e
+    needs: detect
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      redis:
+        image: redis:7.4
+        ports: ["6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 10
+          --health-start-period 1s
+    env:
+      RUN: ${{ needs.detect.result != 'success' || (needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.python == 'true' || (needs.detect.outputs.ruby == 'true' && needs.detect.outputs.code == 'true'))) }}
+      BUNDLE_GEMFILE: ${{ github.workspace }}/test/dummy/Gemfile
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.RUN == 'true'
+        with:
+          persist-credentials: false
+      - name: resolve redis url
+        if: env.RUN == 'true'
+        run: echo "WURK_E2E_REDIS_URL=redis://localhost:${{ job.services.redis.ports['6379'] }}/3" >> "$GITHUB_ENV"
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+        if: env.RUN == 'true'
+        with:
+          ruby-version: "4.0"
+          bundler-cache: true
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        if: env.RUN == 'true'
+        with:
+          python-version: "3.13"
+      - name: python client end-to-end
+        if: env.RUN == 'true'
+        run: |
+          pip install ./clients/python
+          python -m unittest discover -s clients/python/tests -p test_end_to_end.py -v
+
   # Oracle suite: independently written oracles for the documented Sidekiq
   # behaviour, pinned to the upstream revision in test/parity/.sidekiq_sha.
   # Its own dedicated job so a parity divergence is legible at a glance rather

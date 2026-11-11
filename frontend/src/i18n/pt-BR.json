@@ -53,7 +53,8 @@
     "range_1h_desc": "a última hora",
     "range_24h_desc": "as últimas 24 horas",
     "range_7d_desc": "os últimos 7 dias",
-    "range_30d_desc": "os últimos 30 dias"
+    "range_30d_desc": "os últimos 30 dias",
+    "viewAll": "Ver tudo"
   },
   "table": {
     "class": "Classe",
@@ -197,7 +198,9 @@
     "reset": "Redefinir",
     "enqueue": "Enfileirar",
     "matching": "{n} correspondem ao filtro",
-    "all_filtered_hint": "\"Todos\" atua no conjunto inteiro, não apenas nas linhas filtradas. Limpe o filtro para usar."
+    "matching_suffix": "correspondentes",
+    "scope_matching": "os {n} job(s) que correspondem ao filtro, em todas as páginas",
+    "sweeping": "{n} processados…"
   },
   "readonly": {
     "banner": "Modo somente leitura"
@@ -209,7 +212,10 @@
     "unavailable": "O Redis está indisponível no momento. Tente novamente em instantes.",
     "dismiss": "Dispensar",
     "region": "Notificações",
-    "partial": "{count} aplicados, {failed} com falha. A lista foi atualizada."
+    "partial": "{count} aplicados, {failed} com falha. A lista foi atualizada.",
+    "crossOrigin": "Recusada como requisição de origem cruzada. Abra o painel com o mesmo esquema, host e porta que o servidor vê (verifique os cabeçalhos Host e X-Forwarded-* do seu proxy).",
+    "swept": "{n} job(s) correspondente(s) processado(s).",
+    "swept_partial": "{n} job(s) correspondente(s) processado(s); ainda restam outros. Execute de novo para continuar."
   },
   "common": {
     "loading": "Carregando…",
@@ -221,9 +227,10 @@
     "load_failed": "Não foi possível carregar esta página",
     "load_failed_hint": "O app pode ter sido atualizado desde que você o abriu. Recarregar buscará a versão mais recente.",
     "reload": "Recarregar",
-    "filter_placeholder": "Filtrar por classe ou JID…",
+    "filter_placeholder": "Filtrar por classe, JID ou argumentos…",
     "matching": "{n} correspondências",
-    "close": "Fechar"
+    "close": "Fechar",
+    "filter_placeholder_errors": "Filtrar por classe, JID, erro ou argumentos…"
   },
   "limiters": {
     "exhausted": "esgotado",
@@ -233,7 +240,9 @@
     "no_consumer": "Sem consumidor",
     "no_consumer_hint": "Nenhum processo ativo assina esta fila, então seus jobs não estão sendo executados.",
     "job_count": "{n} jobs",
-    "latency_label": "latência"
+    "latency_label": "latência",
+    "oldest_first": "Mais antigos primeiro",
+    "newest_first": "Mais recentes primeiro"
   },
   "batches": {
     "children": "Filhos",
@@ -243,7 +252,10 @@
     "failed_jobs": "Jobs com falha",
     "dead_jobs": "Jobs mortos",
     "complete": "completo",
-    "invalidated": "invalidado"
+    "invalidated": "invalidado",
+    "active": "Ativos",
+    "dead": "Mortos",
+    "tag_placeholder": "Filtrar por tag…"
   },
   "flows": {
     "graph": "Grafo",
@@ -308,5 +320,12 @@
     "title": "Página não encontrada",
     "hint": "Este painel não tem nenhuma página nesse endereço.",
     "home": "Voltar ao painel"
+  },
+  "notices": {
+    "title": "Avisos de saúde",
+    "unconsumed": "Nenhum processo ativo consome: {names}. Os jobs esperam sem erro.",
+    "foreign": "Processos que não são Wurk estão ativos neste Redis: {names}.",
+    "mixed": "Os processos executam versões diferentes do Wurk: {versions}.",
+    "embedded": "{n} processo(s) rodam embutidos em um servidor web."
   }
 }

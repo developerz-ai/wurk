@@ -36,6 +36,7 @@ module WurkDocs
       docs/middleware.md
       docs/api.md
       docs/api-http.md
+      docs/job-format.md
       docs/job-status.md
       docs/flows.md
       docs/telemetry.md
@@ -44,6 +45,7 @@ module WurkDocs
       docs/encryption.md
       docs/profiling.md
       docs/dashboard.md
+      docs/dashboard-guide.md
       docs/authentication.md
       docs/secrets.md
       docs/metrics-history.md

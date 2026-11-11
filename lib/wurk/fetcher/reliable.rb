@@ -135,6 +135,7 @@ module Wurk
         @prefixed_queues = nil
         @prefixed_source = nil
         @claim_keys = nil
+        @strict_unpaused = nil
         @rest_empty_until = 0.0
         @oom_reported_at = nil
       end
@@ -242,22 +243,22 @@ module Wurk
       # Prefixed queue keys (`queue:<name>`) in fetch order. Strict mode
       # preserves declaration order and, with nothing paused, hands back the
       # prebuilt array as-is — the steady-state fetch allocates nothing here,
-      # matching Sidekiq's own strict path (fetch.rb:79-87). Random/weighted
-      # shuffle each call — `@queues` is pre-expanded by weight in
-      # Capsule#queues=, so uniform shuffle yields weighted fairness, and
-      # duplicates are trimmed in place, only from a list that has any. Paused
-      # queues are filtered after shuffle so the membership test runs on the
-      # smallest possible set.
+      # matching Sidekiq's own strict path (fetch.rb:79-87); with a queue
+      # paused it hands back one filtered array per paused-cache refresh
+      # (#strict_unpaused). Random/weighted shuffle each call — `@queues` is
+      # pre-expanded by weight in Capsule#queues=, so uniform shuffle yields
+      # weighted fairness — then trim duplicates and paused queues in place on
+      # that fresh array. The result is frozen only when it is reused across
+      # passes; ManyQueues#claim_keys keys its cache on that.
       def queues_cmd
         paused = paused_keys
         keys, distinct = prefixed_queues
-        unless config.mode == :strict
-          keys = keys.shuffle
-          keys.uniq! unless distinct
-        end
-        return keys if paused.empty?
+        return paused.empty? ? keys : strict_unpaused(keys, paused) if config.mode == :strict
 
-        keys.reject { |key| paused.include?(key) }
+        keys = keys.shuffle
+        keys.uniq! unless distinct
+        keys.reject! { |key| paused.include?(key) } unless paused.empty?
+        keys
       end
 
       # Quiet hook (Manager#quiet). Flips the drain flag so retrieve_work
@@ -376,6 +377,19 @@ module Wurk
         @paused_generation = generation
         @paused_expires_at = now + PAUSED_TTL - PAUSED_CLOCK_SLACK
         @paused
+      end
+
+      # The strict list minus `paused`, rebuilt only when either input is a new
+      # object: the paused cache publishes a fresh Set per refresh (PAUSED_TTL)
+      # and Capsule#queues= a fresh list, so identity is the whole check. One
+      # frozen triple, for the reason #prefixed_queues publishes one.
+      def strict_unpaused(keys, paused)
+        cached = @strict_unpaused
+        return cached[2] if cached && cached[0].equal?(keys) && cached[1].equal?(paused)
+
+        filtered = keys.reject { |key| paused.include?(key) }.freeze
+        @strict_unpaused = [keys, paused, filtered].freeze
+        filtered
       end
 
       # `[queue:<name> for every queue this capsule serves, whether those are

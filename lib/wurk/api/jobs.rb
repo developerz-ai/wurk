@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative 'idempotency'
+require_relative 'page'
 require_relative 'problem'
 require_relative 'response'
 require_relative 'validation'
@@ -123,7 +124,8 @@ module Wurk
       # action against a different set.
       def destroy(request)
         jid = Validation.jid!(request.path_params[:jid].to_s)
-        set = cancellable_sets.find { |candidate| remove(candidate, jid) }
+        score = Validation.score!(Page.query!(request))
+        set = cancellable_sets.find { |candidate| remove(candidate, jid, score) }
         return job_not_found(request, jid) unless set
 
         Response.json(200, jid: jid, set: set.name)
@@ -142,9 +144,15 @@ module Wurk
       # them to disagree. A job promoted out of the set between the two steps
       # removes nothing and reads as "already gone", the honest answer to a
       # cancel that lost the race.
-      def remove(set, jid)
-        entry = set.find_job(jid)
+      def remove(set, jid, score)
+        entry = find_entry(set, jid, score)
         entry ? entry.delete : false
+      end
+
+      # Without a score this is JobSet#find_job's ZSCAN, which walks the whole
+      # set on a miss; with one it is a single ZRANGEBYSCORE.
+      def find_entry(set, jid, score)
+        score ? set.fetch(score, jid).first : set.find_job(jid)
       end
 
       # Validation decided which problem this is; rendering it is all that is

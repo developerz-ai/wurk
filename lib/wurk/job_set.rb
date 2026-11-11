@@ -66,7 +66,8 @@ module Wurk
   # otherwise.
   #
   # Spec: docs/target/sidekiq-free.md §19.5.
-  class JobSet < SortedSet
+  class JobSet < SortedSet # rubocop:disable Metrics/ClassLength
+    FIND_SCAN_COUNT = 1_000
     # Plain ZADD, no NX: re-scheduling an identical payload *moves* it to the
     # new timestamp rather than keeping the first one. Mirrors
     # Sidekiq::JobSet#schedule exactly — the last schedule call wins.
@@ -176,11 +177,32 @@ module Wurk
       entries.select { |e| e.jid == jid }
     end
 
+    # #fetch(score, jid) for every `[score, jid]` pair, in one pipeline where
+    # #fetch pays a round trip per pair. Internal reader for the dashboard's
+    # bulk actions (up to 1000 keys a request).
+    #
+    # @return [Array<SortedEntry>]
+    def fetch_pairs(pairs)
+      return [] if pairs.empty?
+
+      replies = Wurk.redis do |conn|
+        conn.pipelined do |pipe|
+          pairs.each { |pair| pipe.call('ZRANGEBYSCORE', @name, *range_args(pair[0]), 'WITHSCORES') }
+        end
+      end
+      pairs.zip(replies).flat_map do |(_, jid), rows|
+        rows.map { |value, score| SortedEntry.new(self, score, value) }.select { |entry| entry.jid == jid }
+      end
+    end
+
     # ZSCAN-based search by jid substring. Returns the first matching entry
     # or nil. O(n) on the ZSET — callers iterating many jids should switch
-    # to per-jid hashes or the score-based fetch.
+    # to per-jid hashes or the score-based fetch. Walks FIND_SCAN_COUNT per
+    # call rather than #scan's upstream default of 100: a jid matches one
+    # member, so the walk is the whole cost, and 1000 cuts a 1M-entry set from
+    # ~10k round trips to ~1k.
     def find_job(jid)
-      scan(jid) { |entry| return entry if entry.jid == jid }
+      scan(jid, FIND_SCAN_COUNT) { |entry| return entry if entry.jid == jid }
       nil
     end
 

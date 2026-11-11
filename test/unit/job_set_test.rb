@@ -258,7 +258,41 @@ class JobSetTest < Wurk::Test::UnitCase
     assert_raises(ArgumentError) { @set.fetch('not a score') }
   end
 
+  # --- fetch_pairs -------------------------------------------------------
+
+  def test_fetch_pairs_resolves_every_pair_in_one_pipeline
+    a = SecureRandom.hex(12)
+    b = SecureRandom.hex(12)
+    add_member(score: 1.0, jid: a)
+    add_member(score: 1.0, jid: SecureRandom.hex(12))
+    add_member(score: 2.0, jid: b)
+    spy = Wurk::Test::CommandSpy.new(Wurk.redis_pool)
+    Thread.current[:wurk_capsule] = spy
+
+    found = @set.fetch_pairs([[1.0, a], [2.0, b], [3.0, a], [2.0, a]])
+
+    assert_equal [a, b], found.map(&:jid)
+    assert_equal 4, spy.count
+    assert_empty @set.fetch_pairs([])
+  ensure
+    Thread.current[:wurk_capsule] = nil
+  end
+
   # --- find_job ----------------------------------------------------------
+
+  # Walks COUNT 1000 per ZSCAN rather than #scan's upstream default of 100.
+  def test_find_job_scans_a_thousand_at_a_time
+    jid = SecureRandom.hex(12)
+    add_member(jid: jid)
+    counts = []
+    @set.define_singleton_method(:scan) do |match, count = 100, &blk|
+      counts << count
+      super(match, count, &blk)
+    end
+
+    assert_equal jid, @set.find_job(jid).jid
+    assert_equal [1000], counts
+  end
 
   def test_find_job_returns_entry_for_known_jid
     jid = SecureRandom.hex(12)

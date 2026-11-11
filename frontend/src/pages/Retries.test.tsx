@@ -4,6 +4,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/solid-query';
 import { MemoryRouter, Route, createMemoryHistory } from '@solidjs/router';
 import Retries from './Retries';
 import { t } from '../i18n';
+import { Toasts, dismissToast, toasts } from '../toast';
+import { requests, stubFetch } from '../test-page';
 
 const NOW = Math.floor(Date.now() / 1000);
 
@@ -41,6 +43,7 @@ function renderRetries(path = '/retries') {
       <MemoryRouter history={history}>
         <Route path="/retries" component={Retries} />
       </MemoryRouter>
+      <Toasts />
     </QueryClientProvider>
   ));
   return history;
@@ -49,7 +52,10 @@ function renderRetries(path = '/retries') {
 const retryRequests = (fetchMock: ReturnType<typeof stub>) =>
   fetchMock.mock.calls.map((c) => new URL(String(c[0]), 'http://x')).filter((u) => u.pathname.endsWith('/api/retries'));
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  for (const toast of toasts()) dismissToast(toast.id);
+});
 
 describe('job-set filter (W4)', () => {
   it('keeps the filter input mounted and focused while the filtered page loads', async () => {
@@ -86,8 +92,8 @@ describe('job-set pagination (W5)', () => {
   });
 });
 
-describe('job-set "all" actions under a filter (W10)', () => {
-  it('disables Retry/Kill/Delete All and shows the matching count while a filter is active', async () => {
+describe('job-set "all" actions under a filter (#101 W4)', () => {
+  it('turns Retry/Kill/Delete All into actions over the matches and shows the matching count', async () => {
     stub((url) =>
       url.searchParams.get('substr')
         ? { total: 500, page: 0, count: 25, entries: [entry(1)], filtered_total: 20_000, filtered_total_exact: false }
@@ -100,14 +106,41 @@ describe('job-set "all" actions under a filter (W10)', () => {
 
     fireEvent.input(screen.getByRole('searchbox'), { target: { value: 'Job1' } });
 
-    await waitFor(() => expect(allRetry()).toBeDisabled());
-    expect(allRetry()).toHaveAttribute('title', t('actions.all_filtered_hint'));
-    expect(screen.getByRole('button', { name: `${t('actions.kill')} ${t('actions.all_suffix')}` })).toBeDisabled();
-    expect(screen.getByRole('button', { name: `${t('actions.delete')} ${t('actions.all_suffix')}` })).toBeDisabled();
+    const matchRetry = await screen.findByRole('button', { name: `${t('actions.retry')} ${t('actions.matching_suffix')}` });
+    expect(matchRetry).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: `${t('actions.kill')} ${t('actions.matching_suffix')}` })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: `${t('actions.delete')} ${t('actions.matching_suffix')}` })).not.toBeDisabled();
     expect(await screen.findByText(t('actions.matching', { n: '20,000+' }))).toBeInTheDocument();
     expect(screen.getByText(t('common.matching', { n: '20,000+' }))).toBeInTheDocument();
-    // The whole-set badge still reports the unfiltered total those buttons act on.
+    // The whole-set badge still reports the unfiltered total.
     expect(screen.getByText('500')).toBeInTheDocument();
+  });
+
+  it('confirms, then follows the sweep cursor until the server reports done', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const fetchMock = stubFetch((url) => {
+      if (url.pathname.endsWith('/all/retry')) {
+        return url.searchParams.get('cursor') === '0'
+          ? { ok: true, count: 1000, matched: 1000, done: false, cursor: 19000 }
+          : { ok: true, count: 4, matched: 4, done: true, cursor: 25000 };
+      }
+      return { total: 500, page: 0, count: 25, entries: [entry(1)], filtered_total: 1004, filtered_total_exact: true };
+    });
+    renderRetries();
+
+    await screen.findByText('Job1');
+    fireEvent.input(screen.getByRole('searchbox'), { target: { value: 'boom' } });
+    fireEvent.click(await screen.findByRole('button', { name: `${t('actions.retry')} ${t('actions.matching_suffix')}` }));
+
+    expect(await screen.findByText(t('toast.swept', { n: 1004 }))).toBeInTheDocument();
+    expect(confirm).toHaveBeenCalledOnce();
+    const sweeps = requests(fetchMock).filter(({ url }) => url.pathname.endsWith('/api/retries/all/retry'));
+    expect(sweeps.map(({ url }) => [url.searchParams.get('substr'), url.searchParams.get('cursor')])).toEqual([
+      ['boom', '0'],
+      ['boom', '19000'],
+    ]);
+    expect(sweeps.every(({ method }) => method === 'POST')).toBe(true);
+    confirm.mockRestore();
   });
 });
 

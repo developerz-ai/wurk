@@ -6,9 +6,14 @@ module Wurk
   # extension forms send no Rails authenticity token, so `protect_from_forgery`
   # can't apply — guard unsafe methods with a same-origin check instead. A
   # cross-site page can drive a victim's browser but cannot forge
-  # `Sec-Fetch-Site: same-origin` (the browser sets it); a missing header is
-  # denied too, since only a non-browser client omits it and it carries no
-  # ambient session cookie to abuse.
+  # `Sec-Fetch-Site: same-origin` (the browser sets it).
+  #
+  # Browsers send Fetch Metadata only to potentially-trustworthy origins
+  # (HTTPS, localhost), so a dashboard over plain HTTP on a LAN host never sees
+  # it. Then the request's `Origin` — or, when absent, its `Referer` — must be
+  # exactly this request's scheme, host and port (owner decision U9, #101 W3).
+  # Neither header present is denied: only a non-browser client omits both,
+  # and it carries no ambient session cookie to abuse.
   #
   # Mirrors the standalone Rack surface (Wurk::Web#safe_request?) so every
   # mutating dashboard entry point enforces one rule.
@@ -28,13 +33,29 @@ module Wurk
 
     private
 
+    # The SPA's toast branches on this body to name the cause instead of
+    # reading the 403 as read-only mode.
     def verify_same_origin!
-      head :forbidden unless safe_request?
+      render json: { error: 'cross_origin' }, status: :forbidden unless safe_request?
     end
 
     def safe_request?
-      SAFE_METHODS.include?(request.request_method) ||
-        request.headers['Sec-Fetch-Site'] == 'same-origin'
+      return true if SAFE_METHODS.include?(request.request_method)
+
+      site = request.headers['Sec-Fetch-Site']
+      site ? site == 'same-origin' : same_origin_source?
     end
+
+    def same_origin_source?
+      source = request.headers['Origin'].presence || request.referer.presence
+      return false unless source
+
+      uri = ::URI.parse(source)
+      [uri.scheme, uri.host, uri.port] == own_origin
+    rescue ::URI::InvalidURIError
+      false
+    end
+
+    def own_origin = [request.scheme, request.host, request.port]
   end
 end

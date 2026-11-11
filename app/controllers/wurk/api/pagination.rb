@@ -5,7 +5,8 @@ module Wurk
     # Pagination helpers shared by every listing endpoint. The contract:
     #   * `?count=` page size (default 25, clamped to 1..200)
     #   * `?page=`  0-indexed page number
-    #   * `?substr=` case-insensitive klass/jid filter on the page
+    #   * `?substr=` case-insensitive filter on a row's klass, jid, error
+    #     class, error message or args
     #
     # Helpers expect an Enumerable that yields whatever JSON-shaped Hash the
     # caller built; substr filtering and slicing happen after serialization so
@@ -14,15 +15,25 @@ module Wurk
       DEFAULT_PAGE_SIZE = 25
       MAX_PAGE_SIZE = 200
       # An unfiltered listing reads its page at the offset (the set's
-      # #snapshot), whatever the depth; the walks that remain (#slice on a set
-      # without one, the Limits names) still pay per skipped row, and 1000
-      # pages is far beyond any real UI depth while bounding them.
+      # #snapshot), whatever the depth; the walks that remain (a filtered
+      # #slice, the Limits names) still pay per skipped row, and 1000 pages is
+      # far beyond any real UI depth while bounding them.
       MAX_PAGE = 1_000
       # A substr that matches nothing would otherwise stream the whole backing
-      # set through Ruby (same DoS shape Web::Search bounds with SCAN_BUDGET).
-      # Raw rows examined per filtered request; results within the budget are
-      # exact, beyond it the page just comes back short.
-      FILTER_SCAN_LIMIT = 20_000
+      # set through Ruby, so a filtered request examines at most Web::Search's
+      # per-request budget of raw rows; results within it are exact, beyond it
+      # the page just comes back short.
+      FILTER_SCAN_LIMIT = ::Wurk::Web::Search::SCAN_BUDGET
+      # A filter walk reads the set through its #snapshot, starting at an
+      # ordinary listing page and doubling to FILTER_PAGE: a match near the
+      # top costs what it did, and the full budget costs ~25 round trips
+      # rather than one per 50 rows.
+      FIRST_FILTER_PAGE = 50
+      FILTER_PAGE = 1_000
+      # Entries one filtered `<set>/all/:cmd` request acts on, the cap the
+      # bulk `keys[]` action already has.
+      SWEEP_LIMIT = 1_000
+      MATCHED_FIELDS = %i[klass jid error_class error_message].freeze
 
       module_function
 
@@ -61,49 +72,15 @@ module Wurk
         default
       end
 
-      # Iterates `enumerable` and collects up to `count` payloads from the
-      # requested page after substr filtering. `block` maps each member to a
-      # JSON Hash; nil from the block skips the member entirely.
-      #
-      # With a substr filter the offset must count *matching* rows, not raw
-      # rows — otherwise page N restarts at raw index N*count and re-emits
-      # (or skips) matches already assigned to earlier pages. Without a
-      # filter we keep the fast path that skips serialization before the
-      # offset.
-      def slice(enumerable, page, &)
-        if page[:substr].empty?
-          slice_raw(enumerable, offset(page), page[:count], &)
-        else
-          slice_filtered(enumerable, offset(page), page, &)
-        end
-      end
-
-      # Fast path: skip serialization entirely for rows before the offset.
-      def slice_raw(enumerable, offset, count)
-        results = []
-        seen = 0
-        enumerable.each do |member|
-          if seen < offset
-            seen += 1
-            next
-          end
-
-          payload = yield(member)
-          next unless payload
-
-          results << payload
-          break if results.size >= count
-        end
-        results
-      end
-
-      # Filtered path: the offset counts MATCHING rows, so page boundaries
-      # stay stable (raw-index offsets re-emit or skip matches across pages).
-      # Records the matches seen in `page[:matched]` and whether the set was
-      # walked to its end in `page[:exhausted]`: stopping once the page fills
-      # is what keeps a filtered request cheap, so the count is only exact
-      # when nothing was left unread.
-      def slice_filtered(enumerable, offset, page)
+      # One page of a filtered listing: up to `count` payloads (the block maps
+      # each member to one; nil skips it) from the matches of `substr`, in
+      # `enumerable`'s order. The offset counts MATCHING rows, so page
+      # boundaries stay stable (raw-index offsets re-emit or skip matches
+      # across pages). Records the matches seen in `page[:matched]` and whether
+      # the set was walked to its end in `page[:exhausted]`: stopping once the
+      # page fills is what keeps a filtered request cheap, so the count is only
+      # exact when nothing was left unread.
+      def slice(enumerable, page)
         results = []
         matched = 0
         examined = 0
@@ -113,7 +90,7 @@ module Wurk
           payload = yield(member)
           next unless payload && match?(payload, page[:substr])
 
-          results << payload if (matched += 1) > offset
+          results << payload if (matched += 1) > offset(page)
           break if results.size >= page[:count]
         end
         record_match_count(page, matched, examined, results.size)
@@ -125,11 +102,51 @@ module Wurk
         page[:exhausted] = examined <= FILTER_SCAN_LIMIT && served < page[:count]
       end
 
+      # Up to SWEEP_LIMIT of `rows`' members whose row (the block maps a member
+      # to it) matches `substr`, within FILTER_SCAN_LIMIT examined:
+      # [members, rows examined, whether `rows` ran out].
+      def matching(rows, substr)
+        members = []
+        examined = 0
+        rows.each do |member|
+          return [members, examined, false] if examined >= FILTER_SCAN_LIMIT || members.size >= SWEEP_LIMIT
+
+          examined += 1
+          members << member if match?(yield(member), substr)
+        end
+        [members, examined, true]
+      end
+
+      # Every row from raw offset `from` on, read page by page through the
+      # block, which answers `count` rows from `offset` in listing order.
+      # Stops after the first short page.
+      def walk(from = 0, &read)
+        ::Enumerator.new do |out|
+          offset = from
+          size = FIRST_FILTER_PAGE
+          loop do
+            rows = read.call(offset, size)
+            rows.each { |row| out << row }
+            break if rows.size < size
+
+            offset += size
+            size = [size * 2, FILTER_PAGE].min
+          end
+        end
+      end
+
       def match?(payload, substr)
         return true if substr.nil? || substr.empty?
 
         needle = substr.downcase
-        payload[:klass].to_s.downcase.include?(needle) || payload[:jid].to_s.downcase.include?(needle)
+        MATCHED_FIELDS.any? { |field| payload[field].to_s.downcase.include?(needle) } ||
+          args_match?(payload[:args], needle)
+      end
+
+      # Against the args as the SPA shows them: JSON, so `"a@b.c"` or `42]`
+      # match as typed.
+      def args_match?(args, needle)
+        !args.nil? && ::Wurk.dump_json(args).downcase.include?(needle)
       end
     end
   end

@@ -38,6 +38,12 @@ module Wurk
     # pre-paint script reads it, and that script runs before the stylesheet so
     # a host default never flashes the other palette.
     HEAD_OPEN = '<head>'
+    # The built shell's asset URLs: Vite builds with a relative `base`
+    # (frontend/vite.config.ts) so the bundle's own chunk and font URLs resolve
+    # against wherever it is served from; only the shell needs an absolute
+    # prefix, because it is served from the page URL, not the asset mount.
+    RELATIVE_ASSET_URL = %r{(["'])\./}
+    SCRIPT_OPEN = '<script'
 
     def index
       render layout: false, html: decorate_shell(spa_html).html_safe
@@ -46,7 +52,18 @@ module Wurk
     private
 
     def decorate_shell(html)
-      inject_theme_default(inject_locale_hint(inject_head(html)))
+      stamp_csp_nonce(inject_theme_default(inject_locale_hint(inject_head(html))))
+    end
+
+    # A host policy with a nonce generator (`script-src 'self' 'nonce-…'`)
+    # refuses every inline script without the request's nonce, and the shell
+    # cannot run without its injected mount base. Every <script> gets it, the
+    # external module included, so a `'strict-dynamic'` policy loads it too.
+    def stamp_csp_nonce(html)
+      nonce = request.content_security_policy_nonce
+      return html unless nonce
+
+      html.gsub(SCRIPT_OPEN) { %(#{SCRIPT_OPEN} nonce="#{::ERB::Util.html_escape(nonce)}") }
     end
 
     def spa_html
@@ -143,7 +160,14 @@ module Wurk
         raise "Wurk dashboard: precompiled SPA index.html missing at #{path}. " \
               'Run `bin/rake frontend:build`.'
       end
-      path.read
+      path.read.gsub(RELATIVE_ASSET_URL) { "#{::Regexp.last_match(1)}#{asset_base}/" }
+    end
+
+    # AssetMount sits in the host's stack, so its URL carries the host's own
+    # prefix (RAILS_RELATIVE_URL_ROOT, or a proxy's SCRIPT_NAME), not the
+    # engine mount: `/app/wurk` serves its assets from `/app/wurk-assets`.
+    def asset_base
+      "#{request.get_header('ORIGINAL_SCRIPT_NAME').to_s.chomp('/')}#{::Wurk::Engine::AssetMount::PREFIX}"
     end
   end
 end

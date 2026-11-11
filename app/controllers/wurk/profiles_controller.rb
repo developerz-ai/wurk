@@ -6,16 +6,21 @@ require 'uri'
 module Wurk
   # Profiles pane non-JSON endpoints (spec §25.4):
   #
-  #   GET /profiles/:key/data  → the stored gzipped gecko JSON, streamed with a
+  #   GET  /profiles/:key/data → the stored gzipped gecko JSON, streamed with a
   #                              gzip Content-Encoding (Firefox profiler pulls
   #                              this when given a `from-url` source).
-  #   GET /profiles/:key       → upload the profile to the Firefox profiler
+  #   POST /profiles/:key      → upload the profile to the Firefox profiler
   #                              store and 302 to its public view URL.
+  #   GET  /profiles/:key      → 302 to an upload already made (by either UI),
+  #                              405 when there is none yet.
+  #
+  # Sidekiq uploads on the GET. Sending job data to a third party is a side
+  # effect, so here only a POST does it: SameOriginGuard covers it like every
+  # other mutation, and read-only mode refuses it (#101 W5).
   #
   # `:key` is "<token>-<jid>". The JSON list lives at /api/profiles.
   class ProfilesController < ApplicationController
-    # CSRF protection is for state-changing form posts; these are GET reads.
-    skip_forgery_protection
+    include SameOriginGuard
 
     def data
       blob = profile_blob(params[:key])
@@ -26,35 +31,35 @@ module Wurk
     end
 
     def show
-      # GET-shaped for Sidekiq parity, but uploading the profile to the public
-      # Firefox profiler store is a side effect — read-only deploys (e.g. the
-      # public demo) must not let any visitor exfiltrate profiling data.
       return head(:forbidden) if ::Wurk::Web.config.read_only?
-      return head(:forbidden) unless navigated_from_dashboard?
 
+      sid = cached_sid(params[:key])
+      return redirect_to_profile(sid) if sid
+      return head(:not_found) unless profile_exists?(params[:key])
+
+      response.headers['Allow'] = 'POST'
+      head :method_not_allowed
+    end
+
+    # Read-only mode 403s this POST in Wurk::Web::Authorization, before it
+    # gets here.
+    def upload
       sid = profile_sid(params[:key])
       return head(:not_found) if sid == :missing
       return head(:bad_gateway) unless sid
 
-      redirect_to(format(::Wurk::Web.config.profile_view_url, sid), allow_other_host: true)
+      redirect_to_profile(sid)
     end
 
     private
 
-    # The upload is a side effect behind a GET, so a cross-site `<img src>`
-    # could trigger it with the operator's session. Allow the dashboard's own
-    # link (same-origin) and a typed URL or bookmark (`none`). A browser too
-    # old to send Sec-Fetch-Site still sends a Referer, which must then be
-    # this host.
-    def navigated_from_dashboard?
-      site = request.headers['Sec-Fetch-Site']
-      return %w[same-origin none].include?(site) if site
-
-      referer = URI.parse(request.referer.to_s)
-      referer.host == request.host && referer.port == request.port
-    rescue URI::InvalidURIError
-      false
+    def redirect_to_profile(sid)
+      redirect_to(format(::Wurk::Web.config.profile_view_url, sid), allow_other_host: true)
     end
+
+    def profile_exists?(key) = ::Wurk.redis { |c| c.call('EXISTS', key) }.positive?
+
+    def cached_sid(key) = ::Wurk.redis { |c| c.call('HGET', key, 'sid') }
 
     def profile_blob(key)
       ::Wurk::ProfileRecord.data_for(key)
@@ -64,7 +69,7 @@ module Wurk
     # upload exactly as Sidekiq's Web UI does, so either UI reuses the other's
     # upload. :missing when the profile is gone, nil when the upload failed.
     def profile_sid(key)
-      sid = ::Wurk.redis { |c| c.call('HGET', key, 'sid') }
+      sid = cached_sid(key)
       return sid if sid
 
       blob = profile_blob(key)

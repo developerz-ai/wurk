@@ -2,7 +2,9 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen } from '@solidjs/testing-library';
 import { QueryClient, QueryClientProvider } from '@tanstack/solid-query';
 import { MemoryRouter, Route, createMemoryHistory } from '@solidjs/router';
-import Dashboard from './Dashboard';
+import Dashboard, { rangeIndexForDays } from './Dashboard';
+import { t } from '../i18n';
+import { requests, renderPage, stubFetch } from '../test-page';
 
 // The charts need a measured container width under jsdom; the dashboard's own
 // numbers are what these tests are about, so stub them to a marker element.
@@ -74,4 +76,40 @@ describe('Dashboard heading', () => {
       expect(container.querySelector('h1')?.textContent).toBe('Dashboard');
     });
   }
+});
+
+describe('Sidekiq Web ?days=N', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('picks the narrowest range covering N days, ignoring anything outside 1..180', () => {
+    expect([undefined, '0', 'x', '181', '1.5'].map(rangeIndexForDays)).toEqual([0, 0, 0, 0, 0]);
+    expect(['1', '2', '7', '8', '30', '180'].map(rangeIndexForDays)).toEqual([1, 2, 2, 3, 3, 3]);
+  });
+
+  it('opens the 7d history for ?days=7', async () => {
+    const fetchMock = stubFetch((url) => (url.pathname.includes('/api/history/') ? HISTORY : url.pathname.endsWith('/api/stats') ? STATS : []));
+    renderPage('/?days=7', '/', Dashboard);
+
+    await screen.findByRole('heading', { level: 1 });
+    const history = requests(fetchMock).find(({ url }) => url.pathname.includes('/api/history/'))!;
+    expect(history.url.pathname).toBe('/wurk/api/history/5m');
+    expect(history.url.searchParams.get('window')).toBe('7d');
+  });
+});
+
+describe('Health notices strip', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('shows what wurk verify would warn about from /api/processes and /api/queues', async () => {
+    stubFetch((url) => {
+      if (url.pathname.includes('/api/history/')) return HISTORY;
+      if (url.pathname.endsWith('/api/stats')) return STATS;
+      if (url.pathname.endsWith('/api/processes')) return [{ identity: 'w:1', version: '1.14.0', cores: 4 }];
+      return [{ name: 'orphan', size: 3, paused: false, consumers: 0 }];
+    });
+    renderPage('/', '/', Dashboard);
+
+    expect(await screen.findByText(t('notices.unconsumed', { names: 'orphan' }))).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: t('notices.title') })).toBeInTheDocument();
+  });
 });

@@ -53,7 +53,8 @@
     "range_1h_desc": "过去1小时",
     "range_24h_desc": "过去24小时",
     "range_7d_desc": "过去7天",
-    "range_30d_desc": "过去30天"
+    "range_30d_desc": "过去30天",
+    "viewAll": "查看全部"
   },
   "table": {
     "class": "类",
@@ -197,7 +198,9 @@
     "reset": "重置",
     "enqueue": "入队",
     "matching": "{n} 个符合筛选条件",
-    "all_filtered_hint": "“全部”作用于整个集合，而不仅是筛选出的行。请先清除筛选条件。"
+    "matching_suffix": "匹配项",
+    "scope_matching": "所有页面中与筛选条件匹配的 {n} 个任务",
+    "sweeping": "已处理 {n} 个…"
   },
   "readonly": {
     "banner": "只读模式"
@@ -209,7 +212,10 @@
     "unavailable": "Redis当前不可用，请稍后重试。",
     "dismiss": "关闭",
     "region": "通知",
-    "partial": "已应用 {count} 个，失败 {failed} 个。列表已刷新。"
+    "partial": "已应用 {count} 个，失败 {failed} 个。列表已刷新。",
+    "crossOrigin": "作为跨源请求被拒绝。请使用服务器所见的相同协议、主机和端口打开面板（检查代理的 Host 与 X-Forwarded-* 请求头）。",
+    "swept": "已处理 {n} 个匹配的任务。",
+    "swept_partial": "已处理 {n} 个匹配的任务，仍有剩余。再次执行以继续。"
   },
   "common": {
     "loading": "加载中…",
@@ -221,9 +227,10 @@
     "load_failed": "无法加载此页面",
     "load_failed_hint": "应用自打开后可能已更新。重新加载将获取最新版本。",
     "reload": "重新加载",
-    "filter_placeholder": "按类名或 JID 筛选…",
+    "filter_placeholder": "按类名、JID 或参数筛选…",
     "matching": "{n} 个匹配",
-    "close": "关闭"
+    "close": "关闭",
+    "filter_placeholder_errors": "按类名、JID、错误或参数筛选…"
   },
   "limiters": {
     "exhausted": "已耗尽",
@@ -233,7 +240,9 @@
     "no_consumer": "无消费者",
     "no_consumer_hint": "没有存活的工作进程订阅此队列，因此其作业不会被执行。",
     "job_count": "{n} 个任务",
-    "latency_label": "延迟"
+    "latency_label": "延迟",
+    "oldest_first": "最早优先",
+    "newest_first": "最新优先"
   },
   "batches": {
     "children": "子批次",
@@ -243,7 +252,10 @@
     "failed_jobs": "失败任务",
     "dead_jobs": "死亡任务",
     "complete": "已完成",
-    "invalidated": "已失效"
+    "invalidated": "已失效",
+    "active": "活跃",
+    "dead": "死亡",
+    "tag_placeholder": "按标签筛选…"
   },
   "flows": {
     "graph": "图",
@@ -308,5 +320,12 @@
     "title": "未找到页面",
     "hint": "此仪表盘在该地址没有页面。",
     "home": "返回仪表盘"
+  },
+  "notices": {
+    "title": "健康提示",
+    "unconsumed": "没有存活进程订阅：{names}。其中的任务会无报错地一直等待。",
+    "foreign": "此 Redis 上有非 Wurk 进程在运行：{names}。",
+    "mixed": "进程运行着不同的 Wurk 版本：{versions}。",
+    "embedded": "{n} 个进程嵌入在 Web 服务器中运行。"
   }
 }
