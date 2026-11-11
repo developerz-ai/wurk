@@ -353,24 +353,24 @@ module Wurk
     # The entries this call removed. ZREM by the bytes each was read with, in
     # one pipeline; a miss falls back to #delete_by_jid as #remove_job does.
     # The pipeline has already removed the rest of the page when a fallback
-    # runs, so a fallback that raises puts those back before it propagates:
+    # runs, so a fallback that raises puts back everything removed so far, the
+    # pipeline's hits and every earlier fallback, before it propagates:
     # #retry_page's restore only covers what #take returned.
     def take(entries)
-      hits, misses = entries.zip(zrem_each(entries)).partition { |_, removed| removed.to_i.positive? }
-      taken = hits.map(&:first)
-      taken.each { note_removal }
-      taken + removed_by_jid(misses.map(&:first))
+      taken, misses = split_by_zrem(entries)
+      misses.each { |entry| taken << entry if delete_by_jid(entry.score, entry.jid) }
+      taken
     rescue StandardError
       taken&.each(&:restore_after_failed_push)
       raise
     end
 
-    def removed_by_jid(entries)
-      entries.select { |entry| delete_by_jid(entry.score, entry.jid) }
-    end
-
-    def zrem_each(entries)
-      Wurk.redis { |conn| conn.pipelined { |pipe| entries.each { |e| pipe.call('ZREM', @name, e.value) } } }
+    # [entries the pipelined ZREM removed, entries it missed].
+    def split_by_zrem(entries)
+      gone = Wurk.redis { |conn| conn.pipelined { |pipe| entries.each { |e| pipe.call('ZREM', @name, e.value) } } }
+      hits, misses = entries.zip(gone).partition { |_, removed| removed.to_i.positive? }
+      hits.each { note_removal }
+      [hits.map(&:first), misses.map(&:first)]
     end
 
     # The job SortedEntry#retry pushes: `retry_count` one lower, since the next

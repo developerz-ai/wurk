@@ -470,6 +470,30 @@ class JobSetTest < Wurk::Test::UnitCase
     @pool.with { |c| c.call('DEL', private_set) }
   end
 
+  # The same, with one fallback succeeding before a later one raises: the
+  # job the first fallback removed must come back too.
+  def test_batched_take_puts_back_an_earlier_fallback_when_a_later_one_raises
+    private_set = test_private_set
+    payloads = seed_private(private_set, (0...4).map { |i| [10 + i, "tkg-#{i}-#{@ns}"] })
+    set = private_job_set(private_set)
+    entries = set.to_a.sort_by(&:score)
+    [1, 2].each { |i| entries[i] = Wurk::SortedEntry.new(set, entries[i].score, "#{entries[i].value} ") }
+    real = set.method(:delete_by_jid)
+    calls = 0
+    set.define_singleton_method(:delete_by_jid) do |*a|
+      (calls += 1) == 1 ? real.call(*a) : raise(RedisClient::ConnectionError, 'gone')
+    end
+
+    assert_raises(RedisClient::ConnectionError) { set.send(:take, entries) }
+    assert_equal 2, calls
+    # Restored as the bytes read, which here carry the space that forced the miss.
+    jids = @pool.with { |c| c.call('ZRANGE', private_set, 0, -1) }.map { |v| Wurk.load_json(v)['jid'] }
+
+    assert_equal(payloads.map { |v| Wurk.load_json(v)['jid'] }.sort, jids.sort)
+  ensure
+    @pool.with { |c| c.call('DEL', private_set) }
+  end
+
   def test_batched_retry_all_counts_a_job_middleware_halted_as_retried
     queue = unique_queue
     private_set = test_private_set
