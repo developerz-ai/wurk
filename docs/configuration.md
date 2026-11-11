@@ -96,9 +96,13 @@ Sidekiq.configure_client { |config| config.redis = { url: ENV["REDIS_URL"] } }
   A `configure_server` block the gate skips is kept and runs when the process
   enters server mode, so a gem calling it at load time still takes effect in a
   process that goes on to run workers; in a process that never does, it never
-  runs. The skip logs one WARN naming the gate and the condition that failed,
+  runs. The skip logs one line naming the gate and the condition that failed,
   once per gate per configuration instance; further skips of the same gate stay
-  quiet, and a block the gate allows logs nothing.
+  quiet, and a block the gate allows logs nothing. A skipped `configure_server`
+  block logs a WARN. A skipped `configure_client` block logs at DEBUG: a server
+  skipping it is the Sidekiq contract and the usual case. The boot checks WARN
+  instead when a server process skipped client blocks and ran no
+  `configure_server` block at all, since none of the app's settings reached it.
 - Server mode is entered **before** initializers load — by the
   `wurk.server_mode` railtie initializer in a Rails host, and by
   `Wurk.enter_server_mode` in `Wurk::CLI#run` / `#run_swarm` before the app is

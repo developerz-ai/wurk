@@ -6,6 +6,8 @@ require_relative 'component'
 require_relative 'heartbeat'
 require_relative 'launcher'
 require_relative 'fetcher/reliable'
+require_relative 'fetcher/reaper'
+require_relative 'capsule'
 require_relative 'keys'
 require_relative 'swarm/child_boot'
 require_relative 'swarm/backoff'
@@ -152,8 +154,10 @@ module Wurk
       @crash_watch = CrashWatch.new(exit_after: crash_exit_after, young_within: Backoff::RESET_AFTER)
       @exit_on_crash_loop = exit_on_crash_loop
       @crash_looped = false
+      @title_program = nil
       @restart = build_restart
       @liveness = build_liveness(heartbeat_timeout)
+      @orphan_reaper = Fetcher::Reaper.new(config)
       init_fork_unsafe_handles
     end
 
@@ -188,10 +192,12 @@ module Wurk
 
       @assignments = @topology.assignments.freeze
       @owner_pid = ::Process.pid
+      @title_program = ::File.basename($PROGRAM_NAME) if install_signals
       install_signal_handlers if install_signals
       close_parent_sockets
       @config.prepare_for_fork!
       fork_children
+      update_proctitle
       child_pids
     end
 
@@ -295,8 +301,23 @@ module Wurk
       check_crash_loop unless @stopping
       requiet_children
       check_memory_pressure
+      update_proctitle
     rescue StandardError => e
       handle_exception(e, { context: 'swarm-supervise' })
+    end
+
+    # A swarm that owns its signals owns its process, so it titles it after the
+    # binary that started it: `wurkswarm myapp [3 of 3 processes]`, or
+    # `sidekiqswarm …`. docs/target/ does not give Enterprise's parent title, so
+    # this one is Wurk's own. One co-hosted in a web server leaves the host's
+    # title alone.
+    # Children replace the inherited title on their first beat.
+    def update_proctitle
+      return unless @title_program
+
+      title = "#{@title_program} #{@config[:tag] || default_tag} " \
+              "[#{child_pids.size} of #{@assignments.size} processes]"
+      $PROGRAM_NAME = title unless title == $PROGRAM_NAME
     end
 
     def advance_restart
@@ -543,19 +564,45 @@ module Wurk
     end
 
     def on_child_exit(pid, status)
-      @lock.synchronize do
-        meta = @children.delete(pid)
-        return unless meta
+      meta = @lock.synchronize { retire_child(pid, status) }
+      reclaim_child_lists(pid, meta[:slot]) if meta && !redis_outage?(status)
+    end
 
-        @liveness&.forget(pid)
-        return if @restart.claim_exit(pid)
+    def retire_child(pid, status)
+      meta = @children.delete(pid)
+      return unless meta
 
-        if @stopping
-          logger.info { "swarm: child #{pid} exited (status=#{status&.exitstatus})" }
-        else
-          schedule_respawn(pid, status, meta)
-        end
+      @liveness&.forget(pid)
+      return meta if @restart.claim_exit(pid)
+
+      if @stopping
+        logger.info { "swarm: child #{pid} exited (status=#{status&.exitstatus})" }
+      else
+        schedule_respawn(pid, status, meta)
       end
+      meta
+    end
+
+    # A reaped child holds nothing any more: a drained one emptied its
+    # private lists itself and costs one pipelined LLEN here, a SIGKILLed or
+    # crashed one has its in-flight jobs back on their queues now rather than
+    # when a sibling's sweep comes round. Outside the lock, since it talks to
+    # Redis. The sockets it opens close before the next fork (#fork_child).
+    # A child that exited for want of Redis never fetched, and is skipped. A
+    # failure here leaves the lists to the periodic sweep, as before.
+    def reclaim_child_lists(pid, slot)
+      moved = @orphan_reaper.reclaim_exited(pid, child_queue_names(slot))
+      logger.info { "swarm: returned #{moved} job(s) held by child #{pid} to their queues" } if moved.positive?
+    rescue StandardError => e
+      handle_exception(e, { context: 'swarm-reclaim' })
+    end
+
+    # What ChildBoot#apply_slot_to_config makes of the default capsule, parsed
+    # the same way, plus every other capsule as configured.
+    def child_queue_names(slot)
+      slot_capsule = Capsule.new('default', @config).tap { |c| c.queues = slot.queues }
+      others = @config.capsules.except('default').values
+      [slot_capsule, *others].flat_map(&:queues).uniq
     end
 
     # Arm the slot's backoff instead of sleeping the supervise thread; the next
@@ -705,18 +752,19 @@ module Wurk
     # child table is never held across a sleep.
     def hard_kill_stragglers
       killed = @lock.synchronize do
-        pids = @children.keys
-        pids.each { |pid| safe_kill(pid, 'KILL') }
+        stragglers = @children.dup
+        stragglers.each_key { |pid| safe_kill(pid, 'KILL') }
         @children.clear
-        pids
+        stragglers
       end
-      reap_killed(killed)
+      reap_killed(killed.keys).each { |pid| reclaim_child_lists(pid, killed[pid][:slot]) }
     end
 
     # Bounded and best-effort: SIGKILL is asynchronous, so poll rather than
     # block on a pid that may be wedged in uninterruptible sleep. A straggler
     # still unreaped when the budget runs out is dropped exactly as before —
     # the drain must not stall on it.
+    # Returns the pids it reaped.
     def reap_killed(pids)
       pending = pids
       HARD_KILL_REAP_ATTEMPTS.times do
@@ -725,6 +773,7 @@ module Wurk
 
         sleep HARD_KILL_REAP_INTERVAL
       end
+      pids - pending
     end
 
     def reaped?(pid)

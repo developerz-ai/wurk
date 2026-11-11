@@ -302,6 +302,27 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
     reap(straggler) if straggler
   end
 
+  # A straggler SIGKILLed at the end of a drain dies holding its in-flight jobs.
+  # They go back to their queue now, not when the next generation's sweep gets
+  # round to an incarnation it can only judge by heartbeat.
+  def test_hard_kill_stragglers_returns_the_stragglers_jobs
+    swarm = Wurk::Swarm.new(topology: topology_n(1), config: @config, shutdown_timeout: SHUTDOWN_TIMEOUT)
+    straggler = ::Process.fork { sleep STRAGGLER_LIFETIME }
+    register_straggler(swarm, straggler)
+    held = Wurk::Fetcher::Reliable.private_queue_name("queue:#{@queue_name}", pid: straggler)
+    job = Wurk.dump_json('class' => 'X', 'args' => [], 'jid' => SecureRandom.hex(12), 'queue' => @queue_name)
+    @observer.call('RPUSH', held, job)
+
+    swarm.send(:hard_kill_stragglers)
+
+    assert_equal [job], @observer.call('LRANGE', "queue:#{@queue_name}", 0, -1)
+    assert_equal 0, @observer.call('LLEN', held)
+  ensure
+    ::Process.kill('KILL', straggler) if straggler && pid_alive?(straggler)
+    reap(straggler) if straggler
+    @observer.call('DEL', held) if held
+  end
+
   # The ECHILD the supervisor has to survive has to be the KERNEL's, not a
   # stub's: a pid somebody else already reaped has no exit status left to
   # hand out, so `Process.wait2` answers ECHILD where it would otherwise

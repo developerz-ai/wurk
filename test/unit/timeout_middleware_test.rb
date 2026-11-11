@@ -60,11 +60,35 @@ class TimeoutMiddlewareTest < Wurk::Test::UnitCase
   def test_an_unusable_bound_leaves_the_job_unbounded
     watchdog = attach_watchdog
 
-    ['30', 0, -1, Float::INFINITY, Float::NAN, nil, true].each do |value|
+    ['0', '-1', '1e3', '5 minutes', '', '9' * 400, 0, -1, Float::INFINITY, Float::NAN, nil, true].each do |value|
       assert_equal :ok, invoke({ 'class' => 'PlainJob', 'timeout' => value }) { :ok }, "#{value.inspect} armed a bound"
     end
 
     refute_predicate watchdog, :running?
+  end
+
+  # wurk < 1.12 wrote `timeout: 5.seconds` into the payload as the String "5",
+  # and those jobs are still queued. They get the bound they were declared with.
+  def test_an_old_format_string_bound_still_cuts_the_job
+    attach_watchdog
+
+    err = assert_raises(Wurk::Job::TimedOut) { invoke(bounded_job('0.02', 'OldJob')) { sleep 5 } }
+
+    assert_equal 'OldJob timed out after 0.02s', err.message
+  end
+
+  def test_an_old_format_string_bound_is_armed_as_its_seconds
+    watchdog = attach_watchdog
+    armed = nil
+    watchdog.define_singleton_method(:watch) do |seconds, *, &blk|
+      armed = seconds
+      blk.call
+    end
+
+    invoke(bounded_job('5')) { :ok }
+
+    assert_in_delta 5.0, armed
+    assert_kind_of Float, armed
   end
 
   # A Configuration owns no watchdog — only a Capsule does — and a chain bound

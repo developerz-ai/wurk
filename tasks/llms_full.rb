@@ -32,6 +32,7 @@ module WurkDocs
       docs/unique-jobs.md
       docs/iterable-jobs.md
       docs/reliability.md
+      docs/idempotency.md
       docs/middleware.md
       docs/api.md
       docs/api-http.md

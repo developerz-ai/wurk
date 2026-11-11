@@ -63,10 +63,12 @@ bundle install
 >
 > ```ruby
 > gem "wurk"
-> gem "sidekiq", github: "developerz-ai/wurk", glob: "ecosystem/sidekiq-shim/*.gemspec"
+> gem "sidekiq", github: "developerz-ai/wurk", tag: "v1.12.0", glob: "ecosystem/sidekiq-shim/*.gemspec"
 > gem "sidekiq-cron"   # any add-on you keep
 > ```
 >
+> Set `tag:` to the Wurk version you bundle: the shim depends on exactly that
+> Wurk, so the two cannot drift apart on a `bundle update`.
 > Check with `bundle info sidekiq`: its path must point into the wurk git
 > checkout (`ecosystem/sidekiq-shim`), not a released `sidekiq-x.y.z` gem. Details:
 > [`ecosystem/sidekiq-shim/README.md`](../ecosystem/sidekiq-shim/README.md).
@@ -261,18 +263,17 @@ On the 16-core default that's 16 × 5 = 80 connections from one host — size
 
 ### Dedicated worker: `wurk` vs `wurkswarm`
 
-The gem ships two standalone runners (and an alias). `wurk` has no `sidekiq` executable,
-so update any `bundle exec sidekiq` invocation, Procfile line, and systemd/Capistrano unit.
-(With the [`sidekiq` shim gem](../ecosystem/sidekiq-shim/README.md) in the bundle,
-`bundle exec sidekiq` does run Wurk, so a start script can move later.)
+The gem ships two standalone runners, each also under its Sidekiq name, so an existing
+`bundle exec sidekiq -C config/sidekiq.yml` in a Procfile, systemd unit, k8s manifest or
+Capistrano task keeps working unchanged.
 
-| Binary | What it does | Sidekiq equivalent |
+| Binary | Alias | What it does |
 |---|---|---|
-| `bundle exec wurk` | One process, one thread pool | `sidekiq` |
-| `bundle exec wurkswarm` | Forks `WURK_COUNT` worker children from one preloaded parent — fork-based real parallelism | `sidekiqswarm` |
+| `bundle exec wurk` | `sidekiq` | One process, one thread pool |
+| `bundle exec wurkswarm` | `sidekiqswarm` | Forks `WURK_COUNT` worker children from one preloaded parent — fork-based real parallelism |
 
-`sidekiqswarm` is shipped as an alias for `wurkswarm`, so an existing Enterprise
-invocation drops in unchanged. **Use `wurkswarm` for a multi-process worker host**
+The aliases run the same code, so an existing invocation drops in unchanged and a start
+script can move to the Wurk name later, or never. **Use `wurkswarm` for a multi-process worker host**
 (it's the only way to get fork-based parallelism without Rails); use `wurk` for a
 single-process worker. Both take the familiar flags (`-c` concurrency, `-q` queue,
 `-r` require, `-t` timeout, `-e` environment, `-C` config), read a YAML config with
@@ -628,6 +629,8 @@ are never sent, and self-healing Redis/pool blips are filtered out of the fetch
 loop. Full setup, options, and a `sentry-sidekiq` migration table:
 [**docs/sentry.md**](sentry.md).
 
+To also hear about a failure before its last attempt (about 21 days in on the default schedule), use `Wurk::Sentry.install!(config, report_after_attempts: 3)`. A process that does not call `install!` can still drop Wurk's retry signals with `config.excluded_exceptions += Wurk::Sentry.excluded_exceptions`. Using Bugsnag or another reporter? See [Other error reporters](sentry.md#other-error-reporters).
+
 ### Quick reference — other ecosystem gems
 
 Keeping any of these requires the [`sidekiq` shim gem](../ecosystem/sidekiq-shim/README.md).
@@ -827,10 +830,11 @@ scan is never called clean. A clean exit is about what it samples. It does not p
 
 On the release that swaps the gem, `bundle exec wurk preflight --app .` also boots your app in
 server mode, so it reads the Redis your workers would use (`-u` overrides), and lists classes
-with `lock:` and no gem, and add-ons known not to work. **That part runs your initializers, and
-the read-only promise covers only preflight's own commands.** An initializer that enqueues writes
-to the app's Redis whatever `-u` says. A banner and an `app_code_ran` finding say so; point it at
-staging if an initializer writes.
+with `lock:` and no gem, and add-ons known not to work. **That part runs your initializers.**
+Wurk's own Redis pools stay read-only while it does: an initializer that writes through them
+(an enqueue, a `flushdb`) fails the run, naming its file and line, and nothing is written. A
+client the app opens itself (`Redis.new`, `Rails.cache`) is not covered, so point the run at
+staging if an initializer writes that way. An `app_code_ran` finding says the app booted.
 
 **In CI, boot the worker the way a deploy would.** Add one step to the release that swaps the
 gem:
@@ -843,8 +847,10 @@ gem:
 ```
 
 It exits non-zero, naming the constant, when the worker boot would crash-loop, and it forks
-nothing and opens no fetch. Add `--redis` for a read-only check of the server too (version,
-eviction policy, live peers).
+nothing and opens no fetch. Boot code that touches Redis fails the check, naming its file and
+line: without `--redis` Wurk's pools open no connection, and with it they send reads only. Add
+`--runner wurk` if you deploy single-process `wurk` rather than `wurkswarm`, and `--redis` for a
+read-only check of the server too (version, eviction policy, live peers).
 
 **Redis**
 
@@ -888,8 +894,8 @@ eviction policy, live peers).
       `perform` then receives the ciphertext.
 - [ ] `config.periodic` blocks kept as they are; sidekiq-cron entries moved
       ([§6](#moving-a-live-sidekiq-cron-schedule)).
-- [ ] Process command lines: `sidekiq` → `wurk` or `wurkswarm` (`bundle exec sidekiq` runs Wurk
-      only through the shim gem; `sidekiqswarm` is an alias). `config/sidekiq.yml` is still
+- [ ] Process command lines can stay: `sidekiq` and `sidekiqswarm` ship as aliases of `wurk` and
+      `wurkswarm` ([§3](#3-running-a-worker-process)). `config/sidekiq.yml` is still
       discovered. `SIDEKIQ_MAXMEM_MB`, `SIDEKIQ_LEADER` and `SIDEKIQ_COUNT` are honoured.
 - [ ] `WURK_COUNT × concurrency` sized against your DB connection limit and memory
       ([§2](#2-concurrency-vs-parallelism-read-this)). How the default process count
@@ -939,6 +945,17 @@ Every job runs inside `Rails.application.reloader`, in every boot mode. Set
 - [ ] Nothing reads `failed_at`, `created_at`, `enqueued_at` or `retried_at` raw and treats them
       as seconds: [they become milliseconds](#millisecond-timestamps-on-a-7x-app).
       `grep -rnE "\[['\"](failed_at|created_at|enqueued_at|retried_at)['\"]\]" app lib`.
+- [ ] Jobs that move money, or call anything that is not idempotent, check a key of their own
+      before acting. After a hard kill (`SIGKILL`, OOM, node loss) a job that had just finished
+      can run once more, because its ACK rides the next fetch: the window is until that fetch,
+      where Pro's is the moment after `perform` returns
+      ([divergence](idea/parity-divergences.md#the-ack-is-deferred-onto-the-next-fetch-not-sent-when-the-job-finishes)).
+- [ ] Death handlers that alert someone (Slack, PagerDuty) expect poison kills: a job whose
+      worker died under it a fourth time in 72h goes to the dead set through `death_handlers`,
+      with a `PoisonPill::Poisoned` exception. A crash-looping job is one
+      alert per kill unless the handler groups them
+      ([divergence](idea/parity-divergences.md#poison-pill-counter-resets-on-ack-and-a-poison-kill-fires-death-handlers),
+      [runbook](runbook.md#poison-job-storm)).
 
 **Operations**
 
@@ -946,6 +963,10 @@ Every job runs inside `Rails.application.reloader`, in every boot mode. Set
       metrics endpoints per [deployment](deployment.md) and [metrics](metrics.md); an
       alert on dead-set growth and on `queue:*|*` key count. Keep
       [the runbook](runbook.md) open on the night.
+- [ ] Latency alerts survive a rollback to 7.x: there, `Sidekiq::Queue#latency` reads about
+      `-1.79e12` for every job Wurk enqueued, so a `latency > N` alert stays quiet until those jobs
+      have run ([millisecond timestamps](#millisecond-timestamps-on-a-7x-app)). Watch queue size
+      too, or silence the latency alert for the rollback window. A rollback to 8.x reads them right.
 - [ ] Probes that grep `ps` for `sidekiq` are replaced. A Wurk worker's process title differs, so
       such a probe restarts a healthy pod. Use `wurk health`, which boots no app and exits 0 when
       this host has a recent heartbeat ([deployment](deployment.md#health-probes)).
@@ -1181,7 +1202,7 @@ the shim, cut over, and replace them later, or not at all.
 ```ruby
 # Gemfile
 gem "wurk"
-gem "sidekiq", github: "developerz-ai/wurk", glob: "ecosystem/sidekiq-shim/*.gemspec"
+gem "sidekiq", github: "developerz-ai/wurk", tag: "v1.12.0", glob: "ecosystem/sidekiq-shim/*.gemspec"
 gem "sidekiq-unique-jobs"
 gem "sidekiq-cron"
 gem "sidekiq-failures"

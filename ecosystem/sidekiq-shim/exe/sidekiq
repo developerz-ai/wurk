@@ -1,5 +1,0 @@
-#!/usr/bin/env ruby
-# frozen_string_literal: true
-
-# `bundle exec sidekiq` in a bundle where this gem stands in for Sidekiq.
-load Gem.bin_path('wurk', 'wurk')

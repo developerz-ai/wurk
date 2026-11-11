@@ -37,9 +37,8 @@
 - entry: "Private-list names include a process-image nonce"
   anchor: "lib/wurk/fetcher/reliable.rb#L78-L86"
   fragment: |-
-    def self.private_queue_name(public_queue, index = 0)
-      host = ENV['DYNO'] || Socket.gethostname
-      "#{public_queue}|#{host}|#{::Process.pid}|#{Component::PROCESS_NONCE}|#{index}"
+    def self.private_queue_name(public_queue, index = 0, pid: ::Process.pid)
+      "#{public_queue}|#{Component.hostname}|#{pid}|#{Component::PROCESS_NONCE}|#{index}"
 
 - entry: "Private-list names include a process-image nonce"
   anchor: "lib/wurk/component.rb#L20-L22"
@@ -62,14 +61,14 @@
     end
 
 - entry: "Rolling restart drives itself from the supervise loop; no einhorn"
-  anchor: "lib/wurk/swarm.rb#L266-L268"
+  anchor: "lib/wurk/swarm.rb#L272-L274"
   fragment: |-
     def rolling_restart
       @lock.synchronize { @restart.enqueue(@children.keys) }
     end
 
 - entry: "Rolling restart drives itself from the supervise loop; no einhorn"
-  anchor: "lib/wurk/swarm.rb#L481-L495"
+  anchor: "lib/wurk/swarm.rb#L502-L516"
   fragment: |-
     when :usr1 then rolling_restart
 
@@ -85,34 +84,34 @@
     when :usr2 then reopen_logs
 
 - entry: "USR2 reopens logs; RSS recycling uses the rolling-restart machine"
-  anchor: "lib/wurk/swarm.rb#L481-L495"
+  anchor: "lib/wurk/swarm.rb#L502-L516"
   fragment: |-
     when :usr2
       reopen_logs
       relay_signal('USR2')
 
 - entry: "USR2 reopens logs; RSS recycling uses the rolling-restart machine"
-  anchor: "lib/wurk/swarm.rb#L510-L514"
+  anchor: "lib/wurk/swarm.rb#L531-L535"
   fragment: |-
     def reopen_logs
       log = @config.logger
       log.reopen if log.respond_to?(:reopen)
 
 - entry: "USR2 reopens logs; RSS recycling uses the rolling-restart machine"
-  anchor: "lib/wurk/swarm.rb#L667-L669"
+  anchor: "lib/wurk/swarm.rb#L714-L716"
   fragment: |-
     def relay_signal(sig)
       child_pids.each { |pid| safe_kill(pid, sig) }
     end
 
 - entry: "USR2 reopens logs; RSS recycling uses the rolling-restart machine"
-  anchor: "lib/wurk/swarm.rb#L637-L656"
+  anchor: "lib/wurk/swarm.rb#L684-L703"
   fragment: |-
     logger.warn { "swarm: child #{pid} RSS #{rss}KB >= #{@memory_limit}KB; recycling" }
     @lock.synchronize { @restart.enqueue([pid]) }
 
 - entry: "USR2 reopens logs; RSS recycling uses the rolling-restart machine"
-  anchor: "lib/wurk/swarm.rb#L266-L268"
+  anchor: "lib/wurk/swarm.rb#L272-L274"
   fragment: |-
     @lock.synchronize { @restart.enqueue(@children.keys) }
 
@@ -137,14 +136,14 @@
     cur[:phase] = :await_exit
 
 - entry: "Reaper liveness has a residual local pid-reuse blind spot — shared with `super_fetch`, not fixed"
-  anchor: "lib/wurk/fetcher/reaper.rb#L255-L266"
+  anchor: "lib/wurk/fetcher/reaper.rb#L265-L276"
   fragment: |-
     def orphaned?(key, owner, owners)
       _public_q, host, pid, nonce = owner
       return !local_pid_alive?(pid) if nonce == process_nonce && host == hostname
 
 - entry: "Reaper liveness has a residual local pid-reuse blind spot — shared with `super_fetch`, not fixed"
-  anchor: "lib/wurk/fetcher/reaper.rb#L282-L292"
+  anchor: "lib/wurk/fetcher/reaper.rb#L293-L303"
   fragment: |-
     def local_pid_alive?(pid)
       ::Process.kill(0, pid)

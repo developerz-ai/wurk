@@ -1,6 +1,4 @@
 # Every test that reads docs, policy or workflow files. `bin/rake test:guards` runs
-# these, and a docs-only pull request runs them instead of the full suite.
-# test/unit/guard_manifest_test.rb fails if a test that reads such a file is missing.
 test/integration/ecosystem_watcher_test.rb
 test/unit/ai_config_test.rb
 test/unit/anchor_repin_test.rb
@@ -17,7 +15,9 @@ test/unit/deploy_demo_workflow_test.rb
 test/unit/docs_links_test.rb
 test/unit/ecosystem_workflow_permissions_test.rb
 test/unit/forbidden_claims_test.rb
+test/unit/global_test_mode_guard_test.rb
 test/unit/guard_manifest_test.rb
+# test/unit/guard_manifest_test.rb fails if a test that reads such a file is missing.
 test/unit/health_brief_test.rb
 test/unit/llms_full_test.rb
 test/unit/llms_txt_test.rb
@@ -33,6 +33,7 @@ test/unit/release_smoke_workflow_test.rb
 test/unit/release_states_doc_test.rb
 test/unit/release_workflow_test.rb
 test/unit/scheduled_briefs_test.rb
+test/unit/shim_pin_test.rb
 test/unit/sidekiq_require_shims_test.rb
 test/unit/site_code_blocks_test.rb
 test/unit/spec_constants_test.rb
@@ -41,3 +42,4 @@ test/unit/test_workflow_permissions_test.rb
 test/unit/toolchain_pins_test.rb
 test/unit/topology_workflow_test.rb
 test/unit/wiki_pages_test.rb
+# these, and a docs-only pull request runs them instead of the full suite.

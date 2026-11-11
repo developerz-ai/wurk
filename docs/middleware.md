@@ -166,7 +166,7 @@ gate on `config.server?`:
 ```ruby
 def configure_server(&block)
   return unless block
-  return yield self if server?
+  return run_server_block(block) if server?  # block.call(self), noting it ran
 
   @deferred_server_blocks << block
   return if @configure_server_skip_warned
@@ -182,7 +182,7 @@ def configure_client
   return if @configure_client_skip_warned
 
   @configure_client_skip_warned = true
-  logger.warn { 'configure_client block skipped: server? is true and client_in_server is false or nil' }
+  logger.debug { 'configure_client block skipped: server? is true and client_in_server is false or nil' }
   nil
 end
 ```
@@ -560,8 +560,8 @@ required — not `Sidekiq::Middleware::CurrentAttributes`.
 
 ### `PoisonPill` — not a chain middleware
 
-`Wurk::Middleware::PoisonPill` lives in the middleware directory but is
-**never registered on either chain**. It's a module the orphan reclaim
+`Wurk::Middleware::PoisonPill` keeps its Pro constant but lives at
+`lib/wurk/fetcher/poison_pill.rb`, and it is **never registered on either chain**. It's a module the orphan reclaim
 (`Fetcher::OrphanReclaim`, used by the reaper and by a live worker's own
 private-list check) calls via
 `PoisonPill.recovered!(payload, job, count:, queue:, config:)`.

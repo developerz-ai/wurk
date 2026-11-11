@@ -239,7 +239,10 @@ Consequences worth internalizing:
   how many `perform_in` calls you made. To assert on the scheduled ZSET, test
   with the mode disabled (see § 8).
 - In `:inline` mode a scheduled job runs **immediately** — the delay is
-  discarded, not honored.
+  discarded, not honored. That holds for `perform_in`, `perform_at`,
+  `set(wait:)` and ActiveJob's `set(wait:).perform_later` alike, as on Sidekiq,
+  so there is no need to patch `perform_in` or the adapter's `enqueue_at` to run
+  inline.
 
 ---
 
@@ -296,6 +299,21 @@ untouched by them:
 So: point your test environment at a real (ideally per-worker, isolated) Redis
 database even when you run in `:fake` mode, and flush it between tests. Batch and
 unique-job assertions belong in the real-Redis tier below.
+
+A suite with no Redis at all can still use the modes, provided nothing on that
+list runs. Sidekiq Enterprise's own setup line leaves uniqueness off in tests,
+and it works unchanged here:
+
+```ruby
+# config/initializers/wurk.rb
+Sidekiq::Enterprise.unique! unless Rails.env.test?
+```
+
+The push itself never dials Redis in `:fake` or `:inline` mode.
+`Sidekiq.redis { ... }` called from your own code (a health check, a cache) still
+does. With nothing listening it gives up only after several seconds, because the
+pool retries a failed connect with backoff, so stub those calls in a Redis-less
+suite.
 
 ---
 

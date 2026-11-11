@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require 'socket'
 require_relative '../component'
 require_relative '../pid_cache'
 require_relative '../keys'
@@ -80,10 +79,10 @@ module Wurk
       # reaper's `kill(0)` liveness check would read a dead owner's list as
       # live (jobs stranded) or a live owner's as dead (job run twice). Keys
       # written before the nonce existed stay reclaimable — PrivateListKey
-      # accepts both shapes.
-      def self.private_queue_name(public_queue, index = 0)
-        host = ENV['DYNO'] || Socket.gethostname
-        "#{public_queue}|#{host}|#{::Process.pid}|#{Component::PROCESS_NONCE}|#{index}"
+      # accepts both shapes. `pid:` lets a swarm parent name a reaped child's
+      # lists (Reaper#reclaim_exited).
+      def self.private_queue_name(public_queue, index = 0, pid: ::Process.pid)
+        "#{public_queue}|#{Component.hostname}|#{pid}|#{Component::PROCESS_NONCE}|#{index}"
       end
 
       # Guards the generation bump only. Fetchers read the counter without it —

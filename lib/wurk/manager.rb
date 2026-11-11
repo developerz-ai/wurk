@@ -167,10 +167,36 @@ module Wurk
 
       jobs = cleanup.map(&:job).compact
       logger.warn { "Terminating #{cleanup.size} busy threads" }
-      logger.debug { "Jobs still in progress #{jobs.inspect}" }
+      log_interrupted(jobs)
       # `&.` like #quiet: a TERM in the pre-prepare! window (traps install
       # before launcher.run) reaches here with no fetcher built yet.
       capsule.fetcher&.bulk_requeue(jobs)
+    end
+
+    # One WARN per job a deploy cut short, because each one runs again from the
+    # top (docs/idempotency.md) and the operator chasing a double side effect
+    # needs its jid. Capped: a capsule can hold hundreds of threads.
+    REQUEUE_LOG_LIMIT = 20
+    private_constant :REQUEUE_LOG_LIMIT
+
+    def log_interrupted(jobs)
+      jobs.first(REQUEUE_LOG_LIMIT).each do |uow|
+        logger.warn { "Interrupting #{describe_job(uow)}: past the shutdown deadline, it is requeued to run again" }
+      end
+      extra = jobs.size - REQUEUE_LOG_LIMIT
+      logger.warn { "Interrupting #{extra} more in-flight jobs, which run again too" } if extra.positive?
+    end
+
+    # The payload is parsed here, off the hot path, because the fetcher never
+    # parses. A plug-in fetcher's unit of work may carry something that is not
+    # job JSON; it is named by its queue alone.
+    def describe_job(uow)
+      job = Wurk.load_json(uow.job)
+      job = {} unless job.is_a?(::Hash)
+      klass = job['wrapped'] || job['class']
+      "#{klass} jid=#{job['jid']} queue=#{uow.queue_name}"
+    rescue ::JSON::ParserError, ::TypeError
+      "job queue=#{uow.queue_name}"
     end
 
     # The @workers Set is mutated from Processor threads (processor_result)

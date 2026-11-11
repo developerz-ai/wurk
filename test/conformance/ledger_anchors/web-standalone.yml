@@ -41,28 +41,28 @@
       Wurk::Processor::EXPIRED.incr
       Wurk::Metrics::Statsd.increment('jobs.expired', tags: ["class:#{job['class']}"])
 - entry: '`Sidekiq::Web` outside a Rails app routes extensions only'
-  anchor: 'lib/wurk/web/rack_app.rb#L9-L19'
+  anchor: 'lib/wurk/web/rack_app.rb#L11-L21'
   fragment: |-
     # §25.1): unsafe methods must carry `Sec-Fetch-Site: same-origin`.
     SAFE_METHODS = %w[GET HEAD OPTIONS TRACE].freeze
 - entry: '`Sidekiq::Web` outside a Rails app routes extensions only'
-  anchor: 'lib/wurk/web/rack_app.rb#L42-L51'
+  anchor: 'lib/wurk/web/rack_app.rb#L44-L53'
   fragment: |-
     @standalone_app ||= Authorization.new(method(:dispatch), api_handoff: false)
 - entry: '`Sidekiq::Web` outside a Rails app routes extensions only'
-  anchor: 'lib/wurk/web/rack_app.rb#L53-L62'
+  anchor: 'lib/wurk/web/rack_app.rb#L55-L64'
   fragment: |-
     def safe_request?(env)
       SAFE_METHODS.include?(env['REQUEST_METHOD']) ||
         env['HTTP_SEC_FETCH_SITE'] == 'same-origin'
 - entry: '`Sidekiq::Web` outside a Rails app routes extensions only'
-  anchor: 'lib/wurk/web/rack_app.rb#L56-L73'
+  anchor: 'lib/wurk/web/rack_app.rb#L58-L75'
   fragment: |-
     result = extension_result(ext, env)
       next unless result
       return rackify(result) unless result[0] == 404
 - entry: '`Sidekiq::Web` outside a Rails app routes extensions only'
-  anchor: 'config/routes.rb#L4-L11'
+  anchor: 'config/routes.rb#L9-L16'
   fragment: |-
     scope :api, defaults: { format: :json } do
       get  'meta',             to: 'api#meta'
@@ -135,12 +135,12 @@
     def web_redis_pool
       @web_redis_pool ||= build_redis_pool(size: web_pool_size, name: 'web', pool_timeout: WEB_POOL_TIMEOUT)
 - entry: 'Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported'
-  anchor: 'lib/wurk/configuration.rb#L1219-L1223'
+  anchor: 'lib/wurk/configuration.rb#L1240-L1244'
   fragment: |-
     def build_redis_pool(size:, name:, **overrides)
       RedisPool.new(size: size, name: name, on_error: method(:dispatch_redis_error),
 - entry: 'Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported'
-  anchor: 'lib/wurk/swarm.rb#L356-L360'
+  anchor: 'lib/wurk/swarm.rb#L377-L381'
   fragment: |-
     # Step 3.
     def close_parent_sockets

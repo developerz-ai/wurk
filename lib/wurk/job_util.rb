@@ -73,6 +73,20 @@ module Wurk
       seconds.finite? && seconds.positive?
     end
 
+    # A Duration's `to_s`: "5" for `5.seconds`, "1.5" for `1.5.seconds`. Same
+    # shape {Wurk::Unique.coerce_ttl} reads back from a `unique_for`.
+    NUMERIC_SECONDS = /\A\d+(?:\.\d+)?\z/
+
+    # The read side of a bound, as a Float or nil. Wider than
+    # {positive_seconds?} by one shape only: wurk < 1.12 wrote a Duration
+    # `timeout:` into the payload as its String ("5"), and those jobs are still
+    # queued. Never used to decide what is written; {validate_bounds!} keeps
+    # rejecting a String at declaration.
+    def self.payload_seconds(value)
+      value = value.to_f if value.is_a?(::String) && NUMERIC_SECONDS.match?(value)
+      value.to_f if positive_seconds?(value)
+    end
+
     # The exact bytes a job is stored as inside the `schedule` ZSET. `at` is
     # dropped because it *is* the score, and `enqueued_at` because it marks
     # arrival on an immediate queue — the promoter restamps it on the way out

@@ -158,7 +158,7 @@ class PreflightTest < Wurk::Test::UnitCase
       File.write(path, "# app code\n")
 
       assert_includes codes(run_doc('preflight', '--app', path)), 'app_code_ran'
-      assert_includes @err.string, 'not read-only'
+      assert_includes @err.string, 'refuse writes'
     end
   end
 
@@ -363,6 +363,33 @@ class PreflightTest < Wurk::Test::UnitCase
       run_doc('preflight', '--app', dir)
 
       assert $preflight_app_booted # rubocop:disable Style/GlobalVars
+    end
+  end
+
+  # An app that writes Redis while it boots (a dev-only flushdb, a seed) must not
+  # reach the server a read-only command was pointed at.
+  def test_an_app_that_writes_redis_while_it_boots_fails_without_writing
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, 'writes.rb')
+      File.write(path, "Wurk.redis { |conn| conn.call('SET', 'preflight:written', '1') }\n")
+      out, status = Open3.capture2e({ 'REDIS_URL' => Wurk::Test.redis_url, 'COVERAGE' => nil }, ::RbConfig.ruby,
+                                    EXE, 'preflight', '--app', path)
+
+      assert_equal 2, status.exitstatus, out
+      assert_match(/wurk preflight --app: \S*writes\.rb:1 sent SET while the app booted/, out)
+      assert_nil @redis.call('GET', 'preflight:written')
+    end
+  end
+
+  def test_app_rows_read_the_app_source
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, 'config'))
+      File.write(File.join(dir, 'config', 'environment.rb'), "# booted\n")
+      File.write(File.join(dir, 'config', 'server.rb'), "Sidekiq.redis(&:flushdb) if ENV['NEVER_SET_HERE']\n")
+
+      doc = run_doc('preflight', '--app', dir)
+
+      assert_includes warnings(doc), 'flush_at_boot'
     end
   end
 

@@ -363,6 +363,47 @@ class ManagerTest < Wurk::Test::UnitCase
     assert_equal workers.sort_by(&:object_id), killed.sort_by(&:object_id)
   end
 
+  # A job cut short by a deploy runs again from the top; the WARN names each
+  # one so a doubled side effect can be traced to its jid.
+  def test_hard_shutdown_names_each_interrupted_job
+    log = StringIO.new
+    @config.logger = ::Logger.new(log)
+    mgr = Wurk::Manager.new(@capsule)
+    workers = mgr.workers.to_a
+    jobs = [make_uow(Wurk.dump_json('class' => 'BillJob', 'jid' => 'j1')),
+            make_uow(Wurk.dump_json('class' => 'Sidekiq::ActiveJob::Wrapper', 'wrapped' => 'MailJob', 'jid' => 'j2')),
+            make_uow('not json')]
+    workers.zip(jobs).each do |w, uow|
+      w.define_singleton_method(:job) { uow }
+      w.define_singleton_method(:kill) { nil }
+    end
+    @capsule.fetcher.define_singleton_method(:bulk_requeue) { |_| nil }
+
+    mgr.hard_shutdown
+
+    assert_match(/Interrupting BillJob jid=j1 /, log.string)
+    assert_match(/Interrupting MailJob jid=j2 /, log.string)
+    assert_match(/Interrupting job queue=/, log.string)
+  end
+
+  def test_hard_shutdown_caps_the_per_job_lines
+    log = StringIO.new
+    @config.logger = ::Logger.new(log)
+    @capsule.concurrency = 25
+    mgr = Wurk::Manager.new(@capsule)
+    mgr.workers.each_with_index do |w, i|
+      uow = make_uow(Wurk.dump_json('class' => 'LongJob', 'jid' => "j#{i}"))
+      w.define_singleton_method(:job) { uow }
+      w.define_singleton_method(:kill) { nil }
+    end
+    @capsule.fetcher.define_singleton_method(:bulk_requeue) { |_| nil }
+
+    mgr.hard_shutdown
+
+    assert_equal 20, log.string.scan('Interrupting LongJob').size
+    assert_includes log.string, 'Interrupting 5 more in-flight jobs'
+  end
+
   # K12: Redis down mid-drain makes bulk_requeue raise. The processors must
   # still be killed — embedded, the host outlives #stop and live threads would
   # keep running jobs over the pools the launcher resets next.

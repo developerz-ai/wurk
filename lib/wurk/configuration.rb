@@ -877,7 +877,7 @@ module Wurk
     # and the like silently absent from a process that does run workers.
     def configure_server(&block)
       return unless block
-      return yield self if server?
+      return run_server_block(block) if server?
 
       @deferred_server_blocks << block
       return if @configure_server_skip_warned
@@ -889,21 +889,32 @@ module Wurk
 
     def enter_server_mode
       self[:server] = true
-      @deferred_server_blocks.shift.call(self) until @deferred_server_blocks.empty?
+      run_server_block(@deferred_server_blocks.shift) until @deferred_server_blocks.empty?
     end
 
     # A web process that also boots the swarm (Wurk::RailsBoot) is flagged
     # server, yet every enqueue it makes from a request is client work, so
-    # `client_in_server` lets its configure_client blocks run too. Same
-    # one-warning-per-gate contract as configure_server.
+    # `client_in_server` lets its configure_client blocks run too.
+    #
+    # In a server, skipping the client block is the Sidekiq contract and the
+    # usual case: an app configures both roles. So the skip itself is DEBUG,
+    # and BootChecks warns at boot only for the case worth one, a server
+    # process in which no configure_server block ran at all (#816).
     def configure_client
       return unless block_given?
       return yield self if !server? || @options[:client_in_server]
+
       return if @configure_client_skip_warned
 
       @configure_client_skip_warned = true
-      logger.warn { 'configure_client block skipped: server? is true and client_in_server is false or nil' }
+      logger.debug { 'configure_client block skipped: server? is true and client_in_server is false or nil' }
       nil
+    end
+
+    # True once a configure_client block was skipped and no configure_server
+    # block ran: the server got none of the settings the app made for a role.
+    def client_config_only?
+      @configure_client_skip_warned == true && !@configure_server_ran
     end
 
     def server?
@@ -920,8 +931,13 @@ module Wurk
 
     def topology=(value)
       guard_frozen!
+      @topology_assigned = true
       @topology = value
     end
+
+    # Whether the app declared a topology, as opposed to the default one
+    # #topology builds. Only a swarm reads it.
+    def topology_assigned? = @topology_assigned == true
 
     # Memory-based child recycling (Sidekiq Ent §7.5): the swarm parent TERMs
     # (and respawns) any child whose RSS exceeds this many MB. Set in code or
@@ -1001,6 +1017,11 @@ module Wurk
 
     private
 
+    def run_server_block(block)
+      @configure_server_ran = true
+      block.call(self)
+    end
+
     # Pools read the hash once, when built, so the later assignment silently does
     # nothing to this process's connections until something rebuilds them.
     def warn_on_late_redis_assignment
@@ -1079,7 +1100,7 @@ module Wurk
     # as throttling or memory pressure.
     def default_child_count
       count, source = child_count_and_source
-      logger.info { "Wurk swarm: forking #{count} #{count == 1 ? 'child' : 'children'} (#{source})" }
+      logger.info { "Wurk swarm size: #{count} #{count == 1 ? 'child' : 'children'} (#{source})" }
       count
     end
 

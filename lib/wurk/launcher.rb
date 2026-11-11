@@ -47,6 +47,20 @@ module Wurk
     # (Sidekiq's drop-in surface). The single source of truth is Heartbeat.
     BEAT_PAUSE = Heartbeat::BEAT_PAUSE
 
+    # The process title, upstream's format and program name word for word:
+    # `sidekiq 8.1.5 myapp [3 of 10 busy]`, then `stopping` once quieted. Probes
+    # and runbooks that `ps | grep '^sidekiq'` or read the busy count keep
+    # working across the gem swap. Mutable like upstream's, so code that appends
+    # its own segment still can. docs/target/ is silent; the oracle is Sidekiq
+    # 8.1's Launcher (docs/deployment.md, "Process titles").
+    PROCTITLES = [ # rubocop:disable Style/MutableConstant
+      proc { 'sidekiq' },
+      proc { ::Sidekiq::VERSION },
+      proc { |_me, data| data['tag'] },
+      proc { |me, _data| "[#{Processor::WORK_STATE.size} of #{me.config.total_concurrency} busy]" },
+      proc { |me, _data| 'stopping' if me.stopping? }
+    ]
+
     # Bound on how long #stop waits for the boot-time reclaim sweep before
     # moving on — it can still be scanning a large keyspace when a fast
     # shutdown lands right after boot; teardown must not hang on it.
@@ -96,9 +110,12 @@ module Wurk
     #   3. start the managers. Everything below is periodic background work
     #      whose first tick is seconds away, so it has nothing to gain from
     #      going ahead of them.
-    #   4. start the reaper and the boot-time reclaim sweep — kill-9 recovery,
-    #      not decoration: a SIGKILLed sibling's in-flight jobs wait on this,
-    #      so it stays ahead of the periodic loops.
+    #   4. start the reaper and the boot-time reclaim sweep, ahead of the
+    #      periodic loops: a process restarted outside a swarm (exe/wurk under
+    #      systemd, a pod) has its previous incarnation's jobs recovered from
+    #      here. The sweep takes the cluster reaper lock, so a fleet booting
+    #      together makes one keyspace pass; a swarm child's SIGKILLed sibling
+    #      is recovered by the parent, not by this sweep.
     #   5. write the `config.periodic` registrations (Ent registers loops on
     #      startup), then start the periodic loops. None of them ticks at
     #      zero — TimerLoop#run waits an interval before its first yield,
@@ -404,10 +421,20 @@ module Wurk
     # the dashboard queued at `<identity>-signals`. Lazily builds the
     # Heartbeat the first time we beat so callers that bypass `run`
     # (embedded mode, tests) still work.
+    # An embedded launcher shares its process with the host, whose title it is.
     def beat
+      $PROGRAM_NAME = proctitle unless @embedded
       ensure_heartbeat
       sigs = @heartbeat.beat!
       sigs&.each { |sig| dispatch_signal(sig) }
+    end
+
+    # Upstream hands each segment the process's heartbeat data; these are the
+    # fields of it a title can use without a Redis read.
+    def proctitle
+      data = { 'tag' => @config[:tag] || default_tag, 'identity' => identity, 'hostname' => hostname,
+               'pid' => ::Process.pid, 'concurrency' => @config.total_concurrency }
+      PROCTITLES.map { |segment| segment.call(self, data) }.compact.join(' ')
     end
 
     def ensure_heartbeat

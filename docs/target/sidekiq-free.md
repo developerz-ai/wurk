@@ -954,7 +954,7 @@ class Sidekiq::JobLogger
 end
 ```
 
-Logs `"start"` / `"done"` / `"fail"` at INFO. `Sidekiq::Context.add(:elapsed, ms)`. Respects `config[:skip_default_job_logging]`. Per-job `log_level`. Thread-local context hash populated from `config[:logged_job_attributes]` (default `["bid","tags"]`).
+Logs `"start"` / `"done"` / `"fail"` at INFO. `Sidekiq::Context.add(:elapsed, seconds)` (Float, rounded to 3 places, so the line reads `elapsed=0.007`). Respects `config[:skip_default_job_logging]`. Per-job `log_level`. Thread-local context hash populated from `config[:logged_job_attributes]` (default `["bid","tags"]`).
 
 Pluggable via `config[:job_logger]`.
 

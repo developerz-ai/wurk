@@ -315,7 +315,7 @@ require_relative 'wurk/health'
 
 # Poison-pill detection — orphan recovery counter + dead set on threshold.
 # Spec: docs/target/sidekiq-pro.md §3.2.
-require_relative 'wurk/middleware/poison_pill'
+require_relative 'wurk/fetcher/poison_pill'
 
 # InterruptHandler self-prepends to the head of the server chain so a
 # cooperatively-cancelled job (IterableJob) is re-pushed + cleanly skipped

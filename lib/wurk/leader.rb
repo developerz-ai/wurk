@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require 'securerandom'
-require 'socket'
 require_relative 'component'
 require_relative 'fetcher/oom_drain'
 require_relative 'lua'
@@ -282,13 +281,7 @@ module Wurk
     # Matches `Wurk::Component#identity` so `ProcessSet::Process#leader?`
     # (which compares `dear-leader == process.identity`) sees a match.
     def cluster_identity
-      "#{hostname}:#{::Process.pid}:#{Component::PROCESS_NONCE}"
-    end
-
-    def hostname
-      ENV['DYNO'] || ::Socket.gethostname
-    rescue StandardError
-      'localhost'
+      Component.identity
     end
 
     def spawn_loop_thread

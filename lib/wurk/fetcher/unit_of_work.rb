@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require_relative '../queue_slot'
-require_relative '../middleware/poison_pill'
+require_relative 'poison_pill'
 
 module Wurk
   class Fetcher

@@ -19,7 +19,9 @@ module Wurk
     # Counter key TTL is wire-compat with Sidekiq Pro — third-party tooling
     # that watches `super_fetch:recovered:*` expects 72h.
     #
-    # No server-middleware registration: the producer is Fetcher::OrphanReclaim,
+    # Not a chain middleware, so the file lives with the fetcher; the constant
+    # keeps its Middleware path because Pro initializers name it. No
+    # server-middleware registration: the producer is Fetcher::OrphanReclaim,
     # whose script bumps the counter and takes the requeue-or-kill decision in
     # the same step as the move, then hands the outcome to {recovered!} for the
     # notifications. The consumer is the ACK —

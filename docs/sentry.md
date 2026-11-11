@@ -34,7 +34,7 @@ which satisfies a `sidekiq` dependency *with* Wurk:
 ```ruby
 # Gemfile — the escape hatch for gems you must keep
 gem "wurk"
-gem "sidekiq", github: "developerz-ai/wurk", glob: "ecosystem/sidekiq-shim/*.gemspec"
+gem "sidekiq", github: "developerz-ai/wurk", tag: "v1.12.0", glob: "ecosystem/sidekiq-shim/*.gemspec"
 gem "sentry-sidekiq"
 ```
 
@@ -78,6 +78,14 @@ gem "sentry-rails"   # optional
 
 `install!` is idempotent, so calling it twice (or from two initializers) never
 doubles a report.
+
+A failing job is reported on its **last** attempt, about 21 days after the first
+failure on the default 25-retry schedule. To also hear about it early, pass
+`report_after_attempts:` ([Hearing about it sooner](#hearing-about-it-sooner)):
+
+```ruby
+Wurk::Sentry.install!(config, report_after_attempts: 3)
+```
 
 ---
 
@@ -228,7 +236,42 @@ These stay in the logs. They just stop paging anyone.
 `Wurk::JobRetry::Handled`, `Wurk::JobRetry::Skip` and `Wurk::Shutdown` are the retry
 machinery's own signals and are never reported. `install!` also adds them to
 `Sentry.configuration.excluded_exceptions`, because a `Rails.error` subscriber such
-as sentry-rails sees what crosses the reloader without going through this handler.
+as sentry-rails sees what crosses the reloader without going through this handler
+([below](#railserror-subscribers)).
+
+### `Rails.error` subscribers
+
+With `config.rails.register_error_subscriber = true`, sentry-rails also hears from
+Rails' error reporter. Each job runs inside `Rails.application.reloader.wrap(source:
+"job.sidekiq")`, and Rails reports whatever escapes that block, on **every
+attempt**, not only the terminal one. Stock Sidekiq behaves the same way:
+`test/parity/rails_error_reporting_test.rb` pins it. What escapes is:
+
+| The job | What `Rails.error` receives |
+|---|---|
+| raised | `Wurk::JobRetry::Handled`, with the job's exception as its `cause` |
+| raised `Sidekiq::JobRetry::Skip` (a limiter reschedule, an interrupt re-push) | the `Skip` |
+| names a class that does not load (a deploy that removed it, a typo) | the `NameError` itself |
+
+The first two are retry signals, and `install!` excludes them. The `NameError` is a
+real failure, so it is reported once per attempt. To hear it once, fix or discard
+the job; excluding `NameError` would hide it everywhere else in the app too.
+
+A process that never calls `install!` (the web process, or a `Sentry.init` that
+runs before Wurk's initializer) can exclude the same signals itself:
+
+```ruby
+# config/initializers/sentry.rb
+require "wurk/sentry"
+
+Sentry.init do |config|
+  config.excluded_exceptions += Wurk::Sentry.excluded_exceptions
+end
+```
+
+`Wurk::Sentry.excluded_exceptions` is a frozen list of class names. Sentry matches
+them by ancestry, so `Handled` also covers `Skip`, its subclass. It holds only the
+retry signals: whether to drop `RedisClient` errors on the web side is your call.
 
 Turn it off, or change the list. A list you pass is matched by ancestry and taken at
 its word, so one containing `RedisClient::ConnectionError` (including
@@ -253,12 +296,27 @@ retries. Filtering is about the infrastructure loop, not about your jobs.
 
 ---
 
+## Other error reporters
+
+Any reporter that registers through `Sidekiq.configure_server` and
+`config.error_handlers` works unchanged. Every job failure reaches each handler
+once, with the job's own exception and `context: "Job raised exception"`. None of
+them gets the terminal-attempt rule above: they report every attempt, as they do
+on Sidekiq.
+
+| Reporter | Under Wurk |
+|---|---|
+| Bugsnag (`bugsnag` 6.30) | Works out of the box. It loads its Sidekiq integration on require, which `require "sidekiq"`s (Wurk's entry point), adds an error handler and a server middleware, and tags events with the job and queue. Read from its source; not run in Wurk's CI |
+| Honeybadger, AppSignal, Rollbar, Airbrake | Untested. Each ships a Sidekiq integration; one that goes through `error_handlers` or server middleware gets the contract above |
+| Anything on `Rails.error` | Sees each attempt, as described in [`Rails.error` subscribers](#railserror-subscribers) |
+
 ## API
 
 ```ruby
 Wurk::Sentry.install!(config = Wurk.configuration,
                       filter_transport_errors: true,
-                      filtered_error_classes: nil) # => config
+                      filtered_error_classes: nil,
+                      report_after_attempts: nil) # => config
 ```
 
 | Argument | Default | Meaning |
@@ -266,9 +324,11 @@ Wurk::Sentry.install!(config = Wurk.configuration,
 | `config` | `Wurk.configuration` | the `Wurk.configure_server` block argument |
 | `filter_transport_errors:` | `true` | drop self-healing transport errors in the error handler |
 | `filtered_error_classes:` | `nil` | replaces `ErrorHandler::DEFAULT_FILTERED_ERROR_CLASSES` |
+| `report_after_attempts:` | `nil` | also report the failure of attempt N, on top of the terminal one ([Hearing about it sooner](#hearing-about-it-sooner)) |
 
 ```ruby
-Wurk::Sentry.enabled?   # => sentry-ruby loaded AND Sentry.init has run
+Wurk::Sentry.enabled?               # => sentry-ruby loaded AND Sentry.init has run
+Wurk::Sentry.excluded_exceptions    # => frozen class names of the retry signals
 ```
 
 Nothing is auto-installed. `require "wurk/sentry"` on its own registers no

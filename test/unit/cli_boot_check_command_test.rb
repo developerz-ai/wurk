@@ -20,6 +20,7 @@ class CLIBootCheckCommandTest < Wurk::Test::UnitCase
   end
 
   def teardown
+    Wurk::Preflight::RedisGuard.uninstall if defined?(Wurk::Preflight::RedisGuard)
     @cli.config.reset_redis_pools!
     Wurk::CLI.reset_instance!
     Wurk.server = false
@@ -51,6 +52,59 @@ class CLIBootCheckCommandTest < Wurk::Test::UnitCase
                     eager_load_rails draw_routes], order
     assert_match(/wurk: boot-check \(as wurkswarm parent\);/, @out.string)
     assert_match(/booted as wurkswarm would/, @out.string)
+  end
+
+  def test_the_runner_flag_boots_the_single_process_path
+    parse(%w[boot-check --runner wurk])
+    order = []
+    %i[load_rails_framework preload_bundler_groups boot_application eager_load_application eager_load_rails
+       draw_routes].each { |m| @cli.define_singleton_method(m) { order << m } }
+
+    with_no_swarm_or_launcher { assert_equal 0, @cli.run_boot_check }
+
+    assert_equal %i[boot_application eager_load_rails draw_routes], order
+    assert_match(/wurk: boot-check \(as wurk\); 1 process/, @out.string)
+    assert_match(/booted as wurk would/, @out.string)
+  end
+
+  def test_an_unknown_runner_is_refused
+    error = assert_raises(Wurk::CLI::StartupError) { parse(%w[boot-check --runner sidekiq]) }
+
+    assert_match(/--runner: "sidekiq" is not one of wurkswarm, wurk/, error.message)
+  end
+
+  def test_a_topology_is_reported_ignored_under_the_single_process_runner
+    parse(%w[boot-check --runner wurk])
+    @cli.config.topology = Wurk::Topology.flat(count: 2, queues: %w[default], concurrency: 5)
+
+    @cli.run_boot_check(boot_app: false)
+
+    assert_match(/config.topology is set, but wurk runs a single process and ignores it/, @out.string)
+  end
+
+  # Without --redis no pool may open a connection while the app boots.
+  def test_the_app_boot_runs_behind_a_closed_redis_guard
+    parse(%w[boot-check])
+    seen = []
+    @cli.define_singleton_method(:boot_swarm_application) { seen << Wurk::RedisPool.guard }
+    @cli.define_singleton_method(:boot_check_reach) { nil }
+
+    @cli.run_boot_check
+
+    assert_equal [Wurk::Preflight::RedisGuard::Closed], seen
+    assert_nil Wurk::RedisPool.guard, 'the guard outlived the check'
+  end
+
+  def test_with_redis_the_app_boot_runs_behind_a_read_only_guard
+    parse(%w[boot-check --redis])
+    seen = []
+    @cli.define_singleton_method(:boot_swarm_application) { seen << Wurk::RedisPool.guard }
+    @cli.define_singleton_method(:boot_check_reach) { nil }
+    @cli.define_singleton_method(:boot_check_redis_info) { nil }
+
+    @cli.run_boot_check
+
+    assert_equal [Wurk::Preflight::RedisGuard::ReadOnly], seen
   end
 
   def test_runs_the_app_checks_without_redis
@@ -91,7 +145,7 @@ class CLIBootCheckCommandTest < Wurk::Test::UnitCase
   def test_help_lists_the_command
     parse([])
 
-    assert_includes @cli.send(:option_parser, {}).to_s, 'boot-check Boot the app the way wurkswarm does'
+    assert_includes @cli.send(:option_parser, {}).to_s, 'boot-check Boot as wurkswarm (or --runner wurk) would'
   end
 
   private

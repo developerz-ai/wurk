@@ -79,11 +79,13 @@ class ReaperKill9Test < Wurk::Test::UnitCase
     super
   end
 
-  # A replacement's boot sweep is the fast recovery: with the periodic sweep out of
-  # reach, the job comes back only through it, however soon after boot its worker
-  # died. A lock around boot sweeps turned this from about 1s into a minute.
-  def test_a_child_killed_right_after_boot_is_recovered_by_its_replacements_boot_sweep
+  # The parent is the fast recovery: it reaps the child, so it knows the child is
+  # dead and which lists it held. With the periodic sweep out of reach and the
+  # sweep lock held, so that no boot sweep runs either, the job comes back only
+  # through the parent.
+  def test_the_parent_returns_a_sigkilled_childs_job_to_its_queue
     @config[:super_fetch_reaper_interval] = 3600
+    @observer.call('SET', Wurk::Fetcher::Reaper::LOCK_KEY, 'held-by-test', 'EX', 120)
     started = "#{@ns}-started"
     @observer.call('LPUSH', "queue:#{@queue_name}",
                    Wurk.dump_json('class' => 'ReaperKill9ParkedWorker', 'args' => [Wurk::Test.redis_url, started],
@@ -101,12 +103,12 @@ class ReaperKill9Test < Wurk::Test::UnitCase
       ::Process.kill('KILL', swarm.children.keys.first)
 
       assert wait_for(15) { @observer.call('GET', started).to_i >= 2 },
-             'the replacement did not recover the job within its boot'
+             'the parent did not return the killed child\'s job'
     ensure
       swarm.request_shutdown
       supervisor&.join(15)
       swarm.shutdown unless supervisor&.alive?
-      @observer.call('DEL', started)
+      @observer.call('DEL', started, Wurk::Fetcher::Reaper::LOCK_KEY)
     end
   end
 

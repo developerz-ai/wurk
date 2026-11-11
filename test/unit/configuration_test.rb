@@ -1045,7 +1045,7 @@ class ConfigurationTest < Wurk::Test::UnitCase
       assert_equal 2, log.string.lines.size
       assert_equal 1, log.string.scan('configure_server').size
       assert_equal 1, log.string.scan('configure_client').size
-      assert_includes log.string.lines.last, 'WARN'
+      assert_includes log.string.lines.last, 'DEBUG'
       assert_includes log.string.lines.last, 'server? is true'
       assert_includes log.string.lines.last, 'client_in_server is false or nil'
     end
@@ -1129,7 +1129,7 @@ class ConfigurationTest < Wurk::Test::UnitCase
       2.times { assert_nil(config.public_send(gate) { flunk 'skipped block ran' }) }
 
       assert_equal 1, log.string.lines.size
-      assert_includes log.string, 'WARN'
+      assert_includes log.string, gate == :configure_client ? 'DEBUG' : 'WARN'
       assert_includes log.string, "#{gate} block skipped"
     end
   end
@@ -1146,7 +1146,7 @@ class ConfigurationTest < Wurk::Test::UnitCase
 
       assert_nil(config.public_send(gate) { flunk 'skipped block ran' })
       assert_equal 1, log.string.lines.size
-      assert_includes log.string, 'WARN'
+      assert_includes log.string, gate == :configure_client ? 'DEBUG' : 'WARN'
       assert_includes log.string, "#{gate} block skipped"
     end
   end
@@ -1245,9 +1245,53 @@ class ConfigurationTest < Wurk::Test::UnitCase
       2.times { assert_nil(config.public_send(gate) { flunk 'skipped frozen block ran' }) }
 
       assert_equal 1, log.string.lines.size
-      assert_includes log.string, 'WARN'
+      assert_includes log.string, gate == :configure_client ? 'DEBUG' : 'WARN'
       assert_includes log.string, gate.to_s
     end
+  end
+
+  # #816 was about a server that never got the app's settings. The standard
+  # Sidekiq shape writes both blocks, so a client skip alone is no evidence.
+  def test_client_config_only_is_a_server_that_ran_no_server_block
+    @config.logger = ::Logger.new(IO::NULL)
+    @config.configure_server { nil }
+    @config.enter_server_mode
+
+    @config.configure_client { flunk 'client block ran in a server' }
+
+    refute_predicate @config, :client_config_only?
+
+    only_client = Wurk::Configuration.new(server: true)
+    only_client.logger = ::Logger.new(IO::NULL)
+
+    only_client.configure_client { flunk 'client block ran in a server' }
+
+    assert_predicate only_client, :client_config_only?
+  end
+
+  def test_topology_assigned_tells_a_declared_topology_from_the_default
+    @config.logger = ::Logger.new(IO::NULL)
+    @config.topology
+
+    refute_predicate @config, :topology_assigned?
+
+    @config.topology = Wurk::Topology.flat(count: 1, queues: %w[default], concurrency: 1)
+
+    assert_predicate @config, :topology_assigned?
+  end
+
+  # An adopter's initializer says a `config.periodic` inside `on(:startup)`
+  # "registers nothing". Every runner fires :startup before Launcher#boot applies
+  # the periodic set, and a registration after that is written as it comes.
+  def test_periodic_registered_from_a_startup_hook_reaches_redis
+    @config.logger = ::Logger.new(IO::NULL)
+    @config.on(:startup) { @config.periodic { |mgr| mgr.register('*/5 * * * *', 'StartupPeriodicJob') } }
+
+    @config[:lifecycle_events][:startup].each(&:call)
+    @config.apply_periodic!
+    @config.periodic { |mgr| mgr.register('0 * * * *', 'AfterApplyPeriodicJob') }
+
+    assert_equal %w[AfterApplyPeriodicJob StartupPeriodicJob], Wurk::Cron::LoopSet.new.map(&:klass).sort
   end
 
   # --- freeze! -----------------------------------------------------------
@@ -1386,7 +1430,7 @@ class ConfigurationTest < Wurk::Test::UnitCase
 
     @config.topology
 
-    assert_includes log.string, 'forking 3 children (WURK_COUNT=3)'
+    assert_includes log.string, 'Wurk swarm size: 3 children (WURK_COUNT=3)'
   end
 
   def test_default_child_count_logs_the_cpu_source_without_an_env
@@ -1396,7 +1440,7 @@ class ConfigurationTest < Wurk::Test::UnitCase
 
     @config.topology
 
-    assert_match(/forking #{cpus.count} child(ren)? \(#{Regexp.escape(cpus.source)}\)/, log.string)
+    assert_match(/Wurk swarm size: #{cpus.count} child(ren)? \(#{Regexp.escape(cpus.source)}\)/, log.string)
   end
 
   def test_fractional_count_logs_the_multiplier_and_cpu_source
