@@ -32,7 +32,10 @@ name=${1:-wurk}
 [[ "$name" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "bin/redis: NAME must be [A-Za-z0-9_-]+, got '$name'" >&2; exit 64; }
 
 dir="$ROOT/tmp/redis/$name"
-container="wurk-redis-$name"
+# The checkout's path is part of the container name: two checkouts may both
+# start a "wurk" server, and neither may remove the other's.
+checkout_id=$(printf '%s' "$ROOT" | cksum | cut -d' ' -f1)
+container="wurk-redis-$checkout_id-$name"
 
 # Bounded, so a port that some other program now holds can never hang the caller.
 ping() {
@@ -49,12 +52,25 @@ port_of() { [ -s "$dir/port" ] && cat "$dir/port"; }
 
 url_of() { echo "redis://127.0.0.1:$1"; }
 
+# A recorded port is ours only while our own process or container still holds
+# it; a PONG alone could come from whatever server took the port since.
+owned() {
+  local d=${1:-$dir} c=${2:-$container}
+  if [ -f "$d/redis.pid" ] && kill -0 "$(cat "$d/redis.pid")" 2>/dev/null; then return 0; fi
+  [ "$(docker inspect -f '{{.State.Running}}' "$c" 2>/dev/null)" = true ]
+}
+
 start() {
   mkdir -p "$dir"
   local port
   port=$(port_of || true)
-  if [ -n "$port" ] && ping "$port"; then url_of "$port"; return; fi
-  [ -n "$port" ] || { port=$(free_port); echo "$port" >"$dir/port"; }
+  if [ -n "$port" ] && owned && ping "$port"; then url_of "$port"; return; fi
+  if [ -z "$port" ] || ping "$port"; then
+    # Never recorded, or another server now answers there: take a fresh port.
+    rm -f "$dir/redis.pid"
+    port=$(free_port)
+    echo "$port" >"$dir/port"
+  fi
 
   if command -v redis-server >/dev/null; then
     redis-server --port "$port" --bind 127.0.0.1 --save '' --appendonly no \
@@ -90,10 +106,15 @@ stop() {
 
 case "$cmd" in
   up) start ;;
-  env) echo "export REDIS_URL=$(start)" ;;
+  env)
+    # Separate from the echo: `echo "...$(start)"` would print an empty URL
+    # and exit 0 when start fails, and the eval would fall back to :6379.
+    url=$(start)
+    echo "export REDIS_URL=$url"
+    ;;
   url)
     port=$(port_of || true)
-    if [ -n "$port" ] && ping "$port"; then url_of "$port"; else exit 1; fi
+    if [ -n "$port" ] && owned && ping "$port"; then url_of "$port"; else exit 1; fi
     ;;
   down) stop ;;
   ls)
@@ -101,7 +122,7 @@ case "$cmd" in
       [ -d "$d" ] || continue
       n=$(basename "$d")
       p=$(cat "$d/port" 2>/dev/null || echo '?')
-      if [ "$p" != '?' ] && ping "$p"; then s=up; else s=down; fi
+      if [ "$p" != '?' ] && owned "$d" "wurk-redis-$checkout_id-$n" && ping "$p"; then s=up; else s=down; fi
       printf '%-16s %-6s %s\n' "$n" "$s" "$(url_of "$p")"
     done
     ;;
