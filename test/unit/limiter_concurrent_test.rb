@@ -171,13 +171,28 @@ class LimiterConcurrentTest < Wurk::Test::UnitCase
     waiter = nil
     l.within_limit do
       waiter = Thread.new { Wurk::Limiter.concurrent(name, 1, wait_timeout: 5).within_limit { :in } }
-      sleep 0.01 until waiter.backtrace&.first&.include?('sleep')
+      await_parked(waiter)
     end
 
     assert_equal :in, waiter.value
     s = l.status
 
     assert_equal [2, 1, 1, 0], s.values_at('held', 'immediate', 'waited', 'overages')
+  ensure
+    waiter&.kill&.join(1)
+  end
+
+  # Waits for `thread` to sleep in the limiter's retry loop. A waiter that
+  # finished instead (raised, or wrongly took the occupied slot) fails here
+  # rather than hanging the suite.
+  def await_parked(thread, within: 5)
+    now = -> { ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) }
+    deadline = now.call + within
+    until thread.backtrace&.first&.include?('sleep')
+      flunk("the waiter finished without waiting: #{thread.value.inspect}") unless thread.alive?
+      flunk("the waiter did not park within #{within}s") if now.call > deadline
+      sleep 0.01
+    end
   end
 
   # Acquire and release, the counters booked inside both scripts. Building

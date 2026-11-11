@@ -23,6 +23,9 @@ module Wurk
     # ever removed.
     module FastDelete
       WINDOW = 1000
+      # Matches one call rewrites before it hands the cursor on: each is an
+      # LSET that walks the list to its index (see fast_delete_window.lua).
+      MAX_REMOVED_PER_CALL = 100
 
       # No JSON payload starts with a NUL byte.
       TOMBSTONE = "\0wurk-fast-delete\0"
@@ -30,13 +33,13 @@ module Wurk
       module_function
 
       # [payloads removed, first removed payload or nil].
-      def call(conn, key, needle, window: WINDOW)
+      def call(conn, key, needle, window: WINDOW, max_removed: MAX_REMOVED_PER_CALL)
         cursor = 0
         removed = 0
         first = nil
         loop do
-          cursor, count, payload = Loader.eval_cached(conn, :fast_delete_window,
-                                                      keys: [key], argv: [needle, cursor, window, TOMBSTONE])
+          argv = [needle, cursor, window, TOMBSTONE, max_removed]
+          cursor, count, payload = Loader.eval_cached(conn, :fast_delete_window, keys: [key], argv: argv)
           removed += count
           first ||= payload
           return [removed, first] if cursor.negative?

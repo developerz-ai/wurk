@@ -38,6 +38,27 @@ class LuaFastDeleteTest < Wurk::Test::UnitCase
     assert_equal [99], args_left
   end
 
+  # A call stops at its match cap mid-window and the next call resumes right
+  # after the last entry it rewrote: nothing in the rest of that window is
+  # skipped, and no call rewrites more than the cap (review of #916: 1,000
+  # LSETs deep in a 1M-entry list held Redis 17ms in one call).
+  def test_a_call_stops_at_its_match_cap_and_the_next_resumes_the_window
+    seed(Array.new(WINDOW * 4) { |i| payload(i.odd? ? 'Victim' : 'Keep', i) } + [payload('Victim', 999)])
+    per_call = []
+    loader = Wurk::Lua::Loader.singleton_class
+    loader.alias_method(:__real_eval_cached, :eval_cached)
+    loader.define_method(:eval_cached) { |*a, **k| __real_eval_cached(*a, **k).tap { |r| per_call << r[1] } }
+
+    removed, = walk('"class":"Victim"', max_removed: 2)
+
+    assert_equal 15, removed
+    assert_operator per_call.max, :<=, 2
+    assert_equal((0...(WINDOW * 4)).select(&:even?), args_left)
+  ensure
+    loader.alias_method(:eval_cached, :__real_eval_cached)
+    loader.remove_method(:__real_eval_cached)
+  end
+
   def test_an_empty_or_missing_list
     assert_equal [0, nil], walk('"class":"Victim"')
   end
@@ -96,8 +117,8 @@ class LuaFastDeleteTest < Wurk::Test::UnitCase
 
   private
 
-  def walk(needle)
-    Wurk.redis { |c| Wurk::Lua::FastDelete.call(c, @key, needle, window: WINDOW) }
+  def walk(needle, max_removed: Wurk::Lua::FastDelete::MAX_REMOVED_PER_CALL)
+    Wurk.redis { |c| Wurk::Lua::FastDelete.call(c, @key, needle, window: WINDOW, max_removed: max_removed) }
   end
 
   def seed(payloads)
