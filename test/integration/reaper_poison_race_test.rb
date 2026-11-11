@@ -100,7 +100,11 @@ class ReaperPoisonRaceTest < Wurk::Test::UnitCase
     assert_predicate self, :parked?, 'the consumer never parked in BLMOVE'
   end
 
+  # Redis and Valkey report `cmd=blmove`; Dragonfly has no cmd= field. All
+  # three flag a client blocked on a list with `b`.
   def parked?
-    @observer.call('CLIENT', 'LIST').to_s.lines.any? { |l| l.include?("name=#{CONSUMER} ") && l.include?('cmd=blmove') }
+    @observer.call('CLIENT', 'LIST').to_s.lines.any? do |line|
+      line.include?("name=#{CONSUMER} ") && (line.include?('cmd=blmove') || line.match?(/\bflags=\S*b/))
+    end
   end
 end

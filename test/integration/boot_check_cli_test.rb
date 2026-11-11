@@ -43,7 +43,8 @@ class BootCheckCliTest < Wurk::Test::UnitCase
     out, status = boot_check(DUMMY, { 'REDIS_URL' => Wurk::Test.redis_url }, '--redis')
 
     assert_predicate status, :success?, out
-    assert_match(/Wurk #{Regexp.escape(Wurk::VERSION)} on redis/, out)
+    # The banner names the server: redis, valkey or dragonfly on the compat legs.
+    assert_match(/Wurk #{Regexp.escape(Wurk::VERSION)} on (?:redis|valkey|dragonfly) /, out)
     assert_equal before, keyspace
   end
 
