@@ -4,6 +4,10 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 Each release's notes live in their own file under [`docs/changelog/`](docs/changelog/); this page is the index, newest first. Not released yet: [`docs/changelog/unreleased.md`](docs/changelog/unreleased.md) ([diff since the last release][Unreleased]). A pull request with a user-visible change adds its line there.
 
+## [1.14.0] - 2026-11-11
+
+Performance release: the dashboard takes a fixed number of Redis round trips per read and loads 777 KB → ~104 KB brotli, `require "wurk"` loads 41% fewer files, a concurrent-limited job costs 2 round trips instead of 6, and a memory limit below a fresh child's size no longer fork-loops the swarm. [Release notes](docs/changelog/1.14.0.md).
+
 ## [1.13.0] - 2026-11-11
 
 `bundle exec sidekiq` and Sidekiq Web's probe and stats routes work after the gem swap, `wurk boot-check` can no longer write Redis, and job logs report `elapsed` in seconds as Sidekiq does. [Release notes](docs/changelog/1.13.0.md).
@@ -156,7 +160,8 @@ Releases publish to RubyGems through GitHub Actions OIDC trusted publishing, and
 
 First public (pre-1.0) release. [Release notes](docs/changelog/0.0.1.md).
 
-[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.13.0...HEAD
+[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.14.0...HEAD
+[1.14.0]: https://github.com/developerz-ai/wurk/compare/v1.13.0...v1.14.0
 [1.13.0]: https://github.com/developerz-ai/wurk/compare/v1.12.0...v1.13.0
 [1.12.0]: https://github.com/developerz-ai/wurk/compare/v1.11.1...v1.12.0
 [1.11.1]: https://github.com/developerz-ai/wurk/compare/v1.11.0...v1.11.1
