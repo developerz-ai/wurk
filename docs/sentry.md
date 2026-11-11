@@ -13,16 +13,16 @@ sentry-ruby (or before `Sentry.init` has run) does nothing.
 
 ## Why not `sentry-sidekiq`?
 
-Because it cannot be installed alongside Wurk. `sentry-sidekiq`'s gemspec
-declares:
+Because it installs only with the `sidekiq` shim gem, and the native
+`Wurk::Sentry` sees more. `sentry-sidekiq`'s gemspec declares:
 
 ```ruby
 spec.add_dependency "sidekiq", ">= 5.0"   # sentry-sidekiq 6.6.2
 ```
 
 Wurk is a drop-in *replacement*, not a plugin: you remove the `sidekiq` gem and
-the `Sidekiq::*` constants come from Wurk instead. Adding `sentry-sidekiq` pulls
-real Sidekiq back into the bundle, and `require "sidekiq"` then resolves to
+the `Sidekiq::*` constants come from Wurk instead. Adding `sentry-sidekiq` without the
+shim pulls real Sidekiq back into the bundle, and `require "sidekiq"` then resolves to
 whichever of the two Bundler put on the load path first. The result is a hybrid
 process — Wurk's swarm, Sidekiq's constants, or some interleaving of both — that
 fails in ways no stack trace explains.
@@ -67,8 +67,8 @@ end
 ```
 
 `Gemfile`: you need `sentry-ruby` (and `sentry-rails` if you want the rest of
-the Rails integration). You do **not** need — and must not add —
-`sentry-sidekiq`.
+the Rails integration). You do **not** need `sentry-sidekiq`
+(it installs only through the shim, [above](#why-not-sentry-sidekiq)).
 
 ```ruby
 gem "wurk"

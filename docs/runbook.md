@@ -209,9 +209,10 @@ r EXISTS "$(r GET dear-leader)"   # 1 if that process still heartbeats
 errors, the `sidekiq.jobs.poison` statsd counter is non-zero, and the logs show
 swarm children exiting and being respawned.
 
-A job is poisoned when three attempts in 72h never acknowledged because the process
-running it died (the counter is `super_fetch:recovered:<jid>`). Wurk then kills it
-to the dead set instead of letting it take down a fourth worker.
+A job is poisoned when it is orphaned a fourth time inside 72h without any attempt
+acknowledging in between: each time, the process running it died (the counter is
+`super_fetch:recovered:<jid>`). The fourth reclaim moves it to the dead set instead
+of handing it to a fifth worker.
 
 **Check.**
 

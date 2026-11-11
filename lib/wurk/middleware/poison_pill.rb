@@ -9,19 +9,20 @@ require_relative '../dead_set'
 module Wurk
   module Middleware
     # Pro parity (§3.2): poison-pill detection for reliable-fetch orphans.
-    # When a job is recovered out of a dead process's private list, we
-    # INCR a per-jid counter at `super_fetch:recovered:<jid>` with a 72h
-    # TTL. Recoveries up to RECOVERY_THRESHOLD (3) requeue; the one that takes
-    # the counter past it (the 4th orphaning) is the poison pill: the payload is moved to the dead set,
-    # `jobs.poison` is emitted to statsd, and recovery callbacks fire so
+    # When a job is recovered out of a private list, a per-jid counter at
+    # `super_fetch:recovered:<jid>` goes up by one with a 72h TTL. Recoveries up
+    # to RECOVERY_THRESHOLD (3) requeue; the one that takes the counter past it
+    # (the 4th orphaning) is the poison pill: the payload is moved to the dead
+    # set, `jobs.poison` is emitted to statsd, and recovery callbacks fire so
     # operators can be paged.
     #
     # Counter key TTL is wire-compat with Sidekiq Pro — third-party tooling
     # that watches `super_fetch:recovered:*` expects 72h.
     #
-    # No server-middleware registration: the producer is Reaper#drain, which
-    # drives the lifecycle directly via `track!(payload, queue:)` on each
-    # orphan it moves back to the public queue. The consumer is the ACK —
+    # No server-middleware registration: the producer is Fetcher::OrphanReclaim,
+    # whose script bumps the counter and takes the requeue-or-kill decision in
+    # the same step as the move, then hands the outcome to {recovered!} for the
+    # notifications. The consumer is the ACK —
     # `Fetcher::Reliable::UnitOfWork#acknowledge` pipelines {clear_in} next to
     # its LREM, so an attempt that finished starts the next one at zero
     # without costing a round trip of its own.
@@ -44,37 +45,34 @@ module Wurk
 
       module_function
 
-      # Called per recovered orphan job. Returns `:poison` when the threshold
-      # was crossed and the job was killed; `:recovered` when the job is
-      # being re-pushed (caller's responsibility — we don't touch the queue
-      # here). Emits `jobs.recovered.fetch` on every call, `jobs.poison`
-      # only on the kill path.
+      # Called per recovered orphan job, once Fetcher::OrphanReclaim has moved
+      # it: `count` is the recovery counter its script wrote (0 for a payload with
+      # no jid). Returns `:poison` when the count is past the threshold — the
+      # script already put the job in the dead set, never on its queue — and
+      # `:recovered` otherwise. Emits `jobs.recovered.fetch` for every parseable
+      # job, `jobs.poison` only on the kill path.
       #
       # Fires the Pro `super_fetch!` recovery callback (config.super_fetch_callback)
       # exactly once per call: `(jobstr, nil)` on plain recovery, `(jobstr, pill)`
       # on the kill path. The poison-only `on_poison` Hash callbacks fire
       # independently inside #mark_poison.
       #
-      # @param payload [String, Hash] the job JSON or pre-parsed hash.
+      # @param payload [String] the job JSON as it sat in the private list.
+      # @param job     [Hash, nil] the payload parsed by {parse}.
+      # @param count   [Integer] the recovery count after this recovery.
       # @param queue   [String, nil] the public queue name (without `queue:`).
-      # @param config  [Configuration] config that owns the super_fetch! callback;
-      #   defaults to the global so non-reaper callers (tests) need not pass it.
+      # @param config  [Configuration] config that owns the super_fetch! callback.
       # @return [Symbol] :recovered | :poison
-      def track!(payload, queue: nil, config: Wurk.configuration)
-        job = parse(payload)
+      def recovered!(payload, job, count:, queue: nil, config: Wurk.configuration)
         unless job
           fire_super_fetch(config, payload, nil)
           return :recovered
         end
 
-        jid = job['jid']
-        klass = job['class']
-        emit('jobs.recovered.fetch', klass, queue)
-
-        count = bump_counter(jid) if jid && !jid.empty?
-        if count && count > RECOVERY_THRESHOLD
+        emit('jobs.recovered.fetch', job['class'], queue)
+        if count > RECOVERY_THRESHOLD
           mark_poison(payload, job, queue: queue, count: count)
-          fire_super_fetch(config, payload, Pill.new(jid: jid, klass: klass, count: count, queue: queue))
+          fire_super_fetch(config, payload, Pill.new(jid: job['jid'], klass: job['class'], count: count, queue: queue))
           :poison
         else
           fire_super_fetch(config, payload, nil)
@@ -168,27 +166,12 @@ module Wurk
 
       # ---- internals --------------------------------------------------
 
+      # The job Hash, or nil for anything that is not a JSON object.
       def parse(payload)
-        return payload if payload.is_a?(::Hash)
-        return nil unless payload.is_a?(::String)
-
-        Wurk.load_json(payload)
+        job = Wurk.load_json(payload)
+        job if job.is_a?(::Hash)
       rescue ::JSON::ParserError
         nil
-      end
-
-      # No apply-safety claim: INCR is additive, so a block replayed after a
-      # lost reply bumps twice and can carry a healthy job past
-      # RECOVERY_THRESHOLD into the dead set. Raising instead only leaves the
-      # count short — Reaper#drain rescues, and the job is already back on its
-      # public queue, so it just misses one poison check.
-      def bump_counter(jid)
-        key = counter_key(jid)
-        Wurk.redis do |conn|
-          count = conn.call('INCR', key).to_i
-          conn.call('EXPIRE', key, RECOVERY_TTL)
-          count
-        end
       end
 
       def emit(metric, klass, queue)
@@ -198,6 +181,9 @@ module Wurk
         Wurk::Metrics::Statsd.increment(metric, tags: tags.empty? ? nil : tags)
       end
 
+      # The script already put `payload` in the dead set; DeadSet#kill writes the
+      # same member again, so the trim and the death handlers stay DeadSet's.
+      #
       # Death handlers fire (`notify_failure` defaults to true). A poison kill
       # is a death like any other exhaustion: suppressing it strands every
       # batch that owns the job — Batch::DeathHandler is a death handler, so a
@@ -206,8 +192,7 @@ module Wurk
       # (docs/target/sidekiq-pro.md §12); recorded in docs/idea/parity-divergences.md.
       def mark_poison(payload, job, queue:, count:)
         emit('jobs.poison', job['class'], queue)
-        json = payload.is_a?(String) ? payload : Wurk.dump_json(job)
-        Wurk::DeadSet.new.kill(json, ex: poisoned_error(job['class'], count))
+        Wurk::DeadSet.new.kill(payload, ex: poisoned_error(job['class'], count))
         fire_callbacks(jid: job['jid'], klass: job['class'], count: count, queue: queue)
       end
 
@@ -231,8 +216,7 @@ module Wurk
         cb = config.super_fetch_callback
         return unless cb
 
-        jobstr = payload.is_a?(::String) ? payload : Wurk.dump_json(payload)
-        cb.call(jobstr, pill)
+        cb.call(payload, pill)
       rescue StandardError => e
         config.handle_exception(e, context: 'Wurk::Middleware::PoisonPill')
       end

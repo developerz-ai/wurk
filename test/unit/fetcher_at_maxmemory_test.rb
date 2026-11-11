@@ -152,7 +152,7 @@ class FetcherAtMaxmemoryTest < Wurk::Test::UnitCase
     error = RedisClient::OutOfMemoryError.new('OOM original')
 
     raised = assert_raises(RedisClient::OutOfMemoryError) do
-      Wurk::Fetcher::OomDrain.reclaim(refusing, error, @public_queue, @private_list)
+      Wurk::Fetcher::OomDrain.requeue(refusing, error, @private_list, @public_queue, 'job')
     end
     assert_same error, raised
   end
@@ -162,7 +162,7 @@ class FetcherAtMaxmemoryTest < Wurk::Test::UnitCase
       def call(*) = raise(RedisClient::ConnectionError, 'gone')
     end.new
 
-    assert_raises(RedisClient::ConnectionError) { Wurk::Fetcher::OomDrain.reclaim(conn, OOM, 'a', 'b') }
+    assert_raises(RedisClient::ConnectionError) { Wurk::Fetcher::OomDrain.requeue(conn, OOM, 'a', 'b', 'job') }
   end
 
   def test_a_capped_queue_is_not_claimed_past_its_cap

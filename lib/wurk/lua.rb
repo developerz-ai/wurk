@@ -128,10 +128,11 @@ module Wurk
     # RPUSH (public tail) not LPUSH so the reclaimed job is fetched next — LMOVE
     # pops the tail — ahead of fresh LPUSH'd enqueues.
     #
-    # Push before remove, in this script and the two below. Nothing rolls a
-    # script back, and a server can refuse the write mid-script (Dragonfly at
-    # maxmemory refuses the RPUSH after applying an LREM): the raise has to leave
-    # the job where it was, never in neither place.
+    # Push before remove, in this script, the one below and
+    # `lua/reclaim_orphan.lua`. Nothing rolls a script back, and a server can
+    # refuse the write mid-script (Dragonfly at maxmemory refuses the RPUSH
+    # after applying an LREM): the raise has to leave the job where it was,
+    # never in neither place.
     # KEYS = [private_list, public_queue]
     # ARGV = [job_json]
     # Returns 1 when the job was moved, 0 when it was already acked.
@@ -152,21 +153,6 @@ module Wurk
     REQUEUE_UNIT = <<~LUA
       redis.call("rpush", KEYS[2], ARGV[1])
       return redis.call("lrem", KEYS[1], 1, ARGV[1])
-    LUA
-
-    # The reaper's move off a dead worker's private list: LMOVE private public
-    # RIGHT RIGHT, spelled out because Dragonfly at maxmemory answers an LMOVE
-    # between shards with the job having popped it and dropped the push. The
-    # reply would be the only copy left, and the reaper has no use for it.
-    # KEYS = [private_list, public_queue]
-    # Returns the job moved, nil when the list is empty.
-    RELIABLE_RECLAIM = <<~LUA
-      local job = redis.call("lindex", KEYS[1], -1)
-      if job then
-        redis.call("rpush", KEYS[2], job)
-        redis.call("rpop", KEYS[1])
-      end
-      return job
     LUA
 
     # Ent Unique (§3): atomic compare-and-delete of a lock key. Replaces the
@@ -276,7 +262,6 @@ module Wurk
       scheduled_claim: SCHEDULED_CLAIM,
       reliable_requeue: RELIABLE_REQUEUE,
       requeue_unit: REQUEUE_UNIT,
-      reliable_reclaim: RELIABLE_RECLAIM,
       fast_delete_job: FAST_DELETE_JOB,
       fast_delete_by_class: FAST_DELETE_BY_CLASS,
       release_if_owner: RELEASE_IF_OWNER,

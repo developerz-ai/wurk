@@ -47,9 +47,9 @@ not removed when a group fails.
 free [§7.1 `atomic_push` semantics](../target/sidekiq-free.md#71-atomic_push-semantics-critical-for-wire-compat),
 and the public `push_bulk`
 parity cases using routing middleware and real Redis:
-[`test_push_bulk_registers_exactly_the_routed_queues_and_delivers_each_payload`](../../test/parity/client_push_test.rb#L386)
+[`test_push_bulk_registers_exactly_the_routed_queues_and_delivers_each_payload`](../../test/parity/client_push_test.rb#L397)
 and
-[`test_push_bulk_failure_before_second_group_leaves_only_first_queue_registered`](../../test/parity/client_push_test.rb#L416).
+[`test_push_bulk_failure_before_second_group_leaves_only_first_queue_registered`](../../test/parity/client_push_test.rb#L427).
 
 ## Reliable fetch is the only mode; no BRPOP
 
@@ -312,7 +312,7 @@ changes the signal and hand-off ordering, not the purpose of RSS recycling.
 **Wurk:** `Fetcher::Reaper#orphaned?` fast-paths same-boot-generation
 private lists (host **and** `Component::PROCESS_NONCE` match) straight to
 `Process.kill(0, pid)` (`#local_pid_alive?`,
-`lib/wurk/fetcher/reaper.rb:256-267,283-293`). The nonce is
+`lib/wurk/fetcher/reaper.rb:255-266,282-292`). The nonce is
 minted once per process image and inherited unchanged across `fork`
 (`lib/wurk/component.rb:20-22`), so this group is every process forked from
 the current swarm boot, not a single pid. If the OS hands a *replacement*
@@ -339,7 +339,7 @@ component is bug-compatible with — carries the identical limitation, this is
 recorded as a deliberate, matched-parity gap rather than an intentional
 "improvement" left undone.
 
-**Anchor:** `lib/wurk/fetcher/reaper.rb:256-267,283-293`, `lib/wurk/component.rb:20-22`,
+**Anchor:** `lib/wurk/fetcher/reaper.rb:255-266,282-292`, `lib/wurk/component.rb:20-22`,
 `docs/reliability.md` (Reliable fetch → How "dead" is decided), Pro §3.2.
 
 ## Poison-pill counter resets on ACK, and a poison kill fires death handlers
@@ -348,9 +348,9 @@ recorded as a deliberate, matched-parity gap rather than an intentional
 moment the job acks — `Fetcher::Reliable::UnitOfWork#write_ack` pipelines the
 `DEL` next to its `LREM`, so an attempt that finished (returned, or raised and
 booked a retry) resets the count. Only reclaims of an attempt that never acked
-accumulate toward `RECOVERY_THRESHOLD`. When the threshold is crossed, the
-kill goes through the death-handler chain (`notify_failure` left at its
-default `true`) with a `Wurk::Middleware::PoisonPill::Poisoned` exception.
+accumulate toward `RECOVERY_THRESHOLD`. Past it, the reclaim script moves the job straight
+from the private list into the dead set; once it returns, the kill goes through the
+death-handler chain (`notify_failure` at its default `true`, `PoisonPill::Poisoned`).
 
 **Spec:** Pro §12 pins only the mechanism — key name, 72h TTL, threshold 3. It
 says nothing about when the counter is cleared, and nothing about whether a
@@ -377,8 +377,8 @@ anywhere. Every other terminal path in Wurk — retry exhaustion, `:discard`,
 the limiter's reschedule cap — notifies, and a poison kill is the same kind of
 event: the job is dead and is not coming back.
 
-**Anchor:** `lib/wurk/middleware/poison_pill.rb` (`clear_in`, `mark_poison`),
-`lib/wurk/fetcher/unit_of_work.rb` (`UnitOfWork#acknowledge`, `write_ack`),
+**Anchor:** `lib/wurk/middleware/poison_pill.rb` (`clear_in`, `mark_poison`), `lib/wurk/fetcher/orphan_reclaim.rb`,
+`lib/wurk/lua/reclaim_orphan.lua`, `lib/wurk/fetcher/unit_of_work.rb` (`UnitOfWork#acknowledge`, `write_ack`),
 `lib/wurk/processor.rb` (`process`), Pro §12.
 
 ## The ACK is deferred onto the next fetch, not sent when the job finishes
@@ -572,7 +572,7 @@ simply never read, not a protocol violation.
 **Wurk:** `sidekiq_options timeout: <seconds>` writes `timeout` verbatim.
 `deadline:` is the *input option*: it too rides the wire verbatim, and push-time
 normalization derives an absolute `deadline_at` epoch-float from it
-(`JobUtil#stamp_deadline`, `lib/wurk/job_util.rb:240-245`). The two are not
+(`JobUtil#stamp_deadline`, `lib/wurk/job_util.rb:255-260`). The two are not
 interchangeable — `deadline` is a relative duration frozen at declaration,
 `deadline_at` the absolute cutoff every later attempt measures against, so a
 retry or an `IterableJob` resume reads `deadline_at` and never re-derives one
@@ -594,7 +594,7 @@ retries/`IterableJob` resumes re-push the same job hash, so `deadline_at`
 naturally carries the same absolute cutoff across every attempt rather than
 resetting it.
 
-**Anchor:** `lib/wurk/job_util.rb:240-245`, `lib/wurk/middleware/timeout.rb`,
+**Anchor:** `lib/wurk/job_util.rb:255-260`, `lib/wurk/middleware/timeout.rb`,
 `lib/wurk/middleware/expiry.rb`, `lib/wurk/job.rb` (`Job::TimedOut`,
 `Job::DeadlineExceeded`).
 
@@ -1339,9 +1339,9 @@ DEFAULTS ([free §4.1 DEFAULTS — `max_iteration_runtime`](../target/sidekiq-fr
 
 **Wurk:** the swarm parent always requires the `-r` entrypoint — children
 inherit the loaded app rather than re-requiring it — so the flag governs only
-the extra Rails `eager_load!` (`lib/wurk/cli.rb:665-689`, deliberate-divergence
-comment at `lib/wurk/cli.rb:665-689`); `preload_app?` reads
-`WURK_PRELOAD_APP`/`SIDEKIQ_PRELOAD_APP` at `lib/wurk/cli.rb:665-689`.
+the extra Rails `eager_load!` (`lib/wurk/cli.rb:723-747`, deliberate-divergence
+comment at `lib/wurk/cli.rb:723-747`); `preload_app?` reads
+`WURK_PRELOAD_APP`/`SIDEKIQ_PRELOAD_APP` at `lib/wurk/cli.rb:723-747`.
 
 **Spec:** Ent §7.2 — `SIDEKIQ_PRELOAD_APP=1` means "require whole app in parent
 before fork" ([Ent §7.2 Environment variables — `SIDEKIQ_PRELOAD_APP`](../target/sidekiq-ent.md#72-environment-variables)), and the process-model notes
@@ -1356,7 +1356,7 @@ and multiplying boot cost by the child count. The flag keeps its documented
 trade (more CoW sharing against slower parent boot); what changed is only that
 the floor is "entrypoint loaded", not "nothing loaded".
 
-**Anchor:** `lib/wurk/cli.rb:665-689`; Ent §7.2 env table
+**Anchor:** `lib/wurk/cli.rb:723-747`; Ent §7.2 env table
 ([Ent §7.2 Environment variables — `SIDEKIQ_PRELOAD_APP`](../target/sidekiq-ent.md#72-environment-variables)) and §7.3 process model
 ([Ent §7.3 Process model — conditional parent app load](../target/sidekiq-ent.md#73-process-model)).
 
@@ -1755,13 +1755,13 @@ deploy, where accepting it would quietly change how often a queue is served.
 
 ## A live worker re-queues payloads stranded in its own private list
 
-**Wurk:** on every reaper tick a worker compares its own private lists with what its threads and pending ACKs hold. A payload accounted for by neither, seen stranded twice at least 30s apart, goes back to its public queue via the guarded requeue and is counted by the poison pill.
+**Wurk:** on every reaper tick a worker compares its own private lists with what its threads and pending ACKs hold. A payload accounted for by neither, seen stranded twice at least 30s apart, goes through the same reclaim script as a dead owner's list (`Fetcher::OrphanReclaim`): back to its public queue, counted by the poison pill, or past the cap straight into the dead set.
 
 **Spec:** Pro §3.2 reclaims private lists only when the owner is dead.
 
 **Why:** a claim whose reply was lost leaves a job in a live owner's list, and the owner never settles what it does not know about. That is up to one job per thread per Redis restart or stall, indefinitely on a stable fleet. A running job holds a claim for all of `perform` and is never touched.
 
-**Anchor:** `lib/wurk/fetcher/self_reconcile.rb`, `lib/wurk/fetcher/reliable.rb` (`CLAIM_KEY`).
+**Anchor:** `lib/wurk/fetcher/self_reconcile.rb`, `lib/wurk/fetcher/orphan_reclaim.rb`, `lib/wurk/fetcher/reliable.rb` (`CLAIM_KEY`).
 
 ## The reaper's grace is a local clock, not OBJECT IDLETIME
 

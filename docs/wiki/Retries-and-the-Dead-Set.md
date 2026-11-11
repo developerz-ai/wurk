@@ -38,7 +38,7 @@ Default backoff is `(retry_count ** 4) + 15` seconds plus `rand(10 * (count + 1)
 
 **A `SIGKILL` is not a failure.** The payload never left the process's private list, so it is reclaimed and re-run with no `retry_count` bump and no dead-set entry — which also means no death handler and no signal that it happened, beyond the recovery metric.
 
-**A poison pill never raises, so retries can't catch it.** A job that OOMs or segfaults its worker gets recovered and kills the next one. Wurk counts recoveries per jid at `super_fetch:recovered:<jid>` (72h TTL) and morgues the job on the 3rd — but that kill passes `notify_failure: false`, so **`death_handlers` do not fire for it**. Register `Wurk::Middleware::PoisonPill.on_poison` if you want to be paged.
+**A poison pill never raises, so retries can't catch it.** A job that OOMs or segfaults its worker gets recovered and kills the next one. Wurk counts recoveries per jid at `super_fetch:recovered:<jid>` (72h TTL, reset when an attempt acks) and morgues the job on its 4th orphaning, straight from the private list so no worker picks it up again. The kill **fires `death_handlers`** with a `Wurk::Middleware::PoisonPill::Poisoned` error; `Wurk::Middleware::PoisonPill.on_poison` is the poison-only hook if you want to page on these specifically.
 
 **`sidekiq_retries_exhausted` runs before the morgue write, `death_handlers` after** — and the global handlers fire on *every* death, including `:discard`, `dead: false` and manual kills (which synthesise `RuntimeError.new("Job killed by API")`, byte-for-byte Sidekiq).
 

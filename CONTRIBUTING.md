@@ -54,7 +54,7 @@ Frontend unit + integration tests (Vitest, SolidJS Testing Library) run with
 fails fastest and prints a per-stage wall clock:
 
 ```sh
-bin/check fast     # rubocop + unit tests              — the inner loop
+bin/check fast     # rubocop + anchors + unit tests    — the inner loop
 bin/check          # rubocop + frontend + full suite + parity  — run this before opening a PR
 bin/check full     # ...plus the ecosystem suites and the two python-client
                    # stages: the unittest suite, then the build in an isolated

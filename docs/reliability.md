@@ -36,8 +36,8 @@ What it does **not** buy you:
 - **Jobs still in the client-side outage buffer.** In-memory, per-process.
   Process dies → buffered jobs are gone. See the
   [caveat](#the-durability-caveat).
-- **Jobs killed as poison pills.** A job recovered `3` times inside 72h is moved
-  to the dead set instead of re-queued. It's preserved, but it stops running.
+- **Jobs killed as poison pills.** A job already recovered `3` times inside 72h
+  is moved to the dead set on its 4th orphaning instead of re-queued. It's preserved, but it stops running.
 
 ---
 
@@ -328,17 +328,24 @@ incident runbook's
 Job by job, tail-to-tail:
 
 ```
-LINDEX  queue:default|dead-host|9182|b2c3d4e5f6a1|0  -1
-RPUSH   queue:default  <job>
-RPOP    queue:default|dead-host|9182|b2c3d4e5f6a1|0
+LINDEX  queue:default|dead-host|9182|b2c3d4e5f6a1|0  -1      # peek
+EVALSHA reclaim_orphan  <private list> queue:default dead super_fetch:recovered:<jid>
+  # LPOS ... RANK -1                  still there? if not, touch nothing
+  # GET counter, +1                   the poison-pill count
+  # RPUSH queue:default <job>         or, past the threshold, ZADD dead <now> <job>
+  # LREM <private list> -1 <job>
+  # SET counter <n> EX 259200
 ```
 
-That is one script, with the effect of `LMOVE ... RIGHT RIGHT`, and it pushes first:
+The verdict and the move are one script (`lib/wurk/lua/reclaim_orphan.lua`), so a job
+past the [poison-pill](#poison-pills) cap goes straight from the private list to the
+dead set and is never visible on its public queue. It pushes first and removes after:
 Dragonfly near `maxmemory` answers an `LMOVE` between shards having popped the job and
-dropped the push, and a refused write must leave the job where it was.
-
-The move happens **before** the poison-pill check, so a crash mid-drain leaves
-the job safely on the public queue — at-least-once, never lost.
+dropped the push, and a refused write must leave the job where it was. The counter is
+written last, so a write refused part way through leaves the job in place, or at worst
+leaves it requeued with its count short. A crash mid-drain leaves every job either still
+in the private list or already moved — at-least-once, never lost. Death handlers,
+`super_fetch!` and `on_poison` fire after the script returns.
 
 ### A live worker's own private list
 
@@ -379,8 +386,9 @@ The mitigation is idempotent jobs, not configuration.
 A job that crashes its worker *every* time would loop forever. Every reclaimed
 job runs through `Wurk::Middleware::PoisonPill`:
 
-- `INCR super_fetch:recovered:<jid>` with a **72h TTL** (wire-compatible with
-  Sidekiq Pro — tooling that watches those keys expects 72h).
+- The reclaim script bumps `super_fetch:recovered:<jid>` and writes it back with
+  `SET … EX`, a **72h TTL** set in the same write (wire-compatible with Sidekiq Pro —
+  tooling that watches those keys expects 72h).
 - The counter is dropped when the job **acks** — the round trip that removes it
   from its private list carries the `DEL`, so the reset costs no extra round
   trip (it is still a Redis command, one of the three in that pipeline).
@@ -399,9 +407,10 @@ job runs through `Wurk::Middleware::PoisonPill`:
   clearing it early. Nothing is deleted on a blank jid: the key it would build
   is the bare prefix, which is shared rather than per-job.
 - Past `RECOVERY_THRESHOLD` (**3**) recoveries — the 4th orphaning, as in
-  Sidekiq Pro — the job is killed into the dead set and
-  `LREM`'d back off the public queue so it isn't also re-run.
-- The kill fires **death handlers** (`ex` is a
+  Sidekiq Pro — the same script that would have requeued the job moves it from
+  the private list into the dead set instead. It never reaches its public queue,
+  so no worker can pick it up while it is being killed.
+- Once the script has returned, the kill fires **death handlers** (`ex` is a
   `Wurk::Middleware::PoisonPill::Poisoned`), so `:death` batch callbacks and
   error services see it like any other exhaustion. Sidekiq Pro doesn't specify
   this either way — see [parity divergences](idea/parity-divergences.md).

@@ -2,9 +2,9 @@
 # The one command to run before opening a PR: the same gates CI runs, in the
 # order that fails fastest.
 #
-#   bin/check              lint + frontend + full suite + parity  (the PR gate)
-#   bin/check fast         lint + unit tests only                  (the inner loop)
-#   bin/check full         everything above + ecosystem            (third-party suites)
+#   bin/check              lint + anchors + frontend + full suite + parity  (the PR gate)
+#   bin/check fast         lint + anchors + unit tests                       (the inner loop)
+#   bin/check full         everything above + ecosystem                      (third-party suites)
 #
 # Anything it runs, CI runs too. CONTRIBUTING.md lists what CI runs that this does
 # not, so a green run is close to the PR's answer, not identical to it.
@@ -99,8 +99,8 @@ fi
 # 75). The guard probes the server the suite will actually use: REDIS_URL, which
 # test_helper and RedisPool read, else their default. A developerz.ai box hands
 # the gate a REDIS_URL on a private port, because 6379 belongs to whatever repo
-# stack the box also runs. Locally, `docker run --rm -p 6379:6379 redis:7.4` is
-# the supported path.
+# stack the box also runs. Locally, `eval "$(bin/redis env)"` starts a private
+# server and sets REDIS_URL.
 redis_addr="${REDIS_URL:-redis://localhost:6379/0}"
 redis_addr="${redis_addr#*://}"
 redis_addr="${redis_addr##*@}"
@@ -110,7 +110,7 @@ redis_port="${redis_addr##*:}"
 [ "$redis_host" != "$redis_addr" ] || redis_port=6379
 if ! (exec 3<>"/dev/tcp/${redis_host}/${redis_port}") 2>/dev/null; then
   echo "bin/check: no Redis on ${redis_host}:${redis_port} (REDIS_URL, default redis://localhost:6379/0)." >&2
-  echo "  start one with:  docker run --rm -p 6379:6379 redis:7.4" >&2
+  echo "  start a private one with:  eval \"\$(bin/redis env)\"" >&2
   exit 75
 fi
 
@@ -142,6 +142,12 @@ if [ "$MODE" != fast ] && [ -z "${SKIP_FRONTEND:-}" ]; then
 fi
 
 [ -n "${SKIP_LINT:-}" ] || stage "rubocop" bundle exec rubocop --parallel
+
+# A lib/ edit moves the line ranges the ledger and test/conformance/ pin. One
+# unit test (anchor_repin_test.rb) also checks this, but minutes into the run and
+# among every other failure; as its own stage it is named, and first. Report-only:
+# the fix is `bin/repin-anchors`, run on the tree the PR actually contains.
+stage "ledger anchors" bundle exec bin/repin-anchors --check
 
 # Frontend gate mirrors test.yml's `frontend (vitest)` job: bun install +
 # typecheck + oxlint + vitest in frontend/. CI runs each as its own step;

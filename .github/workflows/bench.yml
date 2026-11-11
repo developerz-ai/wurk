@@ -68,6 +68,52 @@ jobs:
               - '*.gemspec'
               - '.github/workflows/bench.yml'
 
+  # The per-job Redis command budget (docs/benchmarks.md, "Why wurk is still
+  # behind on noop"). Unlike `compare`, the count is deterministic, so this is a
+  # hard pass/fail with no base run and no noise band: bench/command_count.rb
+  # aborts when commands per job rise above its BUDGET or drop below its
+  # BASELINE (test/unit/command_count_baseline_test.rb holds both to the number
+  # docs/benchmarks.md publishes). `INFO commandstats` is server-wide, which is
+  # why it gets a Redis of its own rather than sharing a service with `compare`.
+  command-count:
+    name: commands per job
+    needs: detect
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    services:
+      redis:
+        image: ${{ needs.detect.outputs.bench == 'true' && 'redis:7.4' || '' }}
+        ports: ["6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 10
+          --health-start-period 1s
+    env:
+      BUNDLE_GEMFILE: ${{ github.workspace }}/Gemfile
+      RAILS_VERSION: "8.1"
+      RUN: ${{ needs.detect.outputs.bench == 'true' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.RUN == 'true'
+        with:
+          persist-credentials: false
+      - name: resolve redis port
+        if: env.RUN == 'true'
+        run: echo "REDIS_URL=redis://localhost:${{ job.services.redis.ports['6379'] }}/0" >> "$GITHUB_ENV"
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+        if: env.RUN == 'true'
+        with:
+          ruby-version: "4.0"
+          bundler-cache: true
+          cache-version: rails-8.1
+      - name: commands per job against the recorded baseline
+        if: env.RUN == 'true'
+        run: bundle exec rake bench:command_count
+
   compare:
     name: bench vs base
     needs: detect

@@ -39,15 +39,7 @@ fi
 echo "==> dummy app setup"
 bin/dummy-bundle
 
-redis_url="${REDIS_URL:-redis://localhost:6379/0}"
-redis_addr="${redis_url#*://}"
-redis_addr="${redis_addr##*@}"
-redis_addr="${redis_addr%%/*}"
-redis_host="${redis_addr%:*}"
-redis_port="${redis_addr##*:}"
-[ "$redis_host" != "$redis_addr" ] || redis_port=6379
-if ! (exec 3<>"/dev/tcp/${redis_host}/${redis_port}") 2>/dev/null; then
-  echo "==> no Redis on ${redis_host}:${redis_port} yet. The suite needs one: docker run --rm -p 6379:6379 redis:7.4"
-fi
+echo "==> Redis (private, never the shared :6379)"
+bin/redis up >/dev/null && echo "    $(bin/redis url). Use it with: eval \"\$(bin/redis env)\""
 
-echo "==> ready. try: bin/rake test   (or bin/dev for the live dashboard)"
+echo "==> ready. try: eval \"\$(bin/redis env)\" && bin/rake test   (or bin/dev for the live dashboard)"

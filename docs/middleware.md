@@ -561,17 +561,20 @@ required — not `Sidekiq::Middleware::CurrentAttributes`.
 ### `PoisonPill` — not a chain middleware
 
 `Wurk::Middleware::PoisonPill` lives in the middleware directory but is
-**never registered on either chain**. It's a module driven directly by the
-reliable-fetch reaper / `bulk_requeue` paths via
-`PoisonPill.track!(payload, queue:)`.
+**never registered on either chain**. It's a module the orphan reclaim
+(`Fetcher::OrphanReclaim`, used by the reaper and by a live worker's own
+private-list check) calls via
+`PoisonPill.recovered!(payload, job, count:, queue:, config:)`.
 
-Each recovery of a job out of a dead process's private list `INCR`s
-`super_fetch:recovered:<jid>` (72h TTL — wire-compatible with Sidekiq Pro's
-tooling). Recoveries up to `RECOVERY_THRESHOLD` (3) requeue; the next one (the 4th
-orphaning, as in Sidekiq Pro) moves the payload to the dead set,
-`jobs.poison` is emitted, death handlers fire with a
-`PoisonPill::Poisoned` error, and callbacks fire. `track!` returns `:poison` or
-`:recovered`.
+The decision is not the module's. One Lua script (`lib/wurk/lua/reclaim_orphan.lua`)
+takes each recovered job off the private list and bumps
+`super_fetch:recovered:<jid>` (written with `SET … EX`, a 72h TTL — wire-compatible
+with Sidekiq Pro's tooling). Recoveries up to `RECOVERY_THRESHOLD` (3) go back onto
+the public queue; the next one (the 4th orphaning, as in Sidekiq Pro) goes straight
+into the dead set and never reaches the queue. Once the script returns,
+`recovered!` does the notifying: on a kill, `jobs.poison` is emitted, death
+handlers fire with a `PoisonPill::Poisoned` error, and `on_poison` callbacks fire.
+It returns `:poison` or `:recovered`.
 
 The counter is retired by the ACK: `Fetcher::Reliable::UnitOfWork#acknowledge`
 pipelines the `DEL` next to its `LREM`, so an attempt that finished — returned,
@@ -588,7 +591,7 @@ end
 
 `on_poison` callbacks receive a Hash `{jid:, klass:, count:, queue:}`. The Pro
 `config.super_fetch! { |jobstr, pill| … }` callback also fires on every
-`track!` — with `nil` for the second argument on plain recovery, and a
+`recovered!` — with `nil` for the second argument on plain recovery, and a
 `PoisonPill::Pill` struct (`.jid` / `.klass` / `.count` / `.queue`) on the kill
 path. Callback exceptions are caught and routed to the configured error
 handlers. Introspection: `PoisonPill.recovery_count(jid)`, `PoisonPill.clear!(jid)`.

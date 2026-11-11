@@ -67,15 +67,23 @@ class FetcherPushBeforeRemoveTest < Wurk::Test::UnitCase
     redis('RPUSH', @private_list, 'a', 'b')
     redis('RPUSH', @public_q, 'existing')
 
-    assert_equal 'b', reclaim_one
+    assert_equal 0, reclaim_one('b')
     assert_equal %w[existing b], redis('LRANGE', @public_q, 0, -1)
     assert_equal ['a'], redis('LRANGE', @private_list, 0, -1)
   end
 
-  def test_reclaim_of_an_empty_list_returns_nil
+  def test_reclaim_of_a_payload_already_gone_returns_nil
     redis('DEL', @private_list)
 
     assert_nil reclaim_one
+  end
+
+  # The counter is written last: a refused push must not count a recovery that
+  # never happened, or the job is poisoned by retries of the same orphan.
+  def test_a_refused_push_leaves_the_recovery_counter_alone
+    assert_raises(RedisClient::CommandError) { reclaim_one(counted: true) }
+
+    assert_equal 0, redis('EXISTS', counter)
   end
 
   private
@@ -85,10 +93,16 @@ class FetcherPushBeforeRemoveTest < Wurk::Test::UnitCase
                                             job: @payload, config: @config.default_capsule)
   end
 
-  def reclaim_one
+  def reclaim_one(payload = @payload, counted: false)
+    keys = [@private_list, @public_q, Wurk::Keys::DEAD]
+    keys << counter if counted
     @config.redis do |conn|
-      Wurk::Lua::Loader.eval_cached(conn, :reliable_reclaim, keys: [@private_list, @public_q], argv: [])
+      Wurk::Lua::Loader.eval_cached(conn, :reclaim_orphan, keys: keys, argv: [payload, 3, 60, Time.now.to_f])
     end
+  end
+
+  def counter
+    Wurk::Middleware::PoisonPill.counter_key(Wurk.load_json(@payload)['jid'])
   end
 
   def redis(*command)

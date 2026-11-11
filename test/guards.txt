@@ -8,6 +8,7 @@ test/unit/bin_check_frontend_parity_test.rb
 test/unit/changelog_section_test.rb
 test/unit/ci_dup_push_test.rb
 test/unit/claude_md_claims_test.rb
+test/unit/command_count_baseline_test.rb
 test/unit/conformance_test.rb
 test/unit/contributing_line_refs_test.rb
 test/unit/cutover_claims_test.rb

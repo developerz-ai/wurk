@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require_relative '../keys'
-require_relative '../lua'
+require_relative 'orphan_reclaim'
 
 module Wurk
   class Fetcher
@@ -34,13 +34,14 @@ module Wurk
 
       Suspect = Struct.new(:copies, :since)
 
-      # `on_moved` receives [public_queue, payload] for each payload put back, so
-      # the Reaper can run it through the same poison accounting as a reclaim.
-      def initialize(config, confirm: DEFAULT_CONFIRM, stop: -> { false }, on_moved: nil)
+      # A payload put back goes through the same poison accounting as a reclaim
+      # (OrphanReclaim), so a job that kills its processor thread every time
+      # still hits the poison cap.
+      def initialize(config, confirm: DEFAULT_CONFIRM, stop: -> { false })
         @config = config
         @confirm = confirm
         @stop = stop
-        @on_moved = on_moved
+        @orphan_reclaim = OrphanReclaim.new(config)
         @suspects = {}
       end
 
@@ -154,16 +155,9 @@ module Wurk
         moved
       end
 
-      # LPOS-guarded, so a replay after a lost reply moves nothing the second
-      # time, and a payload settled since the last read stays settled.
+      # LPOS-guarded, so a payload settled since the last read stays settled.
       def requeue(list, public_q, payload)
-        applied = @config.redis(idempotent: true) do |conn|
-          Wurk::Lua::Loader.eval_cached(conn, :reliable_requeue, keys: [list, public_q], argv: [payload])
-        rescue RedisClient::OutOfMemoryError => e
-          OomDrain.requeue(conn, e, list, public_q, payload)
-        end.to_i
-        @on_moved&.call(public_q, payload) if applied == 1
-        applied
+        @orphan_reclaim.call(list, public_q, payload) ? 1 : 0
       end
 
       def forget_all

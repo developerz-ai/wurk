@@ -19,7 +19,7 @@
     release
 
 - entry: '`WURK_PRELOAD_APP` toggles eager-load only; the parent always loads the app'
-  anchor: lib/wurk/cli.rb#L665-L689
+  anchor: lib/wurk/cli.rb#L723-L747
   fragment: |-
     def eager_load_application
     return unless preload_app?

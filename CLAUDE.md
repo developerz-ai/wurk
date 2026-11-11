@@ -40,9 +40,10 @@ Three pillars, all must stay true:
 | Task | Command |
 |---|---|
 | Install | `bin/setup` (gems, frontend, dummy app). Tests need Redis ≥ 7 and bun |
-| Pre-PR gate | `bin/check`: rubocop + frontend + suite with coverage + parity. `fast` = rubocop + unit. `full` = + ecosystem + Python client. `SKIP_LINT=1` / `SKIP_PARITY=1` / `SKIP_FRONTEND=1` drop a stage, `NCPU=<n>` sets workers. **Exit 75 = environment missing (bundler, gems, Redis, bun), not a verdict on the diff** |
+| Private Redis | `eval "$(bin/redis env [name])"`: own server per agent, never :6379 |
+| Pre-PR gate | `bin/check`: rubocop + frontend + suite with coverage + parity. `fast` = rubocop + anchors + unit. `full` = + ecosystem + Python client. `SKIP_LINT=1` / `SKIP_PARITY=1` / `SKIP_FRONTEND=1` drop a stage, `NCPU=<n>` sets workers. **Exit 75 = environment missing (bundler, gems, Redis, bun), not a verdict on the diff** |
 | Suite (unit + integration + engine) | `bin/rake test` |
-| Single file | `bin/rake test TEST=test/path/to/file_test.rb` |
+| Single file | `bin/rake test TEST=test/path/to/file_test.rb` (several: comma-separated) |
 | Single test by name | `bin/rake test TEST=test/foo_test.rb TESTOPTS="--name=/pattern/"` |
 | Parity + conformance oracles | `bin/rake test:parity` |
 | Ecosystem compat | `bin/rake test:ecosystem` (own throwaway `redis-server`) |
@@ -112,7 +113,7 @@ Minitest, real Redis. Parity tests are oracles: when Wurk diverges from one, Wur
 - **The merge bot merges on green.** Soak and review come before the push, not after.
 - **A merge does not deploy.** Only a merged `lib/wurk/version.rb` bump publishes. `release: x.y.z` and nothing else, with `bundle exec rake release:relock_demo`. Never tag, never `gem push` (#420, #858). Then verify directly: the gem on RubyGems, the tag, the demo's `/demo/build`.
 - **A red `compat` leg on `main` is yours to fix**, though it never blocks a merge. Rubocop's `TargetRubyVersion` catches syntax, not runtime behavior, and local runs use a newer Ruby than the 3.2 floor (#823, #869).
-- **`lib/` edits move line anchors.** The ledger and `test/conformance/` pin `lib/` line ranges; `bin/check fast` does not check them. Run `bin/repin-anchors`, on the tree the PR actually contains: anchors re-pinned on a wider tree go red once the PR is split.
+- **`lib/` edits move line anchors.** The ledger and `test/conformance/` pin `lib/` line ranges (`bin/check` reports drift). Run `bin/repin-anchors`, on the tree the PR actually contains: anchors re-pinned on a wider tree go red once the PR is split.
 - **Stage by path.** Never `git add -A`: the tree may hold someone else's work. A split PR is tested on its own tree.
 - **A PR body claims only what the diff does.** Evidence you could not get is stated as missing (#823).
 - **Never write live state into prose or config comments.** Cite the command that reads it (#388, #445).

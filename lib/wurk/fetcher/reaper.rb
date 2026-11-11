@@ -2,13 +2,12 @@
 
 require_relative '../component'
 require_relative '../keys'
-require_relative '../middleware/poison_pill'
-require_relative '../metrics/process_counters'
 require_relative '../timer_loop'
 require_relative 'private_list_key'
 require_relative 'unparseable_keys'
 require_relative 'orphan_grace'
 require_relative 'oom_drain'
+require_relative 'orphan_reclaim'
 require_relative 'self_reconcile'
 
 module Wurk
@@ -45,10 +44,10 @@ module Wurk
     # process's own clock (OrphanGrace), and its identity must still have no
     # `info` hash. Our own incarnation skips both: kill(0) is not a snapshot.
     #
-    # Re-pushed jobs run through Wurk::Middleware::PoisonPill, which caps a
-    # job at RECOVERY_THRESHOLD recoveries within 72h: past the cap the job
-    # is killed into the dead set instead of re-queued, so a job that crashes
-    # its worker every time can't loop forever.
+    # Every move goes through OrphanReclaim, which caps a job at
+    # Middleware::PoisonPill::RECOVERY_THRESHOLD recoveries within 72h: past the
+    # cap the job goes from the private list straight to the dead set instead of
+    # its queue, so a job that crashes its worker every time can't loop forever.
     #
     # One sweep an interval: one SCAN of `queue:*|*` acting on every list, gated
     # by a cluster lock so about one process sweeps per interval. Every list, and
@@ -62,7 +61,7 @@ module Wurk
     # of a job.
     #
     # Spec: docs/target/sidekiq-pro.md §3.2.
-    class Reaper # rubocop:disable Metrics/ClassLength
+    class Reaper
       include Component
 
       # Sweep cadence in seconds. 60s matches the heartbeat TTL — the floor below
@@ -103,8 +102,8 @@ module Wurk
         @sleeper = ::ConditionVariable.new
         @unparseable = UnparseableKeys.new(config)
         @next_sweep_at = 0.0
-        @self_reconcile = SelfReconcile.new(config, confirm: reconcile_confirm, stop: -> { done? },
-                                                    on_moved: method(:recovered))
+        @orphan_reclaim = OrphanReclaim.new(config)
+        @self_reconcile = SelfReconcile.new(config, confirm: reconcile_confirm, stop: -> { done? })
       end
 
       # Spawns the sweep loop. Idempotent. The loop waits one interval before
@@ -313,61 +312,24 @@ module Wurk
         identity.split(':')[0..1].join(':')
       end
 
-      # Drain one orphaned private list back to its public queue. Each job is
-      # moved with an atomic LMOVE (private tail → public tail) BEFORE the
-      # poison check, so a crash mid-drain leaves the job safely in the public
-      # queue (at-least-once), never lost. Poison jobs are killed to the dead
-      # set by PoisonPill.track! and then LREM'd out of the public queue.
+      # Drain one orphaned private list back to its public queue, a job at a
+      # time from the tail: peek it, then OrphanReclaim moves it, to the public
+      # tail or, past the poison cap, to the dead set. The decision is taken
+      # before the job is visible, so a worker parked in BLMOVE can never take a
+      # job that is being killed. A peeked job that has left by the time it is
+      # moved (another reaper drained it) costs one more peek.
       #
-      # Unlike the fetcher's LMOVE, this one does *not* claim apply-safety: a
-      # replay after a lost reply moves the next job and never poison-checks the
-      # one already on the public tail, so a job that kills its worker every time
-      # would get a free recovery past the cap. A raise instead lands in the
-      # rescue below, and the next sweep re-drains what's left.
+      # A raise lands in the rescue below; the job stays in the private list
+      # and the next sweep re-drains what's left.
       def drain(private_list, public_q)
-        queue_name = public_q.delete_prefix(Keys::QUEUE_PREFIX)
         count = 0
-        loop do
-          job = redis { |c| reclaim_one(c, private_list, public_q) }
-          break unless job
-
-          count += 1
-          Metrics::ProcessCounters.increment(:reaper_reclaimed)
-          poison_off(public_q, job, queue_name)
+        while (job = redis(idempotent: true) { |c| c.call('LINDEX', private_list, -1) })
+          count += 1 if @orphan_reclaim.call(private_list, public_q, job)
         end
         count
       rescue StandardError => e
         handle_exception(e, context: THREAD_NAME)
         count
-      end
-
-      # A full Redis must not hold a dead worker's jobs back from the workers
-      # still able to drain the queue.
-      def reclaim_one(conn, private_list, public_q)
-        Wurk::Lua::Loader.eval_cached(conn, :reliable_reclaim, keys: [private_list, public_q], argv: [])
-      rescue RedisClient::OutOfMemoryError => e
-        OomDrain.reclaim(conn, e, private_list, public_q)
-      end
-
-      # SelfReconcile put a payload back: the same accounting as a reclaim, so a
-      # job that kills its processor thread every time still hits the poison cap.
-      def recovered(public_q, job)
-        Metrics::ProcessCounters.increment(:reaper_reclaimed)
-        poison_off(public_q, job, public_q.delete_prefix(Keys::QUEUE_PREFIX))
-      end
-
-      # The job is back on its queue whatever happens here. Past maxmemory the
-      # count can't be taken (nor the job killed, leaving it where it is): raising
-      # would end the drain at one job per pass, with the rest of the list waiting
-      # on memory they would help free.
-      def poison_off(public_q, job, queue_name)
-        return unless Middleware::PoisonPill.track!(job, queue: queue_name, config: @config) == :poison
-
-        # track! already ZADDed the payload to the dead set; pull the copy we
-        # just moved onto the public tail so it isn't also re-run.
-        redis { |c| c.call('LREM', public_q, -1, job) }
-      rescue RedisClient::OutOfMemoryError => e
-        report(e)
       end
 
       def acquire_lock?

@@ -86,7 +86,10 @@ describe('TimezonePicker', () => {
     open();
     type('new york');
 
-    expect(options().map((el) => el.textContent)).toEqual(['America/New_York']);
+    // The "automatic" row names the host's zone, so on a New York host it
+    // matches the query too; anywhere else it is filtered out.
+    const automatic = /new.?york/i.test(browserZone()) ? [t('timezone.automatic', { name: browserZone() })] : [];
+    expect(options().map((el) => el.textContent)).toEqual([...automatic, 'America/New_York']);
   });
 
   it('says so when nothing matches', () => {

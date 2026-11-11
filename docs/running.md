@@ -210,6 +210,29 @@ ERB is evaluated, so `<%= ENV["..."] %>` works inside the file.
 
 ---
 
+## Boot messages
+
+A process that runs jobs says what it is in one INFO line, and every boot path
+checks a few things that otherwise surface only under load. `bundle exec wurk
+boot-check -r .` runs the same boot and the same checks, then exits without
+forking or fetching, so a CI step sees them first (`--redis` adds a read-only
+look at the server).
+
+| Message | Level | Cause | Fix |
+|---|---|---|---|
+| `wurk: <role>; N processes × M threads (redis pool P, fetch F); AR pool A` | INFO | Logged once at boot by the process that runs or forks job threads (`wurk`, the `wurkswarm` parent, the swarm or embedded workers in a Rails server). `AR pool` appears only with Active Record configured | Nothing to fix; check the sizes are the ones you meant |
+| `wurk: client only (<reason>); this process enqueues and runs no jobs` | DEBUG | The Rails integration skipped worker boot: `WURK_DISABLED=1`, a build or rake task, the Rails console, the test environment, or not a web server | `WURK_EMBED=1` runs jobs in a process that is not a web server |
+| ``These jobs set `unique_for:` or `unique_until:` but unique jobs are not enabled…`` | WARN | `Sidekiq::Enterprise.unique!` was never called, so those options do nothing | Call `Sidekiq::Enterprise.unique!` once in an initializer ([unique jobs](unique-jobs.md)) |
+| ``These jobs set `lock:` but sidekiq-unique-jobs is not loaded…`` | WARN | `lock:` is sidekiq-unique-jobs' option and nothing reads it without the gem | Keep the gem through the shim, or move the jobs to `unique_for:` |
+| `The bundle holds the real sidekiq <version> gem…` | ERROR | A gem that depends on `sidekiq` pulled the real gem in beside Wurk, so `Sidekiq::*` is part theirs, part Wurk's. Logged as Wurk loads, in every process | Replace it with the shim line the message prints (pinned to your Wurk version). `WURK_STRICT=1` turns the message into a raise that refuses to boot |
+| `The Active Record pool holds A connections but this process runs up to M job threads…` | WARN | `pool:` in `config/database.yml` is below the job threads one process runs; jobs that use the database wait, then raise `ActiveRecord::ConnectionTimeoutError` | Set `pool:` to at least M, plus the web server's threads when jobs run in the web process. Worker processes also log an ERROR (`ActiveRecord connection pool size … is smaller than…`) for the same condition |
+| `the Redis pool for capsule <name> holds S connections, fewer than its concurrency of C…` | refuses to start | `config.redis = { size: S }` is below a capsule's concurrency (`wurk`, `wurkswarm`, `wurk boot-check`) | Raise `size:` to at least C, or drop `size:` and Wurk sizes the pool itself (concurrency + 5, at least 10) |
+
+The `lock:` and `unique_for:` checks see only job classes loaded by then: under
+lazy loading, a class first touched later is not listed.
+
+---
+
 ## Stopping it
 
 Send `TERM` (or `INT`) for a graceful drain — fetching stops, in-flight jobs

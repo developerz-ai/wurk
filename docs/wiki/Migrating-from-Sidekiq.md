@@ -40,15 +40,15 @@ There is **no `WURK_CONCURRENCY`** env var, and `WURK_COUNT` only applies to the
 
 ## Gotchas worth knowing before you cut over
 
-- **Set `WURK_DISABLED=1` on the web role.** Otherwise clustered Puma forks a duplicate swarm behind every web worker.
-- **`sentry-sidekiq` cannot be installed** (its gemspec pulls in real Sidekiq, producing a broken hybrid). Use `require "wurk/sentry"`.
+- **Set `WURK_DISABLED=1` on the web role.** Under clustered Puma (or Unicorn, Passenger) the engine refuses to fork a swarm and logs a warning, so that process runs no jobs; `WURK_DISABLED=1` silences it once workers run elsewhere.
+- **`sentry-sidekiq` installs only with the `sidekiq` shim gem** (its gemspec depends on `sidekiq`; without the shim Bundler pulls real Sidekiq in beside Wurk). Its suite runs against Wurk in CI, but the native `require "wurk/sentry"` is preferred.
 - **`Sidekiq.pro?` / `Sidekiq.ent?` return `false`** even though the Pro and Enterprise features are all present. Don't gate behaviour on them.
-- **`config.super_fetch!` is an accepted no-op** — reliable fetch is already the only mode. `config.reliable_scheduler!` is *not* a no-op; keep it.
+- **`config.super_fetch!` is an accepted no-op** — reliable fetch is already the only mode. `config.reliable_scheduler!` is *not* a no-op, and it is optional: it swaps in an atomic Lua promoter that skips client middleware.
 - **Unique jobs and encryption are mutually exclusive on the same worker**: ciphertext differs per encryption, which defeats the uniqueness digest.
 
 ## Gems you can probably delete
 
-`sidekiq-cron` → `config.periodic`. `sidekiq-unique-jobs` → `unique_for:` / `unique_until:`. `sentry-sidekiq` → `Wurk::Sentry`. Batches, rate limiters, and encryption are built in, so `sidekiq-pro` and `sidekiq-ent` go too. Gems you keep are covered under [[Compatibility and Divergences]] — only `sidekiq-cron` is currently proven by its own suite in CI.
+`sidekiq-cron` → `config.periodic`. `sidekiq-unique-jobs` → `unique_for:` / `unique_until:`. `sentry-sidekiq` → `Wurk::Sentry`. Batches, rate limiters, and encryption are built in, so `sidekiq-pro` and `sidekiq-ent` go too. Gems you keep are covered under [[Compatibility and Divergences]] — `sidekiq-cron`, `sidekiq-unique-jobs`, `sidekiq-failures` and `sentry-sidekiq` run their own suites against Wurk in CI (exclusions in `test/ecosystem/README.md`), through the `sidekiq` shim gem.
 
 ## Cutover checklist
 

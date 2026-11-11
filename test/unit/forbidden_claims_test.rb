@@ -32,10 +32,12 @@ class ForbiddenClaimsTest < Minitest::Test
   # "not only free but faster" is still a claim.
   NEGATED_PREFIX = /\b(?:not|no|never|isn't|aren't|nor)\W+(?:\w+\W+){0,2}\z/i
 
-  # No production throughput numbers are published (audit R11). Reintroduce a
-  # scale figure only together with the soak numbers in docs/benchmarks.md, and
-  # update this guard in the same change.
-  SCALE_CLAIM = /millions of jobs|jobs an hour/i
+  # No production throughput numbers are published (audit R11). Since
+  # 2026-11-10 the owner allows a production-volume figure that adopters report
+  # (plan 101 status.yml, U-row "scale claim"), but only labelled as
+  # user-reported in the same paragraph, never as a measurement of ours.
+  SCALE_CLAIM = /(?:millions|billions) of jobs|jobs an? (?:hour|day|month)/i
+  SCALE_SOURCE = /user-reported/i
 
   # Status readers are machine-only. Match reader promises locally, not mere
   # dashboard/status co-occurrence: the full docs legitimately discuss both.
@@ -61,11 +63,17 @@ class ForbiddenClaimsTest < Minitest::Test
   end
 
   def test_no_public_surface_claims_an_unpublished_scale_figure
-    offenders = surfaces.filter_map { |name, text| name if text.match?(SCALE_CLAIM) }
+    assert_empty unsourced_scale_claims(surfaces),
+                 'no production throughput numbers are published: a scale figure must be labelled ' \
+                 'user-reported in the same paragraph, or backed by numbers in docs/benchmarks.md'
+  end
 
-    assert_empty offenders,
-                 'no production throughput numbers are published; drop the scale claim or publish ' \
-                 "the numbers in docs/benchmarks.md first: #{offenders.join(', ')}"
+  def test_scale_guard_rejects_an_unlabelled_figure_and_accepts_a_labelled_one
+    bare = { 'README.md' => "Wurk runs millions of jobs an hour.\n\nThose volumes are user-reported." }
+    labelled = { 'README.md' => 'Teams run billions of jobs a month on Wurk. Those volumes are user-reported.' }
+
+    assert_equal ['README.md'], unsourced_scale_claims(bare)
+    assert_empty unsourced_scale_claims(labelled)
   end
 
   def test_no_public_surface_claims_a_job_status_reader_dashboard
@@ -515,5 +523,13 @@ class ForbiddenClaimsTest < Minitest::Test
 
     unquoted = sentence.gsub(/["“][^"”]*["”]/, '')
     unquoted.to_enum(:scan, SPEED_CLAIM).any? { !Regexp.last_match.pre_match.match?(NEGATED_PREFIX) }
+  end
+
+  # Paragraphs (blank-line separated) that state a scale figure with no
+  # user-reported label beside it.
+  def unsourced_scale_claims(texts)
+    texts.filter_map do |name, text|
+      name if text.split(/\n\s*\n/).any? { |para| para.match?(SCALE_CLAIM) && !para.match?(SCALE_SOURCE) }
+    end
   end
 end

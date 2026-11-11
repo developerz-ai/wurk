@@ -128,7 +128,7 @@ class RedisDbLockTest < Wurk::Test::UnitCase
 
     assert_equal 75, status.exitstatus, out
     assert_includes out, "no Redis at 127.0.0.1:#{port}"
-    assert_includes out, 'docker run'
+    assert_includes out, 'bin/redis env'
     refute_includes out, 'marshal data'
   end
 end

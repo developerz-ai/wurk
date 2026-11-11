@@ -452,7 +452,7 @@ module Wurk
     # The optional block is Pro's recovery callback: `|jobstr, pill|`, fired
     # once per orphan recovery (`pill` nil) and once on a poison kill (`pill`
     # responds to .jid/.klass/.count/.queue). The reaper drives it via
-    # Wurk::Middleware::PoisonPill.track!. Spec: docs/target/sidekiq-pro.md §3.1.
+    # Wurk::Middleware::PoisonPill.recovered!. Spec: docs/target/sidekiq-pro.md §3.1.
     def super_fetch!(*, &block)
       @super_fetch_callback = block if block
       nil

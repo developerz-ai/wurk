@@ -32,12 +32,13 @@ module Wurk
     # Subcommands. Bare `wurk` runs the worker — the historical shape, and the
     # only one the swarm binaries accept — so a subcommand is never anything
     # but the first argument, and every argument after it is that command's.
-    COMMANDS = %w[api health].freeze
+    COMMANDS = %w[api boot-check health].freeze
     # Set only across the one re-exec of #load_rails_framework, and removed on arrival.
     PRELOAD_FIRST_ENV = 'WURK_BOOT_PRELOAD_FIRST'
     # `bundle exec` loads the binstub in-process, so argv0 is Bundler's executable, and
     # `ruby -e "load Gem.bin_path(...)"` has `-e` there: the running program can't name it.
     SWARM_EXECUTABLE = ::File.expand_path('../../exe/wurkswarm', __dir__)
+    WURK_EXECUTABLE = ::File.expand_path('../../exe/wurk', __dir__)
 
     # A refusal this file raises itself, with nothing a trace would add.
     class StartupError < ArgumentError; end
@@ -110,6 +111,10 @@ module Wurk
       ['-s', '--server NAME',  :api_server, 'Rack handler to serve with (default: the first installed)']
     ].freeze
 
+    BOOT_CHECK_OPTION_FLAGS = [
+      ['-R', '--redis', :boot_check_redis, 'Also read Redis: version, eviction policy, live peers (read-only)']
+    ].freeze
+
     HEALTH_OPTION_FLAGS = [
       ['-w', '--window SECONDS', :health_window, 'A heartbeat older than this does not count (default 60)', :to_i],
       ['-m', '--min COUNT', :health_min, 'Processes on this host that must be beating (default 1)', :to_i],
@@ -118,6 +123,7 @@ module Wurk
     ].freeze
 
     HELP_COMMANDS = "\nCommands:\n    " \
+                    "boot-check Boot the app the way wurkswarm does, then exit; no fork, no fetch (CI)\n    " \
                     "health    Exit 0 if this host's workers are heartbeating\n    " \
                     "preflight Read a live Redis: what will carry over to Wurk (read-only)\n    " \
                     "verify    Post-cutover check of a live fleet (read-only)\n\nOptions:"
@@ -209,6 +215,7 @@ module Wurk
         validate_redis!
         validate_pool_sizes!
         BootChecks.run(@config, redis_info)
+        BootChecks.log_process_role(@config, 'wurk')
         @config[:identity] = identity
         # Force lazy server-middleware chain so worker threads don't race
         # against each other constructing it. Spec: Sidekiq::CLI line 104.
@@ -245,15 +252,11 @@ module Wurk
       # Only the children read it. Rejected here, a typo fails this boot instead of
       # crash-looping the fleet until the crash-loop exit.
       Health.options_from_env
-      if boot_app
-        load_rails_framework
-        preload_bundler_groups
-        boot_application
-        eager_load_application
-      end
+      boot_swarm_application if boot_app
       validate_redis!
       validate_pool_sizes!
       BootChecks.run(@config, redis_info)
+      log_swarm_role
       @config[:identity] = identity
       warm_up_process if warmup
       @swarm = Wurk::Swarm.new(topology: @config.topology, config: @config, exit_on_crash_loop: true,
@@ -268,6 +271,27 @@ module Wurk
         @swarm.shutdown
       end
       exit(1) if @swarm.crash_looped?
+    end
+
+    # `wurk boot-check` — #run_swarm's boot up to the fork: the same require
+    # order, config file and checks, plus what a worker reaches only later (every
+    # constant, the routes), so a CI step finds what would crash-loop a deploy.
+    # Forks nothing, fetches nothing, fires no lifecycle event, and reads Redis
+    # only with --redis. Returns the exit code; a boot that raises is the binary's
+    # failure report.
+    def run_boot_check(boot_app: true)
+      enter_server_mode
+      Health.options_from_env
+      if boot_app
+        boot_swarm_application
+        eager_load_rails
+        draw_routes
+      end
+      validate_pool_sizes!
+      BootChecks.run(@config, boot_check_redis_info)
+      log_swarm_role
+      logger.info { "wurk boot-check: #{@config[:require]} booted as wurkswarm would" }
+      0
     end
 
     # `wurk health` — see Wurk::HealthProbe. Boots nothing; returns the exit code.
@@ -434,8 +458,24 @@ module Wurk
 
     def validate_pool_sizes!
       @config.capsules.each_pair do |name, cap|
-        raise StartupError, "Pool size too small for #{name}" if cap.redis_pool.size < cap.concurrency
+        size = cap.redis_pool.size
+        next if size >= cap.concurrency
+
+        raise StartupError, "the Redis pool for capsule #{name} holds #{size} connections, fewer than its " \
+                            "concurrency of #{cap.concurrency}. Set `config.redis = { size: #{cap.concurrency} }` " \
+                            'or more, or drop `size:` and Wurk sizes the pool itself (concurrency + 5).'
       end
+    end
+
+    def boot_check_redis_info
+      return unless @config[:boot_check_redis]
+
+      validate_redis!
+      redis_info
+    end
+
+    def log_swarm_role
+      BootChecks.log_swarm_role(@config, @command ? "#{@command} (as wurkswarm parent)" : 'wurkswarm parent')
     end
 
     # --- options + config-file --------------------------------------------
@@ -446,6 +486,20 @@ module Wurk
     # ignored, which is how `wurk api` would look like it worked.
     def extract_command!(args)
       COMMANDS.include?(args.first) ? args.shift : nil
+    end
+
+    def boot_swarm_application
+      load_rails_framework
+      preload_bundler_groups
+      boot_application
+      eager_load_application
+    end
+
+    # Rails may draw routes only on the first request; a `mount` of a constant
+    # only the web process loads must fail here, not on that request.
+    def draw_routes
+      app = rails_application
+      app.reload_routes! if app.respond_to?(:reload_routes!)
     end
 
     def parse_health_options(args)
@@ -547,6 +601,7 @@ module Wurk
         o.separator help_intro if help_intro
         define_value_flags(o, opts, @command == 'health' ? HEALTH_OPTION_FLAGS : OPTION_FLAGS)
         define_value_flags(o, opts, API_OPTION_FLAGS) if @command == 'api'
+        define_value_flags(o, opts, BOOT_CHECK_OPTION_FLAGS) if @command == 'boot-check'
         define_meta_flags(o, opts)
       end
     end
@@ -627,7 +682,7 @@ module Wurk
     end
 
     def restart_state
-      { env: ::ENV.to_h, argv: ::ARGV.dup, dir: ::Dir.pwd }
+      { env: ::ENV.to_h, argv: [restart_executable, *::ARGV], dir: ::Dir.pwd }
     end
 
     def note_preload_first(first_error)
@@ -644,10 +699,13 @@ module Wurk
       env = state[:env].merge(PRELOAD_FIRST_ENV => error.message.lines.first.to_s.strip[0, 300])
       env['BUNDLE_GEMFILE'] ||= ::Bundler.default_gemfile.to_s if defined?(::Bundler)
       ruby = [::RbConfig.ruby, *('-rbundler/setup' if defined?(::Bundler))]
-      ::Process.exec(env, *ruby, SWARM_EXECUTABLE, *state[:argv], unsetenv_others: true, chdir: state[:dir])
+      ::Process.exec(env, *ruby, *state[:argv], unsetenv_others: true, chdir: state[:dir])
     rescue ::SystemCallError
       raise error
     end
+
+    # The binary that was run: only `wurk boot-check` reaches this with a command.
+    def restart_executable = @command ? WURK_EXECUTABLE : SWARM_EXECUTABLE
 
     # The app root for a `-r` that is the app directory or its environment file.
     def rails_app_root(require_path)
@@ -688,6 +746,10 @@ module Wurk
     def eager_load_application
       return unless preload_app?
 
+      eager_load_rails
+    end
+
+    def eager_load_rails
       app = rails_application
       app.eager_load! if app.respond_to?(:eager_load!)
     end

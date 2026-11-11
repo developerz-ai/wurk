@@ -133,7 +133,8 @@ end
 #   vs_sidekiq.rb    — comparison against another engine, minutes not seconds,
 #                      prints a Markdown table. `rake bench:vs_sidekiq`.
 #   command_count.rb — INFO commandstats table plus a per-job budget assertion,
-#                      no i/s at all. `rake bench:command_count`.
+#                      no i/s at all. `rake bench:command_count`, which
+#                      bench.yml's `commands per job` job runs on its own.
 #   fetch_capped.rb  — prototype fetch-under-a-cap probe for slice 10
 #                      (docs/plans/2026/08/07/101-beyond-sidekiq/10-global-
 #                      concurrency.md, step 1: "measure first"). It gates

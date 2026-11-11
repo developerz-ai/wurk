@@ -13,7 +13,8 @@ require_relative 'support'
 # NOT part of `rake bench`. The gate feeds its output to bin/bench-compare,
 # which only parses benchmark/ips report lines; this prints a command table and
 # asserts a budget. It is excluded from GATE_SCRIPTS in the Rakefile alongside
-# vs_sidekiq.rb — run it on its own via `rake bench:command_count`.
+# vs_sidekiq.rb — run it on its own via `rake bench:command_count`, which
+# bench.yml's `commands per job` job does on every PR touching a bench input.
 #
 # Counts COMMANDS, not round trips — `INFO commandstats` cannot see a pipeline.
 # The ack piggyback has landed, so those 3 commands now cost one round trip

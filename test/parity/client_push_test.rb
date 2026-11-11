@@ -3,6 +3,7 @@
 require_relative '../test_helper'
 require 'active_job'
 require 'active_job/queue_adapters/wurk_adapter'
+require 'active_support/core_ext/integer/time'
 
 ActiveJob::Base.logger = Logger.new(IO::NULL)
 
@@ -196,6 +197,16 @@ class ClientPushParityTest < Wurk::Test::UnitCase
     Sidekiq::Client.push('class' => PlainJob, 'args' => [], 'queue' => @queue, 'retry_for' => 3600.7)
 
     assert_equal 3600, only_queued_job['retry_for']
+  end
+
+  # §6.1 documents `retry_for: 48.hours`; §2.2 stores it as an Integer, so the
+  # Duration lands as its seconds, never as the String JSON would make of it.
+  def test_retry_for_duration_is_stored_as_integer_seconds
+    Sidekiq::Client.push('class' => PlainJob, 'args' => [], 'queue' => @queue, 'retry_for' => 48.hours)
+    payload = only_queued_job
+
+    assert_equal 172_800, payload['retry_for']
+    assert_kind_of Integer, payload['retry_for']
   end
 
   # §2.2 / §9: only retry_for OVER 1_000_000_000 raises — the cap itself is a

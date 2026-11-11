@@ -1,11 +1,11 @@
 plan: 101-evidence-driven-improvement-sweep
 title: Evidence-driven improvement sweep (adopters · drop-in · perf · algorithms · memory)
-status: not_started        # not_started | in_progress | blocked | complete | superseded
+status: in_progress        # not_started | in_progress | blocked | complete | superseded
 created_by: sebi
-worked_by: ""
+worked_by: "sebi (Claude Code)"
 owner: sebi
 percent: 0
-current_focus: "wave 0: 01 C1 (red main) + 14 S1 (tesote.com unique! live bug)"
+current_focus: "queue after wave 1: (a) DX PR (bin/redis, hooks, /plan-exec, U12 claim), (b) CHANGELOG split: CHANGELOG.md index + docs/changelog/<version>.md + unreleased.md, release lane (bin/changelog-section, tasks/release_helpers.rb, release.yml, .dz briefs, RELEASE.md, feature.md) updated, owner request 2026-11-10. wave 1 PR: 02 R1/R2/R6, 03 G1-G4+G10, 01 C2-C9, 12 T3/T6, 102 10-S1 (plan of record; 102 unique rows folded in)"
 slices:
   - file: 01-ci-green-doc-truth.md
     status: not_started
@@ -47,8 +47,8 @@ slices:
     status: not_started
     percent: 0
   - file: 14-adopter-tesote-com.md
-    status: not_started
-    percent: 0
+    status: in_progress
+    percent: 60
   - file: 15-adopter-sales.md
     status: not_started
     percent: 0
@@ -62,11 +62,31 @@ slices:
     status: not_started
     percent: 0
   - file: 19-infra-tesote.md
-    status: not_started
-    percent: 0
+    status: in_progress
+    percent: 40
   - file: 20-infra-developerz.md
+    status: in_progress
+    percent: 40
+  - file: 21-counters-and-read-caching.md
     status: not_started
     percent: 0
-evidence: []
+decisions:
+  - id: U2
+    date: 2026-11-10
+    by: executor (precedent)
+    decision: "C2 skip-with-notice NOT shipped: .dz/briefs/improve.md (#867) forbids turning the watcher back into a green skip. Remaining action is owner-only: add repo secret DEVELOPERZ_API_KEY (not available to the executor)."
+  - id: U12
+    date: 2026-11-10
+    by: sebi (owner, in-session instruction)
+    decision: "Public surfaces (README, docs/site/llms.txt, docs/site/index.html) may state that teams running billions of jobs a month on Wurk in production recommend it, labelled user-reported. Supersedes audit 2026-10-04 H8/R11 for user-reported volume only; published throughput still needs docs/benchmarks.md numbers (12 T1 soak). Guard: test/unit/forbidden_claims_test.rb SCALE_SOURCE."
+evidence:
+  - "01 C9: closed invalid - `# rubocop:disable-next` is a valid directive at pinned rubocop 1.92.2; a disable/enable pair trips Style/DirectiveScope."
+  - "03 G3 follow-ups: no per-child 'child i/N' role line (needs lib/wurk/swarm/child_boot.rb); BootChecks.redis_pool_size duplicates private Capsule#main_pool_size; boot-check still logs the topology 'forking N children' line from Configuration#default_topology."
+  - "C1: PR #901 merged (python-client pinned to ubuntu-24.04)"
+  - "20 X1: developerz-ai/infrastructure#2266 merged; ArgoCD synced ed671d2, worker pod Ready, in-pod `wurk health` exit 0 (2026-11-11 00:31Z)"
+  - "14 S1+S2+S6: tesote/tesote.com#519 merged (68a9690) and deployed (sha-68a9690 rolled web 2/2 + sidekiq 1/1, wurk 1.11.1); unique! on; only BroadcastDeliverJob uses unique_for. Found wurk bug: Duration unique_for arrives as string TTL (wave-1 slice 'unique'). Dedup not yet observed in prod (no broadcast since deploy)."
+  - "14 follow-up: tesote/tesote.com#520 merged (79bb4eb) + deployed: SocialMediaPostPublishJob retry_on :exponentially_longer (raises on Rails 8.1) -> :polynomially_longer, attempts 4; open owner call: cap wurk retries after retry_on exhausts."
+  - "wave 1 slice 'unique': Duration unique_for (string TTL ignored on release), retry_for Duration written as null, timeout/deadline Durations written as strings - fixed; follow-up: read side of Middleware::Timeout#bound_for for already-queued string timeouts."
+  - "19 X1+X4: tesote/infrastructure#765 merged (2f33c9d2); tesote-com prod+staging and gringotts workers Ready on `wurk health` probes; grace already > timeout+5"
 notes: "Written 2026-11-10 from 5 read-only sweeps at v1.11.1 @ f6f509e. Sweeps 3-5 ran no tests, benches or Redis; rows marked inferred/suspect need a reproducing test first. Wave-4 cost cuts proceed only where wave-2 measurements justify them. Treasury is read-only. Human decisions U1-U11 in 13."
 last_updated: 2026-11-10

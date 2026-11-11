@@ -240,15 +240,18 @@ module Wurk
       Socket.tcp(uri.host, uri.port, connect_timeout: 2).close
     rescue SystemCallError, SocketError, IOError => e
       abort_preconditions("no Redis at #{uri.host}:#{uri.port} (#{e.class}). The suite needs a real server: " \
-                          'start one with `docker run --rm -p 6379:6379 redis:7.4`, or set REDIS_URL.')
+                          'start a private one with `eval "$(bin/redis env)"`, or set REDIS_URL.')
     end
 
     # Rake::TestTask turns any failing child into exit 1, so the 75 alone does not reach
-    # bin/check, which leaves this file to read.
+    # bin/check, which leaves this file to read. Taken out of ENV so a test that boots
+    # this helper in a child on purpose (redis_db_lock_test.rb, a dead Redis) cannot
+    # write its staged refusal there and turn a red run into bin/check's "could not start".
+    PRECONDITIONS_FILE = ENV.delete('WURK_TEST_PRECONDITIONS_FILE')
+
     def self.abort_preconditions(message)
       warn message
-      marker = ENV.fetch('WURK_TEST_PRECONDITIONS_FILE', nil)
-      File.write(marker, message) if marker
+      File.write(PRECONDITIONS_FILE, message) if PRECONDITIONS_FILE
       exit!(75)
     end
 
@@ -357,6 +360,7 @@ require_relative 'support/redis_namespace'
 require_relative 'support/swarm_teardown'
 require_relative 'support/command_spy'
 require_relative 'support/recording_pool'
+require_relative 'support/noscript_fault'
 require_relative 'support/thread_leak_guard'
 
 module Wurk

@@ -46,3 +46,5 @@ One reason to change per class. Don't blur these. Each class's header comment is
 | Logging / Profiling / Deploy markers | Logger formats context; JobLogger scopes execution logs/context; Profiler optionally captures with host-loaded Vernier; Deploy records chart markers, not deployment orchestration. Processor retains execution ownership | `lib/wurk/logger.rb`, `lib/wurk/job_logger.rb`, `lib/wurk/profiler.rb`, `lib/wurk/deploy.rb` |
 | Ops commands | `wurk health`, `wurk preflight`, `wurk verify`: read-only, through a client that refuses every other command; `verify --canary` alone pushes, on request | `lib/wurk/preflight.rb`, `lib/wurk/preflight/`, `lib/wurk/cli.rb` |
 | Testing | Fake in-memory, synchronous inline and real-Redis enqueue modes, with block-local overrides; test harness for Client/Worker, not a production scheduler | `lib/wurk/testing.rb` |
+
+The default logger writes to **stdout** (`Configuration`, `Wurk::Logger.new($stdout)`). A command whose stdout is parsed (`wurk preflight --app` JSON, `rails runner … | jq`) breaks on any INFO line from a boot path, so client-only and diagnostic lines log at DEBUG.

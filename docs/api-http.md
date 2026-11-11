@@ -189,14 +189,14 @@ GET /v1
 ```json
 {
   "api_version": "v1",
-  "wurk_version": "8.4.0",
+  "wurk_version": "<Wurk::VERSION>",
   "url": "/wurk/api/v1",
   "read_only": false,
   "rate_limit": { "limit": 600, "interval_seconds": 60 }
 }
 ```
 
-`url` is built from the actual mount prefix the request arrived through —
+`wurk_version` is the running gem's `Wurk::VERSION`. `url` is built from the actual mount prefix the request arrived through —
 never hardcoded — so a client can trust it as the base for every subsequent
 request. `read_only` and `rate_limit` are reported here because both are
 things a producer would otherwise only discover by having a write refused;

@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative 'rails_reloader'
+require_relative 'boot_checks'
 
 module Wurk
   # Coordinates how Wurk boots inside a Rails host: whether this process should
@@ -60,7 +61,8 @@ module Wurk
 
     # Invoked last of all initializers, once the host app has fully initialized.
     def boot(app = ::Rails.application)
-      return if skip_boot?
+      reason = skip_reason
+      return log_client_only(reason) if reason
 
       case boot_action(app)
       when :fork   then boot_swarm
@@ -79,13 +81,36 @@ module Wurk
     # run every job — every cron tick included — twice.
     #
     # Everything above is a denylist; `serving?` is the allowlist that backs it.
-    def skip_boot?
-      ENV['WURK_DISABLED'] == '1' ||
-        Wurk.worker_boot_claimed? ||
-        building? ||
-        defined?(::Rails::Console) ||
-        ::Rails.env.test? ||
-        !serving?
+    def skip_boot? = !skip_reason.nil?
+
+    # Why this process runs no jobs, or nil when it boots them.
+    def skip_reason
+      return 'WURK_DISABLED=1' if ENV['WURK_DISABLED'] == '1'
+      return 'the wurk runner owns this process' if Wurk.worker_boot_claimed?
+      return 'a build or rake task' if building?
+      return 'Rails console' if defined?(::Rails::Console)
+      return 'test environment' if ::Rails.env.test?
+
+      'not a web server; WURK_EMBED=1 runs jobs here' unless serving?
+    end
+
+    # The runner announces its own role; a second line from here would describe
+    # the same process twice.
+    def log_client_only(reason)
+      return if Wurk.worker_boot_claimed?
+
+      BootChecks.log_client_only(logger, reason)
+    end
+
+    # Named the way #serving? recognised it: a bundled gem defines its constant
+    # in processes that are not that server.
+    def server_name
+      return 'Puma' if puma_launcher_loaded?
+      return 'Passenger' if defined?(::PhusionPassenger)
+      return 'Unicorn' if unicorn_server?
+      return 'rails server' if defined?(::Rails::Server)
+
+      'this process (WURK_EMBED=1)'
     end
 
     # Boot only inside a web server, or where the host opted in. Every Rails
@@ -183,8 +208,11 @@ module Wurk
     def boot_swarm # rubocop:disable Metrics/AbcSize
       warn_on_production_fork
       Health.options_from_env
-      timeout = Wurk.configuration[:timeout] || Swarm::DEFAULT_SHUTDOWN_TIMEOUT
-      swarm = Wurk::Swarm.new(topology: Wurk.configuration.topology, shutdown_timeout: timeout)
+      config = Wurk.configuration
+      timeout = config[:timeout] || Swarm::DEFAULT_SHUTDOWN_TIMEOUT
+      BootChecks.log_swarm_role(config, "swarm parent in #{server_name}")
+      BootChecks.run(config, nil)
+      swarm = Wurk::Swarm.new(topology: config.topology, shutdown_timeout: timeout)
       supervisor = nil
       # Registered BEFORE boot, which forks the children one slot at a time: a
       # fork that raises partway through would otherwise leave the children it
@@ -246,7 +274,8 @@ module Wurk
       # already running with nothing to drain them on host exit.
       at_exit { instance.stop }
       instance.run
-      logger.info { 'wurk: running embedded in the web process (config.wurk.embed_in_web) — threads only, no fork' }
+      BootChecks.log_process_role(Wurk.configuration, "embedded in #{server_name}, threads only")
+      BootChecks.run(Wurk.configuration, nil)
       instance
     rescue StandardError => e
       logger.error { "wurk: embedded boot failed: #{e.class}: #{e.message}" }

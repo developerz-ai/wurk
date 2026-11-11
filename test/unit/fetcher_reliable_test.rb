@@ -640,23 +640,20 @@ class FetcherReliableTest < Wurk::Test::UnitCase
 
   # NOSCRIPT recovery (rescue branch): a pipelined EVALSHA surfaces NOSCRIPT
   # only at finalize, so requeue_pipelined reloads all scripts and replays via
-  # source-embedded EVAL. SCRIPT FLUSH forces that path; the move must still land.
-  def test_bulk_requeue_reloads_lua_after_script_flush
-    payload = enqueue('bq-flush')
+  # source-embedded EVAL. A cold script cache forces that path; the move must
+  # still land.
+  def test_bulk_requeue_reloads_lua_after_noscript
+    payload = enqueue('bq-noscript')
     uow = @fetcher.retrieve_work
-    @pool.with { |c| c.call('SCRIPT', 'FLUSH') }
 
-    @fetcher.bulk_requeue([uow])
+    Wurk::Test::NoscriptFault.stage(@pool) do |fault|
+      @fetcher.bulk_requeue([uow])
+
+      assert_predicate fault, :fired?, 'the requeue never met a cold script cache'
+    end
 
     assert_equal [payload], lrange(@public_queue),
                  'NOSCRIPT must trigger script_load_all + EVAL-source retry, then move the job'
-  ensure
-    # The EVALSHA cache is SERVER-wide, not per-DB, so this flush is visible to
-    # every parallel_fork worker. Reload the moment the assertion below is done
-    # so the window a sibling suite can be caught in is a handful of commands
-    # rather than the rest of this test. (ClientBatchPipelineTest, which counts
-    # pipelines, detects the interference and skips rather than failing.)
-    @pool.with { |c| Wurk::Lua::Loader.script_load_all(c) }
   end
 
   # Re-raise branch: a string at the private-list key makes the RELIABLE_REQUEUE

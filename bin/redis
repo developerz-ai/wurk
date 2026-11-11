@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# A private Redis for the suite, bin/dev and agents: one redis-server per NAME,
+# on a free 127.0.0.1 port, never :6379. The shared :6379 is someone's data
+# (CLAUDE.md "Never"), and several agents on one box each want their own server
+# instead of fighting over logical DBs.
+#
+#   bin/redis [up] [NAME]   start NAME (default: wurk) if needed; print its URL
+#   bin/redis env [NAME]    start if needed; print `export REDIS_URL=…` for eval
+#   bin/redis url [NAME]    print the URL of a running NAME, exit 1 if down
+#   bin/redis down [NAME]   stop NAME and delete its state
+#   bin/redis ls            list the servers this checkout started
+#
+#   eval "$(bin/redis env)" && bin/rake test
+#   eval "$(bin/redis env agent-2)"            # one server per parallel agent
+#
+# State lives in tmp/redis/NAME (gitignored): the port is chosen once and kept,
+# so a URL stays valid across restarts. No persistence (`--save ''`): it is a
+# scratch server. Uses the redis-server binary when present, else a docker
+# container named wurk-redis-NAME; the image matches CI's service (redis:7.4).
+
+cd "$(dirname "$0")/.."
+ROOT=$(pwd)
+IMAGE=redis:7.4
+
+usage() { sed -n '/^#   bin\/redis/p' "$0" | sed 's/^# //' >&2; exit 64; }
+
+cmd=${1:-up}
+case "$cmd" in up | env | url | down | ls) shift || true ;; -h | --help | help) usage ;; *) cmd=up ;; esac
+name=${1:-wurk}
+[[ "$name" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "bin/redis: NAME must be [A-Za-z0-9_-]+, got '$name'" >&2; exit 64; }
+
+dir="$ROOT/tmp/redis/$name"
+# The checkout's path is part of the container name: two checkouts may both
+# start a "wurk" server, and neither may remove the other's.
+checkout_id=$(printf '%s' "$ROOT" | cksum | cut -d' ' -f1)
+container="wurk-redis-$checkout_id-$name"
+
+# Bounded, so a port that some other program now holds can never hang the caller.
+ping() {
+  timeout 1 bash -c 'exec 3<>"/dev/tcp/127.0.0.1/$1" && printf "PING\r\n" >&3 && head -c 5 <&3' _ "$1" 2>/dev/null |
+    grep -q PONG
+}
+
+free_port() {
+  env -u RUBYOPT -u RUBYLIB -u BUNDLE_GEMFILE ruby -rsocket \
+    -e 's = TCPServer.new("127.0.0.1", 0); puts s.addr[1]; s.close'
+}
+
+port_of() { [ -s "$dir/port" ] && cat "$dir/port"; }
+
+url_of() { echo "redis://127.0.0.1:$1"; }
+
+# A recorded port is ours only while our own process or container still holds
+# it; a PONG alone could come from whatever server took the port since.
+owned() {
+  local d=${1:-$dir} c=${2:-$container}
+  if [ -f "$d/redis.pid" ] && kill -0 "$(cat "$d/redis.pid")" 2>/dev/null; then return 0; fi
+  [ "$(docker inspect -f '{{.State.Running}}' "$c" 2>/dev/null)" = true ]
+}
+
+start() {
+  mkdir -p "$dir"
+  local port
+  port=$(port_of || true)
+  if [ -n "$port" ] && owned && ping "$port"; then url_of "$port"; return; fi
+  if [ -z "$port" ] || ping "$port"; then
+    # Never recorded, or another server now answers there: take a fresh port.
+    rm -f "$dir/redis.pid"
+    port=$(free_port)
+    echo "$port" >"$dir/port"
+  fi
+
+  if command -v redis-server >/dev/null; then
+    redis-server --port "$port" --bind 127.0.0.1 --save '' --appendonly no \
+      --dir "$dir" --daemonize yes --pidfile "$dir/redis.pid" --logfile "$dir/redis.log"
+  elif command -v docker >/dev/null; then
+    docker rm -f "$container" >/dev/null 2>&1 || true
+    docker run -d --rm --name "$container" -p "127.0.0.1:$port:6379" "$IMAGE" \
+      redis-server --save '' --appendonly no >/dev/null
+  else
+    echo "bin/redis: needs redis-server (>= 7) or docker on PATH" >&2
+    exit 75
+  fi
+
+  for _ in $(seq 1 100); do
+    if ping "$port"; then url_of "$port"; return; fi
+    sleep 0.1
+  done
+  echo "bin/redis: '$name' did not answer on 127.0.0.1:$port" >&2
+  [ -f "$dir/redis.log" ] && tail -5 "$dir/redis.log" >&2
+  exit 1
+}
+
+stop() {
+  local port
+  port=$(port_of || true)
+  if [ -f "$dir/redis.pid" ]; then
+    kill "$(cat "$dir/redis.pid")" 2>/dev/null || true
+  fi
+  docker rm -f "$container" >/dev/null 2>&1 || true
+  rm -rf "$dir"
+  echo "bin/redis: stopped '$name'${port:+ (port $port)}"
+}
+
+case "$cmd" in
+  up) start ;;
+  env)
+    # Separate from the echo: `echo "...$(start)"` would print an empty URL
+    # and exit 0 when start fails, and the eval would fall back to :6379.
+    url=$(start)
+    echo "export REDIS_URL=$url"
+    ;;
+  url)
+    port=$(port_of || true)
+    if [ -n "$port" ] && owned && ping "$port"; then url_of "$port"; else exit 1; fi
+    ;;
+  down) stop ;;
+  ls)
+    for d in "$ROOT"/tmp/redis/*/; do
+      [ -d "$d" ] || continue
+      n=$(basename "$d")
+      p=$(cat "$d/port" 2>/dev/null || echo '?')
+      if [ "$p" != '?' ] && owned "$d" "wurk-redis-$checkout_id-$n" && ping "$p"; then s=up; else s=down; fi
+      printf '%-16s %-6s %s\n' "$n" "$s" "$(url_of "$p")"
+    done
+    ;;
+esac
