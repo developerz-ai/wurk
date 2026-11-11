@@ -24,7 +24,13 @@ class BenchGateScriptsTest < Wurk::Test::UnitCase
   # bench/enqueue.rb already gates — a whole extra Lua round trip is the
   # policy's point, not a regression, so there is nothing to diff against main
   # (see the Rakefile's UNGATED_SCRIPTS rationale for both).
-  UNGATED = %w[vs_sidekiq.rb command_count.rb fetch_capped.rb debounce_enqueue.rb].freeze
+  # require_profile.rb and rss_soak.rb print tables, not i/s; the algorithmic benches seed for
+  # minutes and gate on deterministic round-trip budgets of their own.
+  UNGATED = %w[
+    vs_sidekiq.rb command_count.rb fetch_capped.rb debounce_enqueue.rb require_profile.rb rss_soak.rb
+    dashboard_paging.rb feature_commands.rb cron_tick.rb metrics_query.rb
+    fast_delete.rb reaper_sweep.rb sorted_set_bulk.rb
+  ].freeze
 
   def test_scripts_that_are_not_ips_reports_stay_out_of_the_gate
     UNGATED.each do |script|

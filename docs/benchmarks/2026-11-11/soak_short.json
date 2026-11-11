@@ -1,0 +1,4459 @@
+{
+  "generated_at": "2026-11-11T03:37:47Z",
+  "ruby": "3.4.2",
+  "wurk": "1.12.0",
+  "options": {
+    "duration": 150.0,
+    "rate": 100.0,
+    "count": 4,
+    "concurrency": 5,
+    "chaos": [
+      "kill9",
+      "term",
+      "usr1",
+      "parent_kill9",
+      "redis_restart",
+      "pause"
+    ],
+    "chaos_interval": 12.0,
+    "sample_interval": 5.0,
+    "drain_timeout": 300.0,
+    "seed": 405592,
+    "lossy": 0,
+    "app": "minimal"
+  },
+  "drained": true,
+  "verdict": {
+    "balanced": true,
+    "pushed": 19435,
+    "completed": 19435,
+    "lost": [],
+    "dead": {},
+    "duplicates": {
+      "by_window": {
+        "deferred_ack": {
+          "count": 1,
+          "doc": "docs/reliability.md#the-ack-rides-the-next-fetch"
+        },
+        "redis_outage": {
+          "count": 1,
+          "doc": "docs/reliability.md#a-live-workers-own-private-list"
+        }
+      },
+      "unattributed": []
+    },
+    "reruns": 894,
+    "unledgered": [],
+    "push_errors": {
+      "total": 12,
+      "accepted_anyway": 0
+    },
+    "unique": {
+      "rejected": 1741,
+      "leaked": 0
+    },
+    "halted_pushes": 0,
+    "lossy_drops": 0,
+    "cron": {
+      "fired": 5,
+      "completed": 5,
+      "completed_twice": 0
+    },
+    "batches": {
+      "created": 3434,
+      "failed_to_create": 0,
+      "success_callbacks": 3434,
+      "missing": [],
+      "out_of_order": []
+    },
+    "chaos": {
+      "parent_kill9": 2,
+      "term": 1,
+      "redis_restart": 2,
+      "usr1": 5,
+      "kill9": 1,
+      "pause": 1
+    }
+  },
+  "slopes": {
+    "child_pss_kb_per_min": {
+      "children": 25,
+      "median": 11070.85,
+      "max": 58306.77,
+      "min": 670.48
+    },
+    "fleet_pss_kb_per_min": 5119.87,
+    "redis_keys_per_min": 3254.39,
+    "redis_used_memory_bytes_per_min": 604981.28
+  },
+  "last_sample": {
+    "t": 260.9,
+    "parent": {
+      "rss": 41968,
+      "pss": 19400,
+      "shared_clean": 13416,
+      "shared_dirty": 15624,
+      "private_clean": 60,
+      "private_dirty": 12868,
+      "shared": 29040,
+      "shared_ratio": 0.692
+    },
+    "children": {
+      "1134759": {
+        "rss": 46836,
+        "pss": 27240,
+        "shared_clean": 8356,
+        "shared_dirty": 15308,
+        "private_clean": 0,
+        "private_dirty": 23172,
+        "shared": 23664,
+        "shared_ratio": 0.505
+      },
+      "1134820": {
+        "rss": 45968,
+        "pss": 26241,
+        "shared_clean": 8356,
+        "shared_dirty": 15480,
+        "private_clean": 0,
+        "private_dirty": 22132,
+        "shared": 23836,
+        "shared_ratio": 0.519
+      },
+      "1134880": {
+        "rss": 45968,
+        "pss": 26198,
+        "shared_clean": 8356,
+        "shared_dirty": 15572,
+        "private_clean": 0,
+        "private_dirty": 22040,
+        "shared": 23928,
+        "shared_ratio": 0.521
+      },
+      "1134940": {
+        "rss": 46200,
+        "pss": 26465,
+        "shared_clean": 8356,
+        "shared_dirty": 15496,
+        "private_clean": 0,
+        "private_dirty": 22348,
+        "shared": 23852,
+        "shared_ratio": 0.516
+      }
+    },
+    "redis": {
+      "used_memory": 4992624,
+      "dbsize": 13740,
+      "families": {
+        "b": 12019,
+        "batches": 1,
+        "dear": 1,
+        "h": 37,
+        "j": 6,
+        "jr": 7,
+        "leader": 1,
+        "lmtr": 3,
+        "loop": 1,
+        "loops": 1,
+        "periodic": 1,
+        "process_cleanup": 1,
+        "processes": 1,
+        "qm": 4,
+        "queues": 1,
+        "soak": 844,
+        "stat": 4,
+        "status": 802,
+        "super_fetch": 1,
+        "<host>": 4
+      }
+    }
+  },
+  "samples": [
+    {
+      "t": 0.0,
+      "parent": {
+        "rss": 40580,
+        "pss": 16122,
+        "shared_clean": 13536,
+        "shared_dirty": 18088,
+        "private_clean": 44,
+        "private_dirty": 8912,
+        "shared": 31624,
+        "shared_ratio": 0.779
+      },
+      "children": {
+        "1130313": {
+          "rss": 36632,
+          "pss": 15355,
+          "shared_clean": 8012,
+          "shared_dirty": 17788,
+          "private_clean": 0,
+          "private_dirty": 10832,
+          "shared": 25800,
+          "shared_ratio": 0.704
+        },
+        "1130316": {
+          "rss": 36644,
+          "pss": 15363,
+          "shared_clean": 8016,
+          "shared_dirty": 17788,
+          "private_clean": 0,
+          "private_dirty": 10840,
+          "shared": 25804,
+          "shared_ratio": 0.704
+        },
+        "1130320": {
+          "rss": 36140,
+          "pss": 15002,
+          "shared_clean": 7548,
+          "shared_dirty": 18216,
+          "private_clean": 0,
+          "private_dirty": 10376,
+          "shared": 25764,
+          "shared_ratio": 0.713
+        },
+        "1130325": {
+          "rss": 36092,
+          "pss": 14934,
+          "shared_clean": 7564,
+          "shared_dirty": 18232,
+          "private_clean": 0,
+          "private_dirty": 10296,
+          "shared": 25796,
+          "shared_ratio": 0.715
+        }
+      },
+      "redis": {
+        "used_memory": 2573984,
+        "dbsize": 11,
+        "families": {
+          "loops": 1,
+          "periodic": 1,
+          "processes": 1,
+          "queue": 2,
+          "queues": 1,
+          "schedule": 1,
+          "<host>": 4
+        }
+      }
+    },
+    {
+      "t": 5.0,
+      "parent": {
+        "rss": 40596,
+        "pss": 18586,
+        "shared_clean": 13536,
+        "shared_dirty": 14792,
+        "private_clean": 44,
+        "private_dirty": 12224,
+        "shared": 28328,
+        "shared_ratio": 0.698
+      },
+      "children": {
+        "1130313": {
+          "rss": 42952,
+          "pss": 23607,
+          "shared_clean": 8460,
+          "shared_dirty": 14900,
+          "private_clean": 0,
+          "private_dirty": 19592,
+          "shared": 23360,
+          "shared_ratio": 0.544
+        },
+        "1130316": {
+          "rss": 43584,
+          "pss": 24231,
+          "shared_clean": 8464,
+          "shared_dirty": 14908,
+          "private_clean": 0,
+          "private_dirty": 20212,
+          "shared": 23372,
+          "shared_ratio": 0.536
+        },
+        "1130320": {
+          "rss": 43724,
+          "pss": 24425,
+          "shared_clean": 8448,
+          "shared_dirty": 14852,
+          "private_clean": 0,
+          "private_dirty": 20424,
+          "shared": 23300,
+          "shared_ratio": 0.533
+        },
+        "1130325": {
+          "rss": 42708,
+          "pss": 23354,
+          "shared_clean": 8464,
+          "shared_dirty": 14908,
+          "private_clean": 0,
+          "private_dirty": 19336,
+          "shared": 23372,
+          "shared_ratio": 0.547
+        }
+      },
+      "redis": {
+        "used_memory": 2220888,
+        "dbsize": 561,
+        "families": {
+          "b": 399,
+          "batches": 1,
+          "dear": 1,
+          "h": 7,
+          "j": 2,
+          "leader": 1,
+          "lmtr": 4,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "processes": 1,
+          "queue": 3,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 36,
+          "status": 34,
+          "<host>": 4,
+          "unique": 62
+        }
+      }
+    },
+    {
+      "t": 10.1,
+      "parent": {
+        "rss": 40668,
+        "pss": 18667,
+        "shared_clean": 13536,
+        "shared_dirty": 14784,
+        "private_clean": 44,
+        "private_dirty": 12304,
+        "shared": 28320,
+        "shared_ratio": 0.696
+      },
+      "children": {
+        "1130313": {
+          "rss": 44036,
+          "pss": 24710,
+          "shared_clean": 8460,
+          "shared_dirty": 14876,
+          "private_clean": 0,
+          "private_dirty": 20700,
+          "shared": 23336,
+          "shared_ratio": 0.53
+        },
+        "1130316": {
+          "rss": 43876,
+          "pss": 24526,
+          "shared_clean": 8464,
+          "shared_dirty": 14908,
+          "private_clean": 0,
+          "private_dirty": 20504,
+          "shared": 23372,
+          "shared_ratio": 0.533
+        },
+        "1130320": {
+          "rss": 44144,
+          "pss": 24847,
+          "shared_clean": 8448,
+          "shared_dirty": 14852,
+          "private_clean": 0,
+          "private_dirty": 20844,
+          "shared": 23300,
+          "shared_ratio": 0.528
+        },
+        "1130325": {
+          "rss": 44008,
+          "pss": 24675,
+          "shared_clean": 8464,
+          "shared_dirty": 14880,
+          "private_clean": 0,
+          "private_dirty": 20664,
+          "shared": 23344,
+          "shared_ratio": 0.53
+        }
+      },
+      "redis": {
+        "used_memory": 2447800,
+        "dbsize": 1119,
+        "families": {
+          "b": 846,
+          "batches": 1,
+          "dear": 1,
+          "h": 7,
+          "j": 2,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "processes": 1,
+          "queue": 3,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 64,
+          "stat": 4,
+          "status": 63,
+          "<host>": 7,
+          "unique": 111
+        }
+      }
+    },
+    {
+      "t": 15.1,
+      "parent": {
+        "rss": 40648,
+        "pss": 17909,
+        "shared_clean": 13536,
+        "shared_dirty": 15800,
+        "private_clean": 44,
+        "private_dirty": 11268,
+        "shared": 29336,
+        "shared_ratio": 0.722
+      },
+      "children": {
+        "1130738": {
+          "rss": 40284,
+          "pss": 20283,
+          "shared_clean": 8388,
+          "shared_dirty": 15880,
+          "private_clean": 0,
+          "private_dirty": 16016,
+          "shared": 24268,
+          "shared_ratio": 0.602
+        },
+        "1130741": {
+          "rss": 40588,
+          "pss": 20770,
+          "shared_clean": 8348,
+          "shared_dirty": 15616,
+          "private_clean": 0,
+          "private_dirty": 16624,
+          "shared": 23964,
+          "shared_ratio": 0.59
+        },
+        "1130745": {
+          "rss": 40392,
+          "pss": 20463,
+          "shared_clean": 8400,
+          "shared_dirty": 15712,
+          "private_clean": 0,
+          "private_dirty": 16280,
+          "shared": 24112,
+          "shared_ratio": 0.597
+        },
+        "1130749": {
+          "rss": 41520,
+          "pss": 21787,
+          "shared_clean": 8400,
+          "shared_dirty": 15448,
+          "private_clean": 0,
+          "private_dirty": 17672,
+          "shared": 23848,
+          "shared_ratio": 0.574
+        }
+      },
+      "redis": {
+        "used_memory": 2641552,
+        "dbsize": 1475,
+        "families": {
+          "b": 1158,
+          "batches": 1,
+          "dear": 1,
+          "h": 10,
+          "j": 2,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 3,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 99,
+          "stat": 4,
+          "status": 94,
+          "<host>": 4,
+          "unique": 86
+        }
+      }
+    },
+    {
+      "t": 20.1,
+      "parent": {
+        "rss": 40712,
+        "pss": 18497,
+        "shared_clean": 13536,
+        "shared_dirty": 15060,
+        "private_clean": 44,
+        "private_dirty": 12072,
+        "shared": 28596,
+        "shared_ratio": 0.702
+      },
+      "children": {
+        "1130738": {
+          "rss": 44036,
+          "pss": 24504,
+          "shared_clean": 8452,
+          "shared_dirty": 15144,
+          "private_clean": 0,
+          "private_dirty": 20440,
+          "shared": 23596,
+          "shared_ratio": 0.536
+        },
+        "1130741": {
+          "rss": 43828,
+          "pss": 24348,
+          "shared_clean": 8412,
+          "shared_dirty": 15120,
+          "private_clean": 0,
+          "private_dirty": 20296,
+          "shared": 23532,
+          "shared_ratio": 0.537
+        },
+        "1130745": {
+          "rss": 43940,
+          "pss": 24386,
+          "shared_clean": 8464,
+          "shared_dirty": 15164,
+          "private_clean": 0,
+          "private_dirty": 20312,
+          "shared": 23628,
+          "shared_ratio": 0.538
+        },
+        "1130749": {
+          "rss": 44212,
+          "pss": 24665,
+          "shared_clean": 8464,
+          "shared_dirty": 15156,
+          "private_clean": 0,
+          "private_dirty": 20592,
+          "shared": 23620,
+          "shared_ratio": 0.534
+        }
+      },
+      "redis": {
+        "used_memory": 2744448,
+        "dbsize": 2089,
+        "families": {
+          "b": 1663,
+          "batches": 1,
+          "dear": 1,
+          "h": 10,
+          "j": 2,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 4,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 126,
+          "stat": 4,
+          "status": 124,
+          "<host>": 4,
+          "unique": 138
+        }
+      }
+    },
+    {
+      "t": 25.1,
+      "parent": {
+        "rss": 40736,
+        "pss": 19554,
+        "shared_clean": 13536,
+        "shared_dirty": 14964,
+        "private_clean": 44,
+        "private_dirty": 12192,
+        "shared": 28500,
+        "shared_ratio": 0.7
+      },
+      "children": {
+        "1130738": {
+          "rss": 45144,
+          "pss": 26666,
+          "shared_clean": 8452,
+          "shared_dirty": 15036,
+          "private_clean": 0,
+          "private_dirty": 21656,
+          "shared": 23488,
+          "shared_ratio": 0.52
+        },
+        "1130741": {
+          "rss": 44376,
+          "pss": 25911,
+          "shared_clean": 8412,
+          "shared_dirty": 15080,
+          "private_clean": 0,
+          "private_dirty": 20884,
+          "shared": 23492,
+          "shared_ratio": 0.529
+        },
+        "1130745": {
+          "rss": 44652,
+          "pss": 26170,
+          "shared_clean": 8464,
+          "shared_dirty": 15028,
+          "private_clean": 0,
+          "private_dirty": 21160,
+          "shared": 23492,
+          "shared_ratio": 0.526
+        }
+      },
+      "redis": {
+        "used_memory": 2758216,
+        "dbsize": 2575,
+        "families": {
+          "b": 2186,
+          "batches": 1,
+          "dear": 1,
+          "h": 10,
+          "j": 2,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 4,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 148,
+          "stat": 4,
+          "status": 157,
+          "<host>": 6,
+          "unique": 48
+        }
+      }
+    },
+    {
+      "t": 30.2,
+      "parent": {
+        "rss": 40760,
+        "pss": 18033,
+        "shared_clean": 13536,
+        "shared_dirty": 16172,
+        "private_clean": 44,
+        "private_dirty": 11008,
+        "shared": 29708,
+        "shared_ratio": 0.729
+      },
+      "children": {
+        "1130738": {
+          "rss": 45320,
+          "pss": 25897,
+          "shared_clean": 8452,
+          "shared_dirty": 15032,
+          "private_clean": 0,
+          "private_dirty": 21836,
+          "shared": 23484,
+          "shared_ratio": 0.518
+        },
+        "1130741": {
+          "rss": 44792,
+          "pss": 25420,
+          "shared_clean": 8412,
+          "shared_dirty": 15008,
+          "private_clean": 0,
+          "private_dirty": 21372,
+          "shared": 23420,
+          "shared_ratio": 0.523
+        },
+        "1130745": {
+          "rss": 44956,
+          "pss": 25529,
+          "shared_clean": 8464,
+          "shared_dirty": 15024,
+          "private_clean": 0,
+          "private_dirty": 21468,
+          "shared": 23488,
+          "shared_ratio": 0.522
+        },
+        "1131216": {
+          "rss": 42980,
+          "pss": 23059,
+          "shared_clean": 8400,
+          "shared_dirty": 16152,
+          "private_clean": 0,
+          "private_dirty": 18428,
+          "shared": 24552,
+          "shared_ratio": 0.571
+        }
+      },
+      "redis": {
+        "used_memory": 2896848,
+        "dbsize": 3068,
+        "families": {
+          "b": 2583,
+          "batches": 1,
+          "dear": 1,
+          "h": 10,
+          "j": 2,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 4,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 182,
+          "stat": 4,
+          "status": 184,
+          "<host>": 7,
+          "unique": 78
+        }
+      }
+    },
+    {
+      "t": 35.2,
+      "parent": {
+        "rss": 40776,
+        "pss": 18092,
+        "shared_clean": 13536,
+        "shared_dirty": 16088,
+        "private_clean": 44,
+        "private_dirty": 11108,
+        "shared": 29624,
+        "shared_ratio": 0.727
+      },
+      "children": {
+        "1130738": {
+          "rss": 45744,
+          "pss": 26319,
+          "shared_clean": 8452,
+          "shared_dirty": 15028,
+          "private_clean": 0,
+          "private_dirty": 22264,
+          "shared": 23480,
+          "shared_ratio": 0.513
+        },
+        "1130741": {
+          "rss": 44924,
+          "pss": 25548,
+          "shared_clean": 8412,
+          "shared_dirty": 15008,
+          "private_clean": 0,
+          "private_dirty": 21504,
+          "shared": 23420,
+          "shared_ratio": 0.521
+        },
+        "1130745": {
+          "rss": 45408,
+          "pss": 25977,
+          "shared_clean": 8464,
+          "shared_dirty": 15024,
+          "private_clean": 0,
+          "private_dirty": 21920,
+          "shared": 23488,
+          "shared_ratio": 0.517
+        },
+        "1131216": {
+          "rss": 44592,
+          "pss": 24663,
+          "shared_clean": 8464,
+          "shared_dirty": 16072,
+          "private_clean": 0,
+          "private_dirty": 20056,
+          "shared": 24536,
+          "shared_ratio": 0.55
+        }
+      },
+      "redis": {
+        "used_memory": 3013768,
+        "dbsize": 3485,
+        "families": {
+          "b": 2891,
+          "batches": 1,
+          "dear": 1,
+          "h": 10,
+          "j": 2,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 2,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 212,
+          "stat": 4,
+          "status": 212,
+          "<host>": 7,
+          "unique": 131
+        }
+      }
+    },
+    {
+      "t": 40.2,
+      "parent": {
+        "rss": 40792,
+        "pss": 18299,
+        "shared_clean": 13536,
+        "shared_dirty": 15796,
+        "private_clean": 44,
+        "private_dirty": 11416,
+        "shared": 29332,
+        "shared_ratio": 0.719
+      },
+      "children": {
+        "1130738": {
+          "rss": 45956,
+          "pss": 26639,
+          "shared_clean": 8452,
+          "shared_dirty": 14900,
+          "private_clean": 0,
+          "private_dirty": 22604,
+          "shared": 23352,
+          "shared_ratio": 0.508
+        },
+        "1130741": {
+          "rss": 45460,
+          "pss": 26208,
+          "shared_clean": 8412,
+          "shared_dirty": 14856,
+          "private_clean": 0,
+          "private_dirty": 22192,
+          "shared": 23268,
+          "shared_ratio": 0.512
+        },
+        "1130745": {
+          "rss": 45592,
+          "pss": 26268,
+          "shared_clean": 8464,
+          "shared_dirty": 14896,
+          "private_clean": 0,
+          "private_dirty": 22232,
+          "shared": 23360,
+          "shared_ratio": 0.512
+        },
+        "1131216": {
+          "rss": 45788,
+          "pss": 26089,
+          "shared_clean": 8464,
+          "shared_dirty": 15724,
+          "private_clean": 0,
+          "private_dirty": 21600,
+          "shared": 24188,
+          "shared_ratio": 0.528
+        }
+      },
+      "redis": {
+        "used_memory": 2729904,
+        "dbsize": 3927,
+        "families": {
+          "b": 3324,
+          "batches": 1,
+          "dear": 1,
+          "h": 19,
+          "j": 3,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 4,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 237,
+          "stat": 4,
+          "status": 241,
+          "<host>": 8,
+          "unique": 73
+        }
+      }
+    },
+    {
+      "t": 45.2,
+      "parent": {
+        "rss": 40804,
+        "pss": 18313,
+        "shared_clean": 13536,
+        "shared_dirty": 15792,
+        "private_clean": 44,
+        "private_dirty": 11432,
+        "shared": 29328,
+        "shared_ratio": 0.719
+      },
+      "children": {
+        "1130738": {
+          "rss": 45956,
+          "pss": 26639,
+          "shared_clean": 8452,
+          "shared_dirty": 14900,
+          "private_clean": 0,
+          "private_dirty": 22604,
+          "shared": 23352,
+          "shared_ratio": 0.508
+        },
+        "1130741": {
+          "rss": 45460,
+          "pss": 26208,
+          "shared_clean": 8412,
+          "shared_dirty": 14856,
+          "private_clean": 0,
+          "private_dirty": 22192,
+          "shared": 23268,
+          "shared_ratio": 0.512
+        },
+        "1130745": {
+          "rss": 45704,
+          "pss": 26380,
+          "shared_clean": 8464,
+          "shared_dirty": 14896,
+          "private_clean": 0,
+          "private_dirty": 22344,
+          "shared": 23360,
+          "shared_ratio": 0.511
+        },
+        "1131216": {
+          "rss": 46228,
+          "pss": 26531,
+          "shared_clean": 8464,
+          "shared_dirty": 15720,
+          "private_clean": 0,
+          "private_dirty": 22044,
+          "shared": 24184,
+          "shared_ratio": 0.523
+        }
+      },
+      "redis": {
+        "used_memory": 3044400,
+        "dbsize": 4394,
+        "families": {
+          "b": 3755,
+          "batches": 1,
+          "dear": 1,
+          "h": 19,
+          "j": 3,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 4,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 270,
+          "stat": 4,
+          "status": 269,
+          "<host>": 8,
+          "unique": 47
+        }
+      }
+    },
+    {
+      "t": 50.3,
+      "parent": {
+        "rss": 41124,
+        "pss": 17521,
+        "shared_clean": 13536,
+        "shared_dirty": 17144,
+        "private_clean": 44,
+        "private_dirty": 10400,
+        "shared": 30680,
+        "shared_ratio": 0.746
+      },
+      "children": {
+        "1130745": {
+          "rss": 45708,
+          "pss": 26511,
+          "shared_clean": 8464,
+          "shared_dirty": 14732,
+          "private_clean": 0,
+          "private_dirty": 22512,
+          "shared": 23196,
+          "shared_ratio": 0.507
+        },
+        "1131216": {
+          "rss": 46476,
+          "pss": 26592,
+          "shared_clean": 8464,
+          "shared_dirty": 15668,
+          "private_clean": 0,
+          "private_dirty": 22344,
+          "shared": 24132,
+          "shared_ratio": 0.519
+        },
+        "1131846": {
+          "rss": 40384,
+          "pss": 19679,
+          "shared_clean": 8400,
+          "shared_dirty": 16936,
+          "private_clean": 0,
+          "private_dirty": 15048,
+          "shared": 25336,
+          "shared_ratio": 0.627
+        },
+        "1131907": {
+          "rss": 39448,
+          "pss": 18699,
+          "shared_clean": 8400,
+          "shared_dirty": 17048,
+          "private_clean": 0,
+          "private_dirty": 14000,
+          "shared": 25448,
+          "shared_ratio": 0.645
+        }
+      },
+      "redis": {
+        "used_memory": 3562280,
+        "dbsize": 4846,
+        "families": {
+          "b": 4088,
+          "batches": 1,
+          "h": 19,
+          "j": 3,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 3,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 297,
+          "stat": 4,
+          "status": 303,
+          "<host>": 6,
+          "unique": 110
+        }
+      }
+    },
+    {
+      "t": 55.3,
+      "parent": {
+        "rss": 41212,
+        "pss": 17965,
+        "shared_clean": 13536,
+        "shared_dirty": 16420,
+        "private_clean": 44,
+        "private_dirty": 11212,
+        "shared": 29956,
+        "shared_ratio": 0.727
+      },
+      "children": {
+        "1131846": {
+          "rss": 44524,
+          "pss": 24252,
+          "shared_clean": 8464,
+          "shared_dirty": 16068,
+          "private_clean": 0,
+          "private_dirty": 19992,
+          "shared": 24532,
+          "shared_ratio": 0.551
+        },
+        "1131907": {
+          "rss": 44364,
+          "pss": 24110,
+          "shared_clean": 8464,
+          "shared_dirty": 16048,
+          "private_clean": 0,
+          "private_dirty": 19852,
+          "shared": 24512,
+          "shared_ratio": 0.553
+        },
+        "1131967": {
+          "rss": 43116,
+          "pss": 22748,
+          "shared_clean": 8400,
+          "shared_dirty": 16256,
+          "private_clean": 0,
+          "private_dirty": 18460,
+          "shared": 24656,
+          "shared_ratio": 0.572
+        },
+        "1132027": {
+          "rss": 42128,
+          "pss": 21684,
+          "shared_clean": 8400,
+          "shared_dirty": 16404,
+          "private_clean": 0,
+          "private_dirty": 17324,
+          "shared": 24804,
+          "shared_ratio": 0.589
+        }
+      },
+      "redis": {
+        "used_memory": 3568960,
+        "dbsize": 5366,
+        "families": {
+          "b": 4473,
+          "batches": 1,
+          "dear": 1,
+          "h": 20,
+          "j": 3,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 4,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 331,
+          "stat": 4,
+          "status": 328,
+          "<host>": 4,
+          "unique": 186
+        }
+      }
+    },
+    {
+      "t": 60.3,
+      "parent": {
+        "rss": 17164,
+        "pss": 10883,
+        "shared_clean": 7248,
+        "shared_dirty": 0,
+        "private_clean": 0,
+        "private_dirty": 9916,
+        "shared": 7248,
+        "shared_ratio": 0.422
+      },
+      "children": {},
+      "redis": {
+        "used_memory": 3700920,
+        "dbsize": 5918,
+        "families": {
+          "b": 4897,
+          "batches": 1,
+          "dear": 1,
+          "h": 20,
+          "it": 4,
+          "j": 3,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 2,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 359,
+          "stat": 4,
+          "status": 360,
+          "<host>": 6,
+          "unique": 248
+        }
+      }
+    },
+    {
+      "t": 65.4,
+      "parent": {
+        "rss": 40548,
+        "pss": 18658,
+        "shared_clean": 13416,
+        "shared_dirty": 14720,
+        "private_clean": 60,
+        "private_dirty": 12352,
+        "shared": 28136,
+        "shared_ratio": 0.694
+      },
+      "children": {
+        "1132286": {
+          "rss": 43764,
+          "pss": 24648,
+          "shared_clean": 8312,
+          "shared_dirty": 14764,
+          "private_clean": 0,
+          "private_dirty": 20688,
+          "shared": 23076,
+          "shared_ratio": 0.527
+        },
+        "1132289": {
+          "rss": 43720,
+          "pss": 24539,
+          "shared_clean": 8356,
+          "shared_dirty": 14792,
+          "private_clean": 0,
+          "private_dirty": 20572,
+          "shared": 23148,
+          "shared_ratio": 0.529
+        },
+        "1132292": {
+          "rss": 43812,
+          "pss": 24628,
+          "shared_clean": 8332,
+          "shared_dirty": 14828,
+          "private_clean": 0,
+          "private_dirty": 20652,
+          "shared": 23160,
+          "shared_ratio": 0.529
+        },
+        "1132297": {
+          "rss": 43400,
+          "pss": 24193,
+          "shared_clean": 8356,
+          "shared_dirty": 14828,
+          "private_clean": 0,
+          "private_dirty": 20216,
+          "shared": 23184,
+          "shared_ratio": 0.534
+        }
+      },
+      "redis": {
+        "used_memory": 3865240,
+        "dbsize": 6524,
+        "families": {
+          "b": 5404,
+          "batches": 1,
+          "dear": 1,
+          "h": 20,
+          "j": 3,
+          "leader": 1,
+          "lmtr": 4,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 4,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 381,
+          "stat": 4,
+          "status": 384,
+          "<host>": 4,
+          "unique": 303
+        }
+      }
+    },
+    {
+      "t": 70.4,
+      "parent": {
+        "rss": 40616,
+        "pss": 18770,
+        "shared_clean": 13416,
+        "shared_dirty": 14664,
+        "private_clean": 60,
+        "private_dirty": 12476,
+        "shared": 28080,
+        "shared_ratio": 0.691
+      },
+      "children": {
+        "1132286": {
+          "rss": 44136,
+          "pss": 25049,
+          "shared_clean": 8312,
+          "shared_dirty": 14728,
+          "private_clean": 0,
+          "private_dirty": 21096,
+          "shared": 23040,
+          "shared_ratio": 0.522
+        },
+        "1132289": {
+          "rss": 44128,
+          "pss": 24970,
+          "shared_clean": 8356,
+          "shared_dirty": 14764,
+          "private_clean": 0,
+          "private_dirty": 21008,
+          "shared": 23120,
+          "shared_ratio": 0.524
+        },
+        "1132292": {
+          "rss": 44112,
+          "pss": 24958,
+          "shared_clean": 8332,
+          "shared_dirty": 14792,
+          "private_clean": 0,
+          "private_dirty": 20988,
+          "shared": 23124,
+          "shared_ratio": 0.524
+        },
+        "1132297": {
+          "rss": 43820,
+          "pss": 24643,
+          "shared_clean": 8356,
+          "shared_dirty": 14792,
+          "private_clean": 0,
+          "private_dirty": 20672,
+          "shared": 23148,
+          "shared_ratio": 0.528
+        }
+      },
+      "redis": {
+        "used_memory": 3991536,
+        "dbsize": 6990,
+        "families": {
+          "b": 5759,
+          "batches": 1,
+          "dear": 1,
+          "h": 20,
+          "j": 3,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 4,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 409,
+          "stat": 4,
+          "status": 410,
+          "<host>": 4,
+          "unique": 361
+        }
+      }
+    },
+    {
+      "t": 75.4,
+      "parent": {
+        "rss": 40648,
+        "pss": 17864,
+        "shared_clean": 13416,
+        "shared_dirty": 16632,
+        "private_clean": 60,
+        "private_dirty": 10540,
+        "shared": 30048,
+        "shared_ratio": 0.739
+      },
+      "children": {
+        "1132286": {
+          "rss": 44976,
+          "pss": 26058,
+          "shared_clean": 8312,
+          "shared_dirty": 14536,
+          "private_clean": 0,
+          "private_dirty": 22128,
+          "shared": 22848,
+          "shared_ratio": 0.508
+        },
+        "1132289": {
+          "rss": 44784,
+          "pss": 25747,
+          "shared_clean": 8356,
+          "shared_dirty": 14636,
+          "private_clean": 0,
+          "private_dirty": 21792,
+          "shared": 22992,
+          "shared_ratio": 0.513
+        },
+        "1132292": {
+          "rss": 44808,
+          "pss": 25759,
+          "shared_clean": 8332,
+          "shared_dirty": 14688,
+          "private_clean": 0,
+          "private_dirty": 21788,
+          "shared": 23020,
+          "shared_ratio": 0.514
+        },
+        "1132767": {
+          "rss": 40688,
+          "pss": 20702,
+          "shared_clean": 8356,
+          "shared_dirty": 16588,
+          "private_clean": 0,
+          "private_dirty": 15744,
+          "shared": 24944,
+          "shared_ratio": 0.613
+        }
+      },
+      "redis": {
+        "used_memory": 3921896,
+        "dbsize": 7202,
+        "families": {
+          "b": 6201,
+          "batches": 1,
+          "dear": 1,
+          "h": 20,
+          "j": 3,
+          "leader": 1,
+          "lmtr": 4,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 4,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 450,
+          "stat": 4,
+          "status": 429,
+          "<host>": 8,
+          "unique": 68
+        }
+      }
+    },
+    {
+      "t": 80.5,
+      "parent": {
+        "rss": 40652,
+        "pss": 18306,
+        "shared_clean": 13416,
+        "shared_dirty": 15756,
+        "private_clean": 60,
+        "private_dirty": 11420,
+        "shared": 29172,
+        "shared_ratio": 0.718
+      },
+      "children": {
+        "1132286": {
+          "rss": 45136,
+          "pss": 26218,
+          "shared_clean": 8312,
+          "shared_dirty": 14536,
+          "private_clean": 0,
+          "private_dirty": 22288,
+          "shared": 22848,
+          "shared_ratio": 0.506
+        },
+        "1132289": {
+          "rss": 45232,
+          "pss": 26195,
+          "shared_clean": 8356,
+          "shared_dirty": 14636,
+          "private_clean": 0,
+          "private_dirty": 22240,
+          "shared": 22992,
+          "shared_ratio": 0.508
+        },
+        "1132292": {
+          "rss": 44976,
+          "pss": 25927,
+          "shared_clean": 8332,
+          "shared_dirty": 14688,
+          "private_clean": 0,
+          "private_dirty": 21956,
+          "shared": 23020,
+          "shared_ratio": 0.512
+        },
+        "1132767": {
+          "rss": 44400,
+          "pss": 24852,
+          "shared_clean": 8356,
+          "shared_dirty": 15712,
+          "private_clean": 0,
+          "private_dirty": 20332,
+          "shared": 24068,
+          "shared_ratio": 0.542
+        }
+      },
+      "redis": {
+        "used_memory": 4011952,
+        "dbsize": 7721,
+        "families": {
+          "b": 6615,
+          "batches": 1,
+          "dear": 1,
+          "h": 20,
+          "j": 3,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 5,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 480,
+          "stat": 4,
+          "status": 449,
+          "<host>": 8,
+          "unique": 122
+        }
+      }
+    },
+    {
+      "t": 85.5,
+      "parent": {
+        "rss": 40924,
+        "pss": 16177,
+        "shared_clean": 13416,
+        "shared_dirty": 18492,
+        "private_clean": 60,
+        "private_dirty": 8956,
+        "shared": 31908,
+        "shared_ratio": 0.78
+      },
+      "children": {
+        "1132289": {
+          "rss": 45464,
+          "pss": 25863,
+          "shared_clean": 8356,
+          "shared_dirty": 14600,
+          "private_clean": 0,
+          "private_dirty": 22508,
+          "shared": 22956,
+          "shared_ratio": 0.505
+        },
+        "1132292": {
+          "rss": 45356,
+          "pss": 25714,
+          "shared_clean": 8332,
+          "shared_dirty": 14684,
+          "private_clean": 0,
+          "private_dirty": 22340,
+          "shared": 23016,
+          "shared_ratio": 0.507
+        },
+        "1132767": {
+          "rss": 45048,
+          "pss": 24717,
+          "shared_clean": 8356,
+          "shared_dirty": 15544,
+          "private_clean": 0,
+          "private_dirty": 21148,
+          "shared": 23900,
+          "shared_ratio": 0.531
+        },
+        "1133055": {
+          "rss": 40356,
+          "pss": 19383,
+          "shared_clean": 8356,
+          "shared_dirty": 16504,
+          "private_clean": 0,
+          "private_dirty": 15496,
+          "shared": 24860,
+          "shared_ratio": 0.616
+        },
+        "1133117": {
+          "rss": 38308,
+          "pss": 16642,
+          "shared_clean": 8000,
+          "shared_dirty": 18456,
+          "private_clean": 0,
+          "private_dirty": 11852,
+          "shared": 26456,
+          "shared_ratio": 0.691
+        }
+      },
+      "redis": {
+        "used_memory": 4590512,
+        "dbsize": 8193,
+        "families": {
+          "b": 7000,
+          "batches": 1,
+          "dear": 1,
+          "h": 20,
+          "it": 1,
+          "j": 3,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 6,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 510,
+          "stat": 4,
+          "status": 485,
+          "<host>": 10,
+          "unique": 139
+        }
+      }
+    },
+    {
+      "t": 90.5,
+      "parent": {
+        "rss": 40992,
+        "pss": 18008,
+        "shared_clean": 13416,
+        "shared_dirty": 16248,
+        "private_clean": 60,
+        "private_dirty": 11268,
+        "shared": 29664,
+        "shared_ratio": 0.724
+      },
+      "children": {
+        "1133055": {
+          "rss": 43968,
+          "pss": 24178,
+          "shared_clean": 8356,
+          "shared_dirty": 15544,
+          "private_clean": 0,
+          "private_dirty": 20068,
+          "shared": 23900,
+          "shared_ratio": 0.544
+        },
+        "1133117": {
+          "rss": 43664,
+          "pss": 23727,
+          "shared_clean": 8356,
+          "shared_dirty": 15740,
+          "private_clean": 0,
+          "private_dirty": 19568,
+          "shared": 24096,
+          "shared_ratio": 0.552
+        },
+        "1133177": {
+          "rss": 43756,
+          "pss": 23717,
+          "shared_clean": 8356,
+          "shared_dirty": 15892,
+          "private_clean": 0,
+          "private_dirty": 19508,
+          "shared": 24248,
+          "shared_ratio": 0.554
+        },
+        "1133238": {
+          "rss": 41532,
+          "pss": 21318,
+          "shared_clean": 8356,
+          "shared_dirty": 16240,
+          "private_clean": 0,
+          "private_dirty": 16936,
+          "shared": 24596,
+          "shared_ratio": 0.592
+        }
+      },
+      "redis": {
+        "used_memory": 4282200,
+        "dbsize": 8593,
+        "families": {
+          "b": 7383,
+          "batches": 1,
+          "dear": 1,
+          "h": 20,
+          "j": 3,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 4,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 539,
+          "stat": 4,
+          "status": 515,
+          "<host>": 6,
+          "unique": 103
+        }
+      }
+    },
+    {
+      "t": 95.6,
+      "parent": {
+        "rss": 41008,
+        "pss": 18276,
+        "shared_clean": 13416,
+        "shared_dirty": 15792,
+        "private_clean": 60,
+        "private_dirty": 11740,
+        "shared": 29208,
+        "shared_ratio": 0.712
+      },
+      "children": {
+        "1133055": {
+          "rss": 45272,
+          "pss": 25527,
+          "shared_clean": 8356,
+          "shared_dirty": 15488,
+          "private_clean": 0,
+          "private_dirty": 21428,
+          "shared": 23844,
+          "shared_ratio": 0.527
+        },
+        "1133117": {
+          "rss": 44720,
+          "pss": 24786,
+          "shared_clean": 8356,
+          "shared_dirty": 15740,
+          "private_clean": 0,
+          "private_dirty": 20624,
+          "shared": 24096,
+          "shared_ratio": 0.539
+        },
+        "1133177": {
+          "rss": 44532,
+          "pss": 24579,
+          "shared_clean": 8356,
+          "shared_dirty": 15768,
+          "private_clean": 0,
+          "private_dirty": 20408,
+          "shared": 24124,
+          "shared_ratio": 0.542
+        },
+        "1133238": {
+          "rss": 44296,
+          "pss": 24338,
+          "shared_clean": 8356,
+          "shared_dirty": 15776,
+          "private_clean": 0,
+          "private_dirty": 20164,
+          "shared": 24132,
+          "shared_ratio": 0.545
+        }
+      },
+      "redis": {
+        "used_memory": 4313832,
+        "dbsize": 9019,
+        "families": {
+          "b": 7810,
+          "batches": 1,
+          "dear": 1,
+          "h": 20,
+          "j": 3,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 5,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 561,
+          "stat": 4,
+          "status": 538,
+          "<host>": 7,
+          "unique": 56
+        }
+      }
+    },
+    {
+      "t": 100.6,
+      "parent": {
+        "rss": 41028,
+        "pss": 18323,
+        "shared_clean": 13416,
+        "shared_dirty": 15788,
+        "private_clean": 60,
+        "private_dirty": 11764,
+        "shared": 29204,
+        "shared_ratio": 0.712
+      },
+      "children": {
+        "1133055": {
+          "rss": 45440,
+          "pss": 25708,
+          "shared_clean": 8356,
+          "shared_dirty": 15484,
+          "private_clean": 0,
+          "private_dirty": 21600,
+          "shared": 23840,
+          "shared_ratio": 0.525
+        },
+        "1133117": {
+          "rss": 45016,
+          "pss": 25134,
+          "shared_clean": 8356,
+          "shared_dirty": 15684,
+          "private_clean": 0,
+          "private_dirty": 20976,
+          "shared": 24040,
+          "shared_ratio": 0.534
+        },
+        "1133177": {
+          "rss": 44836,
+          "pss": 24952,
+          "shared_clean": 8356,
+          "shared_dirty": 15700,
+          "private_clean": 0,
+          "private_dirty": 20780,
+          "shared": 24056,
+          "shared_ratio": 0.537
+        },
+        "1133238": {
+          "rss": 45048,
+          "pss": 25187,
+          "shared_clean": 8356,
+          "shared_dirty": 15652,
+          "private_clean": 0,
+          "private_dirty": 21040,
+          "shared": 24008,
+          "shared_ratio": 0.533
+        }
+      },
+      "redis": {
+        "used_memory": 4464312,
+        "dbsize": 9129,
+        "families": {
+          "b": 7923,
+          "batches": 1,
+          "dear": 1,
+          "h": 29,
+          "j": 4,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 5,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 573,
+          "stat": 4,
+          "status": 545,
+          "<host>": 9,
+          "unique": 24
+        }
+      }
+    },
+    {
+      "t": 105.6,
+      "parent": {
+        "rss": 41032,
+        "pss": 18355,
+        "shared_clean": 13416,
+        "shared_dirty": 15732,
+        "private_clean": 60,
+        "private_dirty": 11824,
+        "shared": 29148,
+        "shared_ratio": 0.71
+      },
+      "children": {
+        "1133055": {
+          "rss": 45576,
+          "pss": 25844,
+          "shared_clean": 8356,
+          "shared_dirty": 15484,
+          "private_clean": 0,
+          "private_dirty": 21736,
+          "shared": 23840,
+          "shared_ratio": 0.523
+        },
+        "1133117": {
+          "rss": 45248,
+          "pss": 25366,
+          "shared_clean": 8356,
+          "shared_dirty": 15684,
+          "private_clean": 0,
+          "private_dirty": 21208,
+          "shared": 24040,
+          "shared_ratio": 0.531
+        },
+        "1133177": {
+          "rss": 45088,
+          "pss": 25235,
+          "shared_clean": 8356,
+          "shared_dirty": 15640,
+          "private_clean": 0,
+          "private_dirty": 21092,
+          "shared": 23996,
+          "shared_ratio": 0.532
+        },
+        "1133238": {
+          "rss": 45184,
+          "pss": 25323,
+          "shared_clean": 8356,
+          "shared_dirty": 15652,
+          "private_clean": 0,
+          "private_dirty": 21176,
+          "shared": 24008,
+          "shared_ratio": 0.531
+        }
+      },
+      "redis": {
+        "used_memory": 4472944,
+        "dbsize": 9730,
+        "families": {
+          "b": 8413,
+          "batches": 1,
+          "dear": 1,
+          "h": 29,
+          "j": 4,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 4,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 603,
+          "stat": 4,
+          "status": 571,
+          "<host>": 10,
+          "unique": 76
+        }
+      }
+    },
+    {
+      "t": 110.7,
+      "parent": {
+        "rss": 41048,
+        "pss": 18371,
+        "shared_clean": 13416,
+        "shared_dirty": 15732,
+        "private_clean": 60,
+        "private_dirty": 11840,
+        "shared": 29148,
+        "shared_ratio": 0.71
+      },
+      "children": {
+        "1133055": {
+          "rss": 45972,
+          "pss": 26240,
+          "shared_clean": 8356,
+          "shared_dirty": 15484,
+          "private_clean": 0,
+          "private_dirty": 22132,
+          "shared": 23840,
+          "shared_ratio": 0.519
+        },
+        "1133117": {
+          "rss": 45632,
+          "pss": 25750,
+          "shared_clean": 8356,
+          "shared_dirty": 15684,
+          "private_clean": 0,
+          "private_dirty": 21592,
+          "shared": 24040,
+          "shared_ratio": 0.527
+        },
+        "1133177": {
+          "rss": 45156,
+          "pss": 25303,
+          "shared_clean": 8356,
+          "shared_dirty": 15640,
+          "private_clean": 0,
+          "private_dirty": 21160,
+          "shared": 23996,
+          "shared_ratio": 0.531
+        },
+        "1133238": {
+          "rss": 45332,
+          "pss": 25471,
+          "shared_clean": 8356,
+          "shared_dirty": 15652,
+          "private_clean": 0,
+          "private_dirty": 21324,
+          "shared": 24008,
+          "shared_ratio": 0.53
+        }
+      },
+      "redis": {
+        "used_memory": 4605152,
+        "dbsize": 10213,
+        "families": {
+          "b": 8785,
+          "batches": 1,
+          "dear": 1,
+          "h": 29,
+          "j": 4,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 5,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 629,
+          "stat": 4,
+          "status": 605,
+          "<host>": 9,
+          "unique": 129
+        }
+      }
+    },
+    {
+      "t": 115.7,
+      "parent": {
+        "rss": 41232,
+        "pss": 17664,
+        "shared_clean": 13416,
+        "shared_dirty": 17032,
+        "private_clean": 60,
+        "private_dirty": 10724,
+        "shared": 30448,
+        "shared_ratio": 0.738
+      },
+      "children": {
+        "1133850": {
+          "rss": 42172,
+          "pss": 22045,
+          "shared_clean": 8356,
+          "shared_dirty": 15980,
+          "private_clean": 0,
+          "private_dirty": 17836,
+          "shared": 24336,
+          "shared_ratio": 0.577
+        },
+        "1133912": {
+          "rss": 41780,
+          "pss": 21427,
+          "shared_clean": 8356,
+          "shared_dirty": 16280,
+          "private_clean": 0,
+          "private_dirty": 17144,
+          "shared": 24636,
+          "shared_ratio": 0.59
+        },
+        "1133991": {
+          "rss": 40860,
+          "pss": 20222,
+          "shared_clean": 8356,
+          "shared_dirty": 16708,
+          "private_clean": 0,
+          "private_dirty": 15796,
+          "shared": 25064,
+          "shared_ratio": 0.613
+        },
+        "1134051": {
+          "rss": 40164,
+          "pss": 19654,
+          "shared_clean": 8000,
+          "shared_dirty": 17020,
+          "private_clean": 0,
+          "private_dirty": 15144,
+          "shared": 25020,
+          "shared_ratio": 0.623
+        }
+      },
+      "redis": {
+        "used_memory": 4925960,
+        "dbsize": 10748,
+        "families": {
+          "b": 9183,
+          "batches": 1,
+          "dear": 1,
+          "h": 30,
+          "j": 4,
+          "leader": 1,
+          "lmtr": 4,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 5,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 667,
+          "stat": 4,
+          "status": 630,
+          "<host>": 6,
+          "unique": 204
+        }
+      }
+    },
+    {
+      "t": 120.8,
+      "parent": {
+        "rss": 41364,
+        "pss": 18563,
+        "shared_clean": 13416,
+        "shared_dirty": 15876,
+        "private_clean": 60,
+        "private_dirty": 12012,
+        "shared": 29292,
+        "shared_ratio": 0.708
+      },
+      "children": {
+        "1133850": {
+          "rss": 44632,
+          "pss": 24682,
+          "shared_clean": 8356,
+          "shared_dirty": 15744,
+          "private_clean": 0,
+          "private_dirty": 20532,
+          "shared": 24100,
+          "shared_ratio": 0.54
+        },
+        "1133912": {
+          "rss": 44596,
+          "pss": 24594,
+          "shared_clean": 8356,
+          "shared_dirty": 15812,
+          "private_clean": 0,
+          "private_dirty": 20428,
+          "shared": 24168,
+          "shared_ratio": 0.542
+        },
+        "1133991": {
+          "rss": 43932,
+          "pss": 23942,
+          "shared_clean": 8356,
+          "shared_dirty": 15796,
+          "private_clean": 0,
+          "private_dirty": 19780,
+          "shared": 24152,
+          "shared_ratio": 0.55
+        },
+        "1134051": {
+          "rss": 44376,
+          "pss": 24346,
+          "shared_clean": 8356,
+          "shared_dirty": 15868,
+          "private_clean": 0,
+          "private_dirty": 20152,
+          "shared": 24224,
+          "shared_ratio": 0.546
+        }
+      },
+      "redis": {
+        "used_memory": 4876864,
+        "dbsize": 11314,
+        "families": {
+          "b": 9634,
+          "batches": 1,
+          "dear": 1,
+          "h": 30,
+          "j": 4,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 4,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 696,
+          "stat": 4,
+          "status": 655,
+          "<host>": 6,
+          "unique": 262
+        }
+      }
+    },
+    {
+      "t": 125.8,
+      "parent": {
+        "rss": 41520,
+        "pss": 16595,
+        "shared_clean": 13416,
+        "shared_dirty": 18368,
+        "private_clean": 60,
+        "private_dirty": 9676,
+        "shared": 31784,
+        "shared_ratio": 0.766
+      },
+      "children": {
+        "1133991": {
+          "rss": 45300,
+          "pss": 24765,
+          "shared_clean": 8356,
+          "shared_dirty": 15656,
+          "private_clean": 0,
+          "private_dirty": 21288,
+          "shared": 24012,
+          "shared_ratio": 0.53
+        },
+        "1134051": {
+          "rss": 44936,
+          "pss": 24292,
+          "shared_clean": 8356,
+          "shared_dirty": 15796,
+          "private_clean": 0,
+          "private_dirty": 20784,
+          "shared": 24152,
+          "shared_ratio": 0.537
+        },
+        "1134308": {
+          "rss": 40860,
+          "pss": 19602,
+          "shared_clean": 8356,
+          "shared_dirty": 16616,
+          "private_clean": 0,
+          "private_dirty": 15888,
+          "shared": 24972,
+          "shared_ratio": 0.611
+        },
+        "1134369": {
+          "rss": 40632,
+          "pss": 19293,
+          "shared_clean": 8356,
+          "shared_dirty": 16728,
+          "private_clean": 0,
+          "private_dirty": 15548,
+          "shared": 25084,
+          "shared_ratio": 0.617
+        },
+        "1134429": {
+          "rss": 38416,
+          "pss": 16634,
+          "shared_clean": 8000,
+          "shared_dirty": 18208,
+          "private_clean": 0,
+          "private_dirty": 12208,
+          "shared": 26208,
+          "shared_ratio": 0.682
+        }
+      },
+      "redis": {
+        "used_memory": 5214992,
+        "dbsize": 11557,
+        "families": {
+          "b": 10038,
+          "batches": 1,
+          "dear": 1,
+          "h": 30,
+          "j": 4,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 4,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 721,
+          "stat": 4,
+          "status": 681,
+          "<host>": 9,
+          "unique": 51
+        }
+      }
+    },
+    {
+      "t": 130.8,
+      "parent": {
+        "rss": 41572,
+        "pss": 18681,
+        "shared_clean": 13416,
+        "shared_dirty": 16032,
+        "private_clean": 60,
+        "private_dirty": 12064,
+        "shared": 29448,
+        "shared_ratio": 0.708
+      },
+      "children": {
+        "1134308": {
+          "rss": 44532,
+          "pss": 24556,
+          "shared_clean": 8356,
+          "shared_dirty": 15780,
+          "private_clean": 0,
+          "private_dirty": 20396,
+          "shared": 24136,
+          "shared_ratio": 0.542
+        },
+        "1134369": {
+          "rss": 44432,
+          "pss": 24410,
+          "shared_clean": 8356,
+          "shared_dirty": 15836,
+          "private_clean": 0,
+          "private_dirty": 20240,
+          "shared": 24192,
+          "shared_ratio": 0.544
+        },
+        "1134429": {
+          "rss": 44296,
+          "pss": 24258,
+          "shared_clean": 8356,
+          "shared_dirty": 15860,
+          "private_clean": 0,
+          "private_dirty": 20080,
+          "shared": 24216,
+          "shared_ratio": 0.547
+        },
+        "1134490": {
+          "rss": 42848,
+          "pss": 22737,
+          "shared_clean": 8356,
+          "shared_dirty": 16008,
+          "private_clean": 0,
+          "private_dirty": 18484,
+          "shared": 24364,
+          "shared_ratio": 0.569
+        }
+      },
+      "redis": {
+        "used_memory": 4926344,
+        "dbsize": 12050,
+        "families": {
+          "b": 10429,
+          "batches": 1,
+          "dear": 1,
+          "h": 30,
+          "j": 4,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 4,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 745,
+          "stat": 4,
+          "status": 707,
+          "<host>": 4,
+          "unique": 109
+        }
+      }
+    },
+    {
+      "t": 135.9,
+      "parent": {
+        "rss": 41592,
+        "pss": 17272,
+        "shared_clean": 13416,
+        "shared_dirty": 17580,
+        "private_clean": 60,
+        "private_dirty": 10536,
+        "shared": 30996,
+        "shared_ratio": 0.745
+      },
+      "children": {
+        "1134308": {
+          "rss": 45488,
+          "pss": 24952,
+          "shared_clean": 8356,
+          "shared_dirty": 15660,
+          "private_clean": 0,
+          "private_dirty": 21472,
+          "shared": 24016,
+          "shared_ratio": 0.528
+        },
+        "1134369": {
+          "rss": 44832,
+          "pss": 24153,
+          "shared_clean": 8356,
+          "shared_dirty": 15836,
+          "private_clean": 0,
+          "private_dirty": 20640,
+          "shared": 24192,
+          "shared_ratio": 0.54
+        },
+        "1134429": {
+          "rss": 44920,
+          "pss": 24229,
+          "shared_clean": 8356,
+          "shared_dirty": 15852,
+          "private_clean": 0,
+          "private_dirty": 20712,
+          "shared": 24208,
+          "shared_ratio": 0.539
+        },
+        "1134490": {
+          "rss": 44716,
+          "pss": 24025,
+          "shared_clean": 8356,
+          "shared_dirty": 15852,
+          "private_clean": 0,
+          "private_dirty": 20508,
+          "shared": 24208,
+          "shared_ratio": 0.541
+        },
+        "1134759": {
+          "rss": 39344,
+          "pss": 18091,
+          "shared_clean": 8000,
+          "shared_dirty": 17568,
+          "private_clean": 0,
+          "private_dirty": 13776,
+          "shared": 25568,
+          "shared_ratio": 0.65
+        }
+      },
+      "redis": {
+        "used_memory": 5209376,
+        "dbsize": 12529,
+        "families": {
+          "b": 10892,
+          "batches": 1,
+          "dear": 1,
+          "h": 30,
+          "j": 4,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 5,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 777,
+          "stat": 4,
+          "status": 743,
+          "<host>": 8,
+          "unique": 53
+        }
+      }
+    },
+    {
+      "t": 140.9,
+      "parent": {
+        "rss": 41624,
+        "pss": 18440,
+        "shared_clean": 13416,
+        "shared_dirty": 16552,
+        "private_clean": 60,
+        "private_dirty": 11596,
+        "shared": 29968,
+        "shared_ratio": 0.72
+      },
+      "children": {
+        "1134759": {
+          "rss": 44504,
+          "pss": 24500,
+          "shared_clean": 8356,
+          "shared_dirty": 15812,
+          "private_clean": 0,
+          "private_dirty": 20336,
+          "shared": 24168,
+          "shared_ratio": 0.543
+        },
+        "1134820": {
+          "rss": 43296,
+          "pss": 23192,
+          "shared_clean": 8356,
+          "shared_dirty": 15944,
+          "private_clean": 0,
+          "private_dirty": 18996,
+          "shared": 24300,
+          "shared_ratio": 0.561
+        },
+        "1134880": {
+          "rss": 43196,
+          "pss": 23057,
+          "shared_clean": 8356,
+          "shared_dirty": 15996,
+          "private_clean": 0,
+          "private_dirty": 18844,
+          "shared": 24352,
+          "shared_ratio": 0.564
+        },
+        "1134940": {
+          "rss": 41608,
+          "pss": 21209,
+          "shared_clean": 8356,
+          "shared_dirty": 16524,
+          "private_clean": 0,
+          "private_dirty": 16728,
+          "shared": 24880,
+          "shared_ratio": 0.598
+        }
+      },
+      "redis": {
+        "used_memory": 5094224,
+        "dbsize": 13105,
+        "families": {
+          "b": 11389,
+          "batches": 1,
+          "dear": 1,
+          "h": 30,
+          "j": 4,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 5,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 797,
+          "stat": 4,
+          "status": 768,
+          "<host>": 4,
+          "unique": 90
+        }
+      }
+    },
+    {
+      "t": 146.0,
+      "parent": {
+        "rss": 41628,
+        "pss": 18777,
+        "shared_clean": 13416,
+        "shared_dirty": 15936,
+        "private_clean": 60,
+        "private_dirty": 12216,
+        "shared": 29352,
+        "shared_ratio": 0.705
+      },
+      "children": {
+        "1134759": {
+          "rss": 44836,
+          "pss": 24833,
+          "shared_clean": 8356,
+          "shared_dirty": 15812,
+          "private_clean": 0,
+          "private_dirty": 20668,
+          "shared": 24168,
+          "shared_ratio": 0.539
+        },
+        "1134820": {
+          "rss": 44592,
+          "pss": 24551,
+          "shared_clean": 8356,
+          "shared_dirty": 15860,
+          "private_clean": 0,
+          "private_dirty": 20376,
+          "shared": 24216,
+          "shared_ratio": 0.543
+        },
+        "1134880": {
+          "rss": 44508,
+          "pss": 24442,
+          "shared_clean": 8356,
+          "shared_dirty": 15900,
+          "private_clean": 0,
+          "private_dirty": 20252,
+          "shared": 24256,
+          "shared_ratio": 0.545
+        },
+        "1134940": {
+          "rss": 44936,
+          "pss": 24873,
+          "shared_clean": 8356,
+          "shared_dirty": 15900,
+          "private_clean": 0,
+          "private_dirty": 20680,
+          "shared": 24256,
+          "shared_ratio": 0.54
+        }
+      },
+      "redis": {
+        "used_memory": 5211792,
+        "dbsize": 13601,
+        "families": {
+          "b": 11766,
+          "batches": 1,
+          "dear": 1,
+          "h": 30,
+          "j": 4,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 4,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 821,
+          "stat": 4,
+          "status": 788,
+          "<host>": 4,
+          "unique": 165
+        }
+      }
+    },
+    {
+      "t": 151.0,
+      "parent": {
+        "rss": 41696,
+        "pss": 19030,
+        "shared_clean": 13416,
+        "shared_dirty": 15732,
+        "private_clean": 60,
+        "private_dirty": 12488,
+        "shared": 29148,
+        "shared_ratio": 0.699
+      },
+      "children": {
+        "1134759": {
+          "rss": 46032,
+          "pss": 26247,
+          "shared_clean": 8356,
+          "shared_dirty": 15544,
+          "private_clean": 0,
+          "private_dirty": 22132,
+          "shared": 23900,
+          "shared_ratio": 0.519
+        },
+        "1134820": {
+          "rss": 45452,
+          "pss": 25625,
+          "shared_clean": 8356,
+          "shared_dirty": 15596,
+          "private_clean": 0,
+          "private_dirty": 21500,
+          "shared": 23952,
+          "shared_ratio": 0.527
+        },
+        "1134880": {
+          "rss": 45552,
+          "pss": 25723,
+          "shared_clean": 8356,
+          "shared_dirty": 15612,
+          "private_clean": 0,
+          "private_dirty": 21584,
+          "shared": 23968,
+          "shared_ratio": 0.526
+        },
+        "1134940": {
+          "rss": 45524,
+          "pss": 25670,
+          "shared_clean": 8356,
+          "shared_dirty": 15656,
+          "private_clean": 0,
+          "private_dirty": 21512,
+          "shared": 24012,
+          "shared_ratio": 0.527
+        }
+      },
+      "redis": {
+        "used_memory": 4823064,
+        "dbsize": 13758,
+        "families": {
+          "b": 12019,
+          "batches": 1,
+          "dear": 1,
+          "h": 30,
+          "j": 4,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 4,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 844,
+          "stat": 4,
+          "status": 802,
+          "<host>": 6,
+          "unique": 31
+        }
+      }
+    },
+    {
+      "t": 156.1,
+      "parent": {
+        "rss": 41696,
+        "pss": 19057,
+        "shared_clean": 13416,
+        "shared_dirty": 15680,
+        "private_clean": 60,
+        "private_dirty": 12540,
+        "shared": 29096,
+        "shared_ratio": 0.698
+      },
+      "children": {
+        "1134759": {
+          "rss": 46048,
+          "pss": 26263,
+          "shared_clean": 8356,
+          "shared_dirty": 15544,
+          "private_clean": 0,
+          "private_dirty": 22148,
+          "shared": 23900,
+          "shared_ratio": 0.519
+        },
+        "1134820": {
+          "rss": 45600,
+          "pss": 25775,
+          "shared_clean": 8356,
+          "shared_dirty": 15596,
+          "private_clean": 0,
+          "private_dirty": 21648,
+          "shared": 23952,
+          "shared_ratio": 0.525
+        },
+        "1134880": {
+          "rss": 45624,
+          "pss": 25795,
+          "shared_clean": 8356,
+          "shared_dirty": 15612,
+          "private_clean": 0,
+          "private_dirty": 21656,
+          "shared": 23968,
+          "shared_ratio": 0.525
+        },
+        "1134940": {
+          "rss": 45744,
+          "pss": 25921,
+          "shared_clean": 8356,
+          "shared_dirty": 15596,
+          "private_clean": 0,
+          "private_dirty": 21792,
+          "shared": 23952,
+          "shared_ratio": 0.524
+        }
+      },
+      "redis": {
+        "used_memory": 4856288,
+        "dbsize": 13736,
+        "families": {
+          "b": 12019,
+          "batches": 1,
+          "dear": 1,
+          "h": 30,
+          "j": 4,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 4,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 844,
+          "stat": 4,
+          "status": 802,
+          "<host>": 6,
+          "unique": 9
+        }
+      }
+    },
+    {
+      "t": 161.1,
+      "parent": {
+        "rss": 41760,
+        "pss": 19121,
+        "shared_clean": 13416,
+        "shared_dirty": 15680,
+        "private_clean": 60,
+        "private_dirty": 12604,
+        "shared": 29096,
+        "shared_ratio": 0.697
+      },
+      "children": {
+        "1134759": {
+          "rss": 46108,
+          "pss": 26323,
+          "shared_clean": 8356,
+          "shared_dirty": 15544,
+          "private_clean": 0,
+          "private_dirty": 22208,
+          "shared": 23900,
+          "shared_ratio": 0.518
+        },
+        "1134820": {
+          "rss": 45632,
+          "pss": 25807,
+          "shared_clean": 8356,
+          "shared_dirty": 15596,
+          "private_clean": 0,
+          "private_dirty": 21680,
+          "shared": 23952,
+          "shared_ratio": 0.525
+        },
+        "1134880": {
+          "rss": 45636,
+          "pss": 25807,
+          "shared_clean": 8356,
+          "shared_dirty": 15612,
+          "private_clean": 0,
+          "private_dirty": 21668,
+          "shared": 23968,
+          "shared_ratio": 0.525
+        },
+        "1134940": {
+          "rss": 45832,
+          "pss": 26009,
+          "shared_clean": 8356,
+          "shared_dirty": 15596,
+          "private_clean": 0,
+          "private_dirty": 21880,
+          "shared": 23952,
+          "shared_ratio": 0.523
+        }
+      },
+      "redis": {
+        "used_memory": 4911480,
+        "dbsize": 13729,
+        "families": {
+          "b": 12019,
+          "batches": 1,
+          "dear": 1,
+          "h": 33,
+          "j": 5,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 4,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 844,
+          "stat": 4,
+          "status": 802,
+          "<host>": 4
+        }
+      }
+    },
+    {
+      "t": 166.2,
+      "parent": {
+        "rss": 41764,
+        "pss": 19132,
+        "shared_clean": 13416,
+        "shared_dirty": 15676,
+        "private_clean": 60,
+        "private_dirty": 12612,
+        "shared": 29092,
+        "shared_ratio": 0.697
+      },
+      "children": {
+        "1134759": {
+          "rss": 46176,
+          "pss": 26451,
+          "shared_clean": 8356,
+          "shared_dirty": 15468,
+          "private_clean": 0,
+          "private_dirty": 22352,
+          "shared": 23824,
+          "shared_ratio": 0.516
+        },
+        "1134820": {
+          "rss": 45712,
+          "pss": 25894,
+          "shared_clean": 8356,
+          "shared_dirty": 15592,
+          "private_clean": 0,
+          "private_dirty": 21764,
+          "shared": 23948,
+          "shared_ratio": 0.524
+        },
+        "1134880": {
+          "rss": 45680,
+          "pss": 25858,
+          "shared_clean": 8356,
+          "shared_dirty": 15608,
+          "private_clean": 0,
+          "private_dirty": 21716,
+          "shared": 23964,
+          "shared_ratio": 0.525
+        },
+        "1134940": {
+          "rss": 45844,
+          "pss": 26028,
+          "shared_clean": 8356,
+          "shared_dirty": 15592,
+          "private_clean": 0,
+          "private_dirty": 21896,
+          "shared": 23948,
+          "shared_ratio": 0.522
+        }
+      },
+      "redis": {
+        "used_memory": 4989448,
+        "dbsize": 13728,
+        "families": {
+          "b": 12019,
+          "batches": 1,
+          "dear": 1,
+          "h": 33,
+          "j": 5,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 3,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 844,
+          "stat": 4,
+          "status": 802,
+          "<host>": 4
+        }
+      }
+    },
+    {
+      "t": 171.2,
+      "parent": {
+        "rss": 41764,
+        "pss": 19150,
+        "shared_clean": 13416,
+        "shared_dirty": 15660,
+        "private_clean": 60,
+        "private_dirty": 12628,
+        "shared": 29076,
+        "shared_ratio": 0.696
+      },
+      "children": {
+        "1134759": {
+          "rss": 46176,
+          "pss": 26451,
+          "shared_clean": 8356,
+          "shared_dirty": 15468,
+          "private_clean": 0,
+          "private_dirty": 22352,
+          "shared": 23824,
+          "shared_ratio": 0.516
+        },
+        "1134820": {
+          "rss": 45760,
+          "pss": 25972,
+          "shared_clean": 8356,
+          "shared_dirty": 15552,
+          "private_clean": 0,
+          "private_dirty": 21852,
+          "shared": 23908,
+          "shared_ratio": 0.522
+        },
+        "1134880": {
+          "rss": 45748,
+          "pss": 25944,
+          "shared_clean": 8356,
+          "shared_dirty": 15592,
+          "private_clean": 0,
+          "private_dirty": 21800,
+          "shared": 23948,
+          "shared_ratio": 0.523
+        },
+        "1134940": {
+          "rss": 45956,
+          "pss": 26170,
+          "shared_clean": 8356,
+          "shared_dirty": 15552,
+          "private_clean": 0,
+          "private_dirty": 22048,
+          "shared": 23908,
+          "shared_ratio": 0.52
+        }
+      },
+      "redis": {
+        "used_memory": 4965504,
+        "dbsize": 13729,
+        "families": {
+          "b": 12019,
+          "batches": 1,
+          "dear": 1,
+          "h": 34,
+          "j": 5,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 3,
+          "queues": 1,
+          "retry": 1,
+          "schedule": 1,
+          "soak": 844,
+          "stat": 4,
+          "status": 802,
+          "<host>": 4
+        }
+      }
+    },
+    {
+      "t": 176.3,
+      "parent": {
+        "rss": 41764,
+        "pss": 19150,
+        "shared_clean": 13416,
+        "shared_dirty": 15660,
+        "private_clean": 60,
+        "private_dirty": 12628,
+        "shared": 29076,
+        "shared_ratio": 0.696
+      },
+      "children": {
+        "1134759": {
+          "rss": 46180,
+          "pss": 26455,
+          "shared_clean": 8356,
+          "shared_dirty": 15468,
+          "private_clean": 0,
+          "private_dirty": 22356,
+          "shared": 23824,
+          "shared_ratio": 0.516
+        },
+        "1134820": {
+          "rss": 45760,
+          "pss": 25972,
+          "shared_clean": 8356,
+          "shared_dirty": 15552,
+          "private_clean": 0,
+          "private_dirty": 21852,
+          "shared": 23908,
+          "shared_ratio": 0.522
+        },
+        "1134880": {
+          "rss": 45748,
+          "pss": 25944,
+          "shared_clean": 8356,
+          "shared_dirty": 15592,
+          "private_clean": 0,
+          "private_dirty": 21800,
+          "shared": 23948,
+          "shared_ratio": 0.523
+        },
+        "1134940": {
+          "rss": 45956,
+          "pss": 26170,
+          "shared_clean": 8356,
+          "shared_dirty": 15552,
+          "private_clean": 0,
+          "private_dirty": 22048,
+          "shared": 23908,
+          "shared_ratio": 0.52
+        }
+      },
+      "redis": {
+        "used_memory": 4964480,
+        "dbsize": 13727,
+        "families": {
+          "b": 12019,
+          "batches": 1,
+          "dear": 1,
+          "h": 34,
+          "j": 5,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 3,
+          "queues": 1,
+          "soak": 844,
+          "stat": 4,
+          "status": 802,
+          "<host>": 4
+        }
+      }
+    },
+    {
+      "t": 181.3,
+      "parent": {
+        "rss": 41764,
+        "pss": 19150,
+        "shared_clean": 13416,
+        "shared_dirty": 15660,
+        "private_clean": 60,
+        "private_dirty": 12628,
+        "shared": 29076,
+        "shared_ratio": 0.696
+      },
+      "children": {
+        "1134759": {
+          "rss": 46180,
+          "pss": 26455,
+          "shared_clean": 8356,
+          "shared_dirty": 15468,
+          "private_clean": 0,
+          "private_dirty": 22356,
+          "shared": 23824,
+          "shared_ratio": 0.516
+        },
+        "1134820": {
+          "rss": 45764,
+          "pss": 25976,
+          "shared_clean": 8356,
+          "shared_dirty": 15552,
+          "private_clean": 0,
+          "private_dirty": 21856,
+          "shared": 23908,
+          "shared_ratio": 0.522
+        },
+        "1134880": {
+          "rss": 45748,
+          "pss": 25944,
+          "shared_clean": 8356,
+          "shared_dirty": 15592,
+          "private_clean": 0,
+          "private_dirty": 21800,
+          "shared": 23948,
+          "shared_ratio": 0.523
+        },
+        "1134940": {
+          "rss": 46000,
+          "pss": 26214,
+          "shared_clean": 8356,
+          "shared_dirty": 15552,
+          "private_clean": 0,
+          "private_dirty": 22092,
+          "shared": 23908,
+          "shared_ratio": 0.52
+        }
+      },
+      "redis": {
+        "used_memory": 4966992,
+        "dbsize": 13727,
+        "families": {
+          "b": 12019,
+          "batches": 1,
+          "dear": 1,
+          "h": 34,
+          "j": 5,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 3,
+          "queues": 1,
+          "soak": 844,
+          "stat": 4,
+          "status": 802,
+          "<host>": 4
+        }
+      }
+    },
+    {
+      "t": 186.3,
+      "parent": {
+        "rss": 41764,
+        "pss": 19150,
+        "shared_clean": 13416,
+        "shared_dirty": 15660,
+        "private_clean": 60,
+        "private_dirty": 12628,
+        "shared": 29076,
+        "shared_ratio": 0.696
+      },
+      "children": {
+        "1134759": {
+          "rss": 46188,
+          "pss": 26463,
+          "shared_clean": 8356,
+          "shared_dirty": 15468,
+          "private_clean": 0,
+          "private_dirty": 22364,
+          "shared": 23824,
+          "shared_ratio": 0.516
+        },
+        "1134820": {
+          "rss": 45764,
+          "pss": 25976,
+          "shared_clean": 8356,
+          "shared_dirty": 15552,
+          "private_clean": 0,
+          "private_dirty": 21856,
+          "shared": 23908,
+          "shared_ratio": 0.522
+        },
+        "1134880": {
+          "rss": 45748,
+          "pss": 25944,
+          "shared_clean": 8356,
+          "shared_dirty": 15592,
+          "private_clean": 0,
+          "private_dirty": 21800,
+          "shared": 23948,
+          "shared_ratio": 0.523
+        },
+        "1134940": {
+          "rss": 46000,
+          "pss": 26214,
+          "shared_clean": 8356,
+          "shared_dirty": 15552,
+          "private_clean": 0,
+          "private_dirty": 22092,
+          "shared": 23908,
+          "shared_ratio": 0.52
+        }
+      },
+      "redis": {
+        "used_memory": 4968480,
+        "dbsize": 13727,
+        "families": {
+          "b": 12019,
+          "batches": 1,
+          "dear": 1,
+          "h": 34,
+          "j": 5,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 3,
+          "queues": 1,
+          "soak": 844,
+          "stat": 4,
+          "status": 802,
+          "<host>": 4
+        }
+      }
+    },
+    {
+      "t": 191.4,
+      "parent": {
+        "rss": 41768,
+        "pss": 19154,
+        "shared_clean": 13416,
+        "shared_dirty": 15660,
+        "private_clean": 60,
+        "private_dirty": 12632,
+        "shared": 29076,
+        "shared_ratio": 0.696
+      },
+      "children": {
+        "1134759": {
+          "rss": 46188,
+          "pss": 26463,
+          "shared_clean": 8356,
+          "shared_dirty": 15468,
+          "private_clean": 0,
+          "private_dirty": 22364,
+          "shared": 23824,
+          "shared_ratio": 0.516
+        },
+        "1134820": {
+          "rss": 45764,
+          "pss": 25976,
+          "shared_clean": 8356,
+          "shared_dirty": 15552,
+          "private_clean": 0,
+          "private_dirty": 21856,
+          "shared": 23908,
+          "shared_ratio": 0.522
+        },
+        "1134880": {
+          "rss": 45748,
+          "pss": 25944,
+          "shared_clean": 8356,
+          "shared_dirty": 15592,
+          "private_clean": 0,
+          "private_dirty": 21800,
+          "shared": 23948,
+          "shared_ratio": 0.523
+        },
+        "1134940": {
+          "rss": 46000,
+          "pss": 26214,
+          "shared_clean": 8356,
+          "shared_dirty": 15552,
+          "private_clean": 0,
+          "private_dirty": 22092,
+          "shared": 23908,
+          "shared_ratio": 0.52
+        }
+      },
+      "redis": {
+        "used_memory": 4968440,
+        "dbsize": 13727,
+        "families": {
+          "b": 12019,
+          "batches": 1,
+          "dear": 1,
+          "h": 34,
+          "j": 5,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "queue": 3,
+          "queues": 1,
+          "soak": 844,
+          "stat": 4,
+          "status": 802,
+          "<host>": 4
+        }
+      }
+    },
+    {
+      "t": 196.4,
+      "parent": {
+        "rss": 41804,
+        "pss": 19207,
+        "shared_clean": 13416,
+        "shared_dirty": 15648,
+        "private_clean": 60,
+        "private_dirty": 12680,
+        "shared": 29064,
+        "shared_ratio": 0.695
+      },
+      "children": {
+        "1134759": {
+          "rss": 46540,
+          "pss": 26924,
+          "shared_clean": 8356,
+          "shared_dirty": 15332,
+          "private_clean": 0,
+          "private_dirty": 22852,
+          "shared": 23688,
+          "shared_ratio": 0.509
+        },
+        "1134820": {
+          "rss": 45764,
+          "pss": 25983,
+          "shared_clean": 8356,
+          "shared_dirty": 15552,
+          "private_clean": 0,
+          "private_dirty": 21856,
+          "shared": 23908,
+          "shared_ratio": 0.522
+        },
+        "1134880": {
+          "rss": 45748,
+          "pss": 25951,
+          "shared_clean": 8356,
+          "shared_dirty": 15592,
+          "private_clean": 0,
+          "private_dirty": 21800,
+          "shared": 23948,
+          "shared_ratio": 0.523
+        },
+        "1134940": {
+          "rss": 46000,
+          "pss": 26221,
+          "shared_clean": 8356,
+          "shared_dirty": 15552,
+          "private_clean": 0,
+          "private_dirty": 22092,
+          "shared": 23908,
+          "shared_ratio": 0.52
+        }
+      },
+      "redis": {
+        "used_memory": 4972656,
+        "dbsize": 13736,
+        "families": {
+          "b": 12019,
+          "batches": 1,
+          "dear": 1,
+          "h": 34,
+          "j": 5,
+          "jr": 6,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "processes": 1,
+          "qm": 3,
+          "queue": 3,
+          "queues": 1,
+          "soak": 844,
+          "stat": 4,
+          "status": 802,
+          "super_fetch": 1,
+          "<host>": 4
+        }
+      }
+    },
+    {
+      "t": 201.5,
+      "parent": {
+        "rss": 41804,
+        "pss": 19222,
+        "shared_clean": 13416,
+        "shared_dirty": 15628,
+        "private_clean": 60,
+        "private_dirty": 12700,
+        "shared": 29044,
+        "shared_ratio": 0.695
+      },
+      "children": {
+        "1134759": {
+          "rss": 46648,
+          "pss": 27039,
+          "shared_clean": 8356,
+          "shared_dirty": 15324,
+          "private_clean": 0,
+          "private_dirty": 22968,
+          "shared": 23680,
+          "shared_ratio": 0.508
+        },
+        "1134820": {
+          "rss": 45908,
+          "pss": 26143,
+          "shared_clean": 8356,
+          "shared_dirty": 15532,
+          "private_clean": 0,
+          "private_dirty": 22020,
+          "shared": 23888,
+          "shared_ratio": 0.52
+        },
+        "1134880": {
+          "rss": 45888,
+          "pss": 26107,
+          "shared_clean": 8356,
+          "shared_dirty": 15572,
+          "private_clean": 0,
+          "private_dirty": 21960,
+          "shared": 23928,
+          "shared_ratio": 0.521
+        },
+        "1134940": {
+          "rss": 46152,
+          "pss": 26389,
+          "shared_clean": 8356,
+          "shared_dirty": 15532,
+          "private_clean": 0,
+          "private_dirty": 22264,
+          "shared": 23888,
+          "shared_ratio": 0.518
+        }
+      },
+      "redis": {
+        "used_memory": 5000576,
+        "dbsize": 13737,
+        "families": {
+          "b": 12019,
+          "batches": 1,
+          "dear": 1,
+          "h": 35,
+          "j": 5,
+          "jr": 6,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "processes": 1,
+          "qm": 3,
+          "queue": 3,
+          "queues": 1,
+          "soak": 844,
+          "stat": 4,
+          "status": 802,
+          "super_fetch": 1,
+          "<host>": 4
+        }
+      }
+    },
+    {
+      "t": 206.5,
+      "parent": {
+        "rss": 41804,
+        "pss": 19222,
+        "shared_clean": 13416,
+        "shared_dirty": 15628,
+        "private_clean": 60,
+        "private_dirty": 12700,
+        "shared": 29044,
+        "shared_ratio": 0.695
+      },
+      "children": {
+        "1134759": {
+          "rss": 46652,
+          "pss": 27043,
+          "shared_clean": 8356,
+          "shared_dirty": 15324,
+          "private_clean": 0,
+          "private_dirty": 22972,
+          "shared": 23680,
+          "shared_ratio": 0.508
+        },
+        "1134820": {
+          "rss": 45908,
+          "pss": 26143,
+          "shared_clean": 8356,
+          "shared_dirty": 15532,
+          "private_clean": 0,
+          "private_dirty": 22020,
+          "shared": 23888,
+          "shared_ratio": 0.52
+        },
+        "1134880": {
+          "rss": 45888,
+          "pss": 26107,
+          "shared_clean": 8356,
+          "shared_dirty": 15572,
+          "private_clean": 0,
+          "private_dirty": 21960,
+          "shared": 23928,
+          "shared_ratio": 0.521
+        },
+        "1134940": {
+          "rss": 46152,
+          "pss": 26389,
+          "shared_clean": 8356,
+          "shared_dirty": 15532,
+          "private_clean": 0,
+          "private_dirty": 22264,
+          "shared": 23888,
+          "shared_ratio": 0.518
+        }
+      },
+      "redis": {
+        "used_memory": 5000616,
+        "dbsize": 13737,
+        "families": {
+          "b": 12019,
+          "batches": 1,
+          "dear": 1,
+          "h": 35,
+          "j": 5,
+          "jr": 6,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "processes": 1,
+          "qm": 3,
+          "queue": 3,
+          "queues": 1,
+          "soak": 844,
+          "stat": 4,
+          "status": 802,
+          "super_fetch": 1,
+          "<host>": 4
+        }
+      }
+    },
+    {
+      "t": 211.6,
+      "parent": {
+        "rss": 41940,
+        "pss": 19358,
+        "shared_clean": 13416,
+        "shared_dirty": 15628,
+        "private_clean": 60,
+        "private_dirty": 12836,
+        "shared": 29044,
+        "shared_ratio": 0.693
+      },
+      "children": {
+        "1134759": {
+          "rss": 46660,
+          "pss": 27051,
+          "shared_clean": 8356,
+          "shared_dirty": 15324,
+          "private_clean": 0,
+          "private_dirty": 22980,
+          "shared": 23680,
+          "shared_ratio": 0.508
+        },
+        "1134820": {
+          "rss": 45924,
+          "pss": 26159,
+          "shared_clean": 8356,
+          "shared_dirty": 15532,
+          "private_clean": 0,
+          "private_dirty": 22036,
+          "shared": 23888,
+          "shared_ratio": 0.52
+        },
+        "1134880": {
+          "rss": 45888,
+          "pss": 26107,
+          "shared_clean": 8356,
+          "shared_dirty": 15572,
+          "private_clean": 0,
+          "private_dirty": 21960,
+          "shared": 23928,
+          "shared_ratio": 0.521
+        },
+        "1134940": {
+          "rss": 46156,
+          "pss": 26393,
+          "shared_clean": 8356,
+          "shared_dirty": 15532,
+          "private_clean": 0,
+          "private_dirty": 22268,
+          "shared": 23888,
+          "shared_ratio": 0.518
+        }
+      },
+      "redis": {
+        "used_memory": 5000744,
+        "dbsize": 13737,
+        "families": {
+          "b": 12019,
+          "batches": 1,
+          "dear": 1,
+          "h": 35,
+          "j": 5,
+          "jr": 6,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "processes": 1,
+          "qm": 3,
+          "queue": 3,
+          "queues": 1,
+          "soak": 844,
+          "stat": 4,
+          "status": 802,
+          "super_fetch": 1,
+          "<host>": 4
+        }
+      }
+    },
+    {
+      "t": 216.6,
+      "parent": {
+        "rss": 41952,
+        "pss": 19373,
+        "shared_clean": 13416,
+        "shared_dirty": 15624,
+        "private_clean": 60,
+        "private_dirty": 12852,
+        "shared": 29040,
+        "shared_ratio": 0.692
+      },
+      "children": {
+        "1134759": {
+          "rss": 46660,
+          "pss": 27051,
+          "shared_clean": 8356,
+          "shared_dirty": 15324,
+          "private_clean": 0,
+          "private_dirty": 22980,
+          "shared": 23680,
+          "shared_ratio": 0.508
+        },
+        "1134820": {
+          "rss": 45928,
+          "pss": 26168,
+          "shared_clean": 8356,
+          "shared_dirty": 15524,
+          "private_clean": 0,
+          "private_dirty": 22048,
+          "shared": 23880,
+          "shared_ratio": 0.52
+        },
+        "1134880": {
+          "rss": 45924,
+          "pss": 26143,
+          "shared_clean": 8356,
+          "shared_dirty": 15572,
+          "private_clean": 0,
+          "private_dirty": 21996,
+          "shared": 23928,
+          "shared_ratio": 0.521
+        },
+        "1134940": {
+          "rss": 46156,
+          "pss": 26393,
+          "shared_clean": 8356,
+          "shared_dirty": 15532,
+          "private_clean": 0,
+          "private_dirty": 22268,
+          "shared": 23888,
+          "shared_ratio": 0.518
+        }
+      },
+      "redis": {
+        "used_memory": 5004336,
+        "dbsize": 13738,
+        "families": {
+          "b": 12019,
+          "batches": 1,
+          "dear": 1,
+          "h": 35,
+          "j": 5,
+          "jr": 6,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "qm": 3,
+          "queue": 3,
+          "queues": 1,
+          "soak": 844,
+          "stat": 4,
+          "status": 802,
+          "super_fetch": 1,
+          "<host>": 4
+        }
+      }
+    },
+    {
+      "t": 221.6,
+      "parent": {
+        "rss": 41952,
+        "pss": 19373,
+        "shared_clean": 13416,
+        "shared_dirty": 15624,
+        "private_clean": 60,
+        "private_dirty": 12852,
+        "shared": 29040,
+        "shared_ratio": 0.692
+      },
+      "children": {
+        "1134759": {
+          "rss": 46660,
+          "pss": 27051,
+          "shared_clean": 8356,
+          "shared_dirty": 15324,
+          "private_clean": 0,
+          "private_dirty": 22980,
+          "shared": 23680,
+          "shared_ratio": 0.508
+        },
+        "1134820": {
+          "rss": 45928,
+          "pss": 26168,
+          "shared_clean": 8356,
+          "shared_dirty": 15524,
+          "private_clean": 0,
+          "private_dirty": 22048,
+          "shared": 23880,
+          "shared_ratio": 0.52
+        },
+        "1134880": {
+          "rss": 45928,
+          "pss": 26147,
+          "shared_clean": 8356,
+          "shared_dirty": 15572,
+          "private_clean": 0,
+          "private_dirty": 22000,
+          "shared": 23928,
+          "shared_ratio": 0.521
+        },
+        "1134940": {
+          "rss": 46164,
+          "pss": 26401,
+          "shared_clean": 8356,
+          "shared_dirty": 15532,
+          "private_clean": 0,
+          "private_dirty": 22276,
+          "shared": 23888,
+          "shared_ratio": 0.517
+        }
+      },
+      "redis": {
+        "used_memory": 5005736,
+        "dbsize": 13738,
+        "families": {
+          "b": 12019,
+          "batches": 1,
+          "dear": 1,
+          "h": 35,
+          "j": 5,
+          "jr": 6,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "qm": 3,
+          "queue": 3,
+          "queues": 1,
+          "soak": 844,
+          "stat": 4,
+          "status": 802,
+          "super_fetch": 1,
+          "<host>": 4
+        }
+      }
+    },
+    {
+      "t": 226.7,
+      "parent": {
+        "rss": 41960,
+        "pss": 19381,
+        "shared_clean": 13416,
+        "shared_dirty": 15624,
+        "private_clean": 60,
+        "private_dirty": 12860,
+        "shared": 29040,
+        "shared_ratio": 0.692
+      },
+      "children": {
+        "1134759": {
+          "rss": 46660,
+          "pss": 27051,
+          "shared_clean": 8356,
+          "shared_dirty": 15324,
+          "private_clean": 0,
+          "private_dirty": 22980,
+          "shared": 23680,
+          "shared_ratio": 0.508
+        },
+        "1134820": {
+          "rss": 45928,
+          "pss": 26168,
+          "shared_clean": 8356,
+          "shared_dirty": 15524,
+          "private_clean": 0,
+          "private_dirty": 22048,
+          "shared": 23880,
+          "shared_ratio": 0.52
+        },
+        "1134880": {
+          "rss": 45928,
+          "pss": 26147,
+          "shared_clean": 8356,
+          "shared_dirty": 15572,
+          "private_clean": 0,
+          "private_dirty": 22000,
+          "shared": 23928,
+          "shared_ratio": 0.521
+        },
+        "1134940": {
+          "rss": 46164,
+          "pss": 26401,
+          "shared_clean": 8356,
+          "shared_dirty": 15532,
+          "private_clean": 0,
+          "private_dirty": 22276,
+          "shared": 23888,
+          "shared_ratio": 0.517
+        }
+      },
+      "redis": {
+        "used_memory": 5006400,
+        "dbsize": 13738,
+        "families": {
+          "b": 12019,
+          "batches": 1,
+          "dear": 1,
+          "h": 35,
+          "j": 5,
+          "jr": 6,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "qm": 3,
+          "queue": 3,
+          "queues": 1,
+          "soak": 844,
+          "stat": 4,
+          "status": 802,
+          "super_fetch": 1,
+          "<host>": 4
+        }
+      }
+    },
+    {
+      "t": 231.7,
+      "parent": {
+        "rss": 41960,
+        "pss": 19381,
+        "shared_clean": 13416,
+        "shared_dirty": 15624,
+        "private_clean": 60,
+        "private_dirty": 12860,
+        "shared": 29040,
+        "shared_ratio": 0.692
+      },
+      "children": {
+        "1134759": {
+          "rss": 46660,
+          "pss": 27051,
+          "shared_clean": 8356,
+          "shared_dirty": 15324,
+          "private_clean": 0,
+          "private_dirty": 22980,
+          "shared": 23680,
+          "shared_ratio": 0.508
+        },
+        "1134820": {
+          "rss": 45928,
+          "pss": 26168,
+          "shared_clean": 8356,
+          "shared_dirty": 15524,
+          "private_clean": 0,
+          "private_dirty": 22048,
+          "shared": 23880,
+          "shared_ratio": 0.52
+        },
+        "1134880": {
+          "rss": 45936,
+          "pss": 26155,
+          "shared_clean": 8356,
+          "shared_dirty": 15572,
+          "private_clean": 0,
+          "private_dirty": 22008,
+          "shared": 23928,
+          "shared_ratio": 0.521
+        },
+        "1134940": {
+          "rss": 46164,
+          "pss": 26401,
+          "shared_clean": 8356,
+          "shared_dirty": 15532,
+          "private_clean": 0,
+          "private_dirty": 22276,
+          "shared": 23888,
+          "shared_ratio": 0.517
+        }
+      },
+      "redis": {
+        "used_memory": 5009144,
+        "dbsize": 13738,
+        "families": {
+          "b": 12019,
+          "batches": 1,
+          "dear": 1,
+          "h": 35,
+          "j": 5,
+          "jr": 6,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "qm": 3,
+          "queue": 3,
+          "queues": 1,
+          "soak": 844,
+          "stat": 4,
+          "status": 802,
+          "super_fetch": 1,
+          "<host>": 4
+        }
+      }
+    },
+    {
+      "t": 236.7,
+      "parent": {
+        "rss": 41960,
+        "pss": 19381,
+        "shared_clean": 13416,
+        "shared_dirty": 15624,
+        "private_clean": 60,
+        "private_dirty": 12860,
+        "shared": 29040,
+        "shared_ratio": 0.692
+      },
+      "children": {
+        "1134759": {
+          "rss": 46664,
+          "pss": 27055,
+          "shared_clean": 8356,
+          "shared_dirty": 15324,
+          "private_clean": 0,
+          "private_dirty": 22984,
+          "shared": 23680,
+          "shared_ratio": 0.507
+        },
+        "1134820": {
+          "rss": 45928,
+          "pss": 26168,
+          "shared_clean": 8356,
+          "shared_dirty": 15524,
+          "private_clean": 0,
+          "private_dirty": 22048,
+          "shared": 23880,
+          "shared_ratio": 0.52
+        },
+        "1134880": {
+          "rss": 45936,
+          "pss": 26155,
+          "shared_clean": 8356,
+          "shared_dirty": 15572,
+          "private_clean": 0,
+          "private_dirty": 22008,
+          "shared": 23928,
+          "shared_ratio": 0.521
+        },
+        "1134940": {
+          "rss": 46164,
+          "pss": 26401,
+          "shared_clean": 8356,
+          "shared_dirty": 15532,
+          "private_clean": 0,
+          "private_dirty": 22276,
+          "shared": 23888,
+          "shared_ratio": 0.517
+        }
+      },
+      "redis": {
+        "used_memory": 5010448,
+        "dbsize": 13738,
+        "families": {
+          "b": 12019,
+          "batches": 1,
+          "dear": 1,
+          "h": 35,
+          "j": 5,
+          "jr": 6,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "qm": 3,
+          "queue": 3,
+          "queues": 1,
+          "soak": 844,
+          "stat": 4,
+          "status": 802,
+          "super_fetch": 1,
+          "<host>": 4
+        }
+      }
+    },
+    {
+      "t": 241.8,
+      "parent": {
+        "rss": 41960,
+        "pss": 19381,
+        "shared_clean": 13416,
+        "shared_dirty": 15624,
+        "private_clean": 60,
+        "private_dirty": 12860,
+        "shared": 29040,
+        "shared_ratio": 0.692
+      },
+      "children": {
+        "1134759": {
+          "rss": 46664,
+          "pss": 27055,
+          "shared_clean": 8356,
+          "shared_dirty": 15324,
+          "private_clean": 0,
+          "private_dirty": 22984,
+          "shared": 23680,
+          "shared_ratio": 0.507
+        },
+        "1134820": {
+          "rss": 45928,
+          "pss": 26168,
+          "shared_clean": 8356,
+          "shared_dirty": 15524,
+          "private_clean": 0,
+          "private_dirty": 22048,
+          "shared": 23880,
+          "shared_ratio": 0.52
+        },
+        "1134880": {
+          "rss": 45936,
+          "pss": 26155,
+          "shared_clean": 8356,
+          "shared_dirty": 15572,
+          "private_clean": 0,
+          "private_dirty": 22008,
+          "shared": 23928,
+          "shared_ratio": 0.521
+        },
+        "1134940": {
+          "rss": 46164,
+          "pss": 26401,
+          "shared_clean": 8356,
+          "shared_dirty": 15532,
+          "private_clean": 0,
+          "private_dirty": 22276,
+          "shared": 23888,
+          "shared_ratio": 0.517
+        }
+      },
+      "redis": {
+        "used_memory": 5010504,
+        "dbsize": 13738,
+        "families": {
+          "b": 12019,
+          "batches": 1,
+          "dear": 1,
+          "h": 35,
+          "j": 5,
+          "jr": 6,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "qm": 3,
+          "queue": 3,
+          "queues": 1,
+          "soak": 844,
+          "stat": 4,
+          "status": 802,
+          "super_fetch": 1,
+          "<host>": 4
+        }
+      }
+    },
+    {
+      "t": 246.8,
+      "parent": {
+        "rss": 41964,
+        "pss": 19385,
+        "shared_clean": 13416,
+        "shared_dirty": 15624,
+        "private_clean": 60,
+        "private_dirty": 12864,
+        "shared": 29040,
+        "shared_ratio": 0.692
+      },
+      "children": {
+        "1134759": {
+          "rss": 46668,
+          "pss": 27059,
+          "shared_clean": 8356,
+          "shared_dirty": 15324,
+          "private_clean": 0,
+          "private_dirty": 22988,
+          "shared": 23680,
+          "shared_ratio": 0.507
+        },
+        "1134820": {
+          "rss": 45932,
+          "pss": 26172,
+          "shared_clean": 8356,
+          "shared_dirty": 15524,
+          "private_clean": 0,
+          "private_dirty": 22052,
+          "shared": 23880,
+          "shared_ratio": 0.52
+        },
+        "1134880": {
+          "rss": 45936,
+          "pss": 26155,
+          "shared_clean": 8356,
+          "shared_dirty": 15572,
+          "private_clean": 0,
+          "private_dirty": 22008,
+          "shared": 23928,
+          "shared_ratio": 0.521
+        },
+        "1134940": {
+          "rss": 46164,
+          "pss": 26401,
+          "shared_clean": 8356,
+          "shared_dirty": 15532,
+          "private_clean": 0,
+          "private_dirty": 22276,
+          "shared": 23888,
+          "shared_ratio": 0.517
+        }
+      },
+      "redis": {
+        "used_memory": 5011768,
+        "dbsize": 13737,
+        "families": {
+          "b": 12019,
+          "batches": 1,
+          "dear": 1,
+          "h": 35,
+          "j": 5,
+          "jr": 6,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "qm": 3,
+          "queue": 3,
+          "queues": 1,
+          "soak": 844,
+          "stat": 4,
+          "status": 802,
+          "<host>": 4
+        }
+      }
+    },
+    {
+      "t": 251.9,
+      "parent": {
+        "rss": 41968,
+        "pss": 19389,
+        "shared_clean": 13416,
+        "shared_dirty": 15624,
+        "private_clean": 60,
+        "private_dirty": 12868,
+        "shared": 29040,
+        "shared_ratio": 0.692
+      },
+      "children": {
+        "1134759": {
+          "rss": 46668,
+          "pss": 27059,
+          "shared_clean": 8356,
+          "shared_dirty": 15324,
+          "private_clean": 0,
+          "private_dirty": 22988,
+          "shared": 23680,
+          "shared_ratio": 0.507
+        },
+        "1134820": {
+          "rss": 45932,
+          "pss": 26172,
+          "shared_clean": 8356,
+          "shared_dirty": 15524,
+          "private_clean": 0,
+          "private_dirty": 22052,
+          "shared": 23880,
+          "shared_ratio": 0.52
+        },
+        "1134880": {
+          "rss": 45940,
+          "pss": 26159,
+          "shared_clean": 8356,
+          "shared_dirty": 15572,
+          "private_clean": 0,
+          "private_dirty": 22012,
+          "shared": 23928,
+          "shared_ratio": 0.521
+        },
+        "1134940": {
+          "rss": 46168,
+          "pss": 26405,
+          "shared_clean": 8356,
+          "shared_dirty": 15532,
+          "private_clean": 0,
+          "private_dirty": 22280,
+          "shared": 23888,
+          "shared_ratio": 0.517
+        }
+      },
+      "redis": {
+        "used_memory": 5011720,
+        "dbsize": 13737,
+        "families": {
+          "b": 12019,
+          "batches": 1,
+          "dear": 1,
+          "h": 35,
+          "j": 5,
+          "jr": 6,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "qm": 3,
+          "queue": 3,
+          "queues": 1,
+          "soak": 844,
+          "stat": 4,
+          "status": 802,
+          "<host>": 4
+        }
+      }
+    },
+    {
+      "t": 256.9,
+      "parent": {
+        "rss": 41968,
+        "pss": 19394,
+        "shared_clean": 13416,
+        "shared_dirty": 15624,
+        "private_clean": 60,
+        "private_dirty": 12868,
+        "shared": 29040,
+        "shared_ratio": 0.692
+      },
+      "children": {
+        "1134759": {
+          "rss": 46836,
+          "pss": 27240,
+          "shared_clean": 8356,
+          "shared_dirty": 15308,
+          "private_clean": 0,
+          "private_dirty": 23172,
+          "shared": 23664,
+          "shared_ratio": 0.505
+        },
+        "1134820": {
+          "rss": 45964,
+          "pss": 26237,
+          "shared_clean": 8356,
+          "shared_dirty": 15480,
+          "private_clean": 0,
+          "private_dirty": 22128,
+          "shared": 23836,
+          "shared_ratio": 0.519
+        },
+        "1134880": {
+          "rss": 45944,
+          "pss": 26168,
+          "shared_clean": 8356,
+          "shared_dirty": 15572,
+          "private_clean": 0,
+          "private_dirty": 22016,
+          "shared": 23928,
+          "shared_ratio": 0.521
+        },
+        "1134940": {
+          "rss": 46168,
+          "pss": 26409,
+          "shared_clean": 8356,
+          "shared_dirty": 15532,
+          "private_clean": 0,
+          "private_dirty": 22280,
+          "shared": 23888,
+          "shared_ratio": 0.517
+        }
+      },
+      "redis": {
+        "used_memory": 4989920,
+        "dbsize": 13738,
+        "families": {
+          "b": 12019,
+          "batches": 1,
+          "dear": 1,
+          "h": 35,
+          "j": 5,
+          "jr": 7,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "qm": 4,
+          "queue": 1,
+          "queues": 1,
+          "soak": 844,
+          "stat": 4,
+          "status": 802,
+          "super_fetch": 1,
+          "<host>": 4
+        }
+      }
+    },
+    {
+      "t": 260.9,
+      "parent": {
+        "rss": 41968,
+        "pss": 19400,
+        "shared_clean": 13416,
+        "shared_dirty": 15624,
+        "private_clean": 60,
+        "private_dirty": 12868,
+        "shared": 29040,
+        "shared_ratio": 0.692
+      },
+      "children": {
+        "1134759": {
+          "rss": 46836,
+          "pss": 27240,
+          "shared_clean": 8356,
+          "shared_dirty": 15308,
+          "private_clean": 0,
+          "private_dirty": 23172,
+          "shared": 23664,
+          "shared_ratio": 0.505
+        },
+        "1134820": {
+          "rss": 45968,
+          "pss": 26241,
+          "shared_clean": 8356,
+          "shared_dirty": 15480,
+          "private_clean": 0,
+          "private_dirty": 22132,
+          "shared": 23836,
+          "shared_ratio": 0.519
+        },
+        "1134880": {
+          "rss": 45968,
+          "pss": 26198,
+          "shared_clean": 8356,
+          "shared_dirty": 15572,
+          "private_clean": 0,
+          "private_dirty": 22040,
+          "shared": 23928,
+          "shared_ratio": 0.521
+        },
+        "1134940": {
+          "rss": 46200,
+          "pss": 26465,
+          "shared_clean": 8356,
+          "shared_dirty": 15496,
+          "private_clean": 0,
+          "private_dirty": 22348,
+          "shared": 23852,
+          "shared_ratio": 0.516
+        }
+      },
+      "redis": {
+        "used_memory": 4992624,
+        "dbsize": 13740,
+        "families": {
+          "b": 12019,
+          "batches": 1,
+          "dear": 1,
+          "h": 37,
+          "j": 6,
+          "jr": 7,
+          "leader": 1,
+          "lmtr": 3,
+          "loop": 1,
+          "loops": 1,
+          "periodic": 1,
+          "process_cleanup": 1,
+          "processes": 1,
+          "qm": 4,
+          "queues": 1,
+          "soak": 844,
+          "stat": 4,
+          "status": 802,
+          "super_fetch": 1,
+          "<host>": 4
+        }
+      }
+    }
+  ]
+}

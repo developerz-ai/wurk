@@ -1,0 +1,87 @@
+name: soak
+
+# Long-uptime proof (plan 101/12 T1, 101/08 M0): bench/rss_soak.rb's per-child
+# Rss/Pss over 100k jobs, then bench/soak/run.rb's chaos soak with its jid
+# ledger. Advisory: never on a pull request, never a required check. Nightly
+# runs one hour; a manual run takes its duration in seconds. A hosted runner
+# caps a job at six hours, so the 24h proof run is a quiet box, not this
+# workflow (`SOAK_MODE=long SOAK_DURATION=86400 ruby -Ilib bench/soak/run.rb`).
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: "Soak load phase in seconds (at most 18000; the job times out at 330 minutes)."
+        required: false
+        default: "3600"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # One soak at a time; a run already going is never cancelled for a newer one.
+  cancel-in-progress: false
+
+jobs:
+  soak:
+    name: soak (rss + chaos ledger)
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      BUNDLE_GEMFILE: ${{ github.workspace }}/Gemfile
+      # Shares the bundle cache test.yml's jobs populate (cache-version rails-8.1).
+      RAILS_VERSION: "8.1"
+      # Per-step gate, as in test.yml: forks get a run that reports and does nothing.
+      RUN: ${{ github.repository == 'developerz-ai/wurk' }}
+      SOAK_DURATION: ${{ inputs.duration || '3600' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.RUN == 'true'
+        with:
+          persist-credentials: false
+      # The harness starts, SIGKILLs and restarts its own redis-server (AOF
+      # reload is one of the faults), so it needs the binary, not a service.
+      - name: install redis-server
+        if: env.RUN == 'true'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q redis-server
+          sudo systemctl stop redis-server || true
+          redis-server --version
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+        if: env.RUN == 'true'
+        with:
+          ruby-version: "4.0"
+          bundler-cache: true
+          cache-version: rails-8.1
+      - name: validate duration
+        if: env.RUN == 'true'
+        run: |
+          case "$SOAK_DURATION" in ''|*[!0-9]*) echo "::error::duration must be whole seconds, got '$SOAK_DURATION'"; exit 1 ;; esac
+          [ "$SOAK_DURATION" -le 18000 ] || { echo "::error::duration $SOAK_DURATION exceeds 18000s"; exit 1; }
+      - name: per-child memory over 100k jobs (bench/rss_soak.rb)
+        if: env.RUN == 'true'
+        env:
+          RSS_OUT: tmp/soak-artifacts/rss.json
+        run: bundle exec ruby -Ilib bench/rss_soak.rb
+      - name: chaos soak with jid ledger (bench/soak/run.rb)
+        if: env.RUN == 'true'
+        env:
+          SOAK_MODE: long
+          SOAK_OUT: tmp/soak-artifacts/soak
+        run: bundle exec ruby -Ilib bench/soak/run.rb
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always() && env.RUN == 'true'
+        with:
+          name: soak-${{ github.run_id }}
+          path: |
+            tmp/soak-artifacts/rss.json
+            tmp/soak-artifacts/rss.json.swarm.log
+            tmp/soak-artifacts/soak/report.json
+            tmp/soak-artifacts/soak/swarm.log
+            tmp/soak-artifacts/soak/ledger.tsv
+          if-no-files-found: warn
+          retention-days: 14

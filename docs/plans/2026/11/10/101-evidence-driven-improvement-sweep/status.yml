@@ -4,8 +4,8 @@ status: in_progress        # not_started | in_progress | blocked | complete | su
 created_by: sebi
 worked_by: "sebi (Claude Code)"
 owner: sebi
-percent: 12
-current_focus: "in flight: CHANGELOG split: CHANGELOG.md index + docs/changelog/<version>.md + unreleased.md, release lane (bin/changelog-section, tasks/release_helpers.rb, release.yml, .dz briefs, RELEASE.md, feature.md) updated, owner request 2026-11-10. wave 1 PR: 02 R1/R2/R6, 03 G1-G4+G10, 01 C2-C9, 12 T3/T6, 102 10-S1 (plan of record; 102 unique rows folded in)"
+percent: 18
+current_focus: "wave 2 PR (measurement tooling + numbers); next: adopter bumps to 1.12.0 (14-18), 24h soak, then wave 3 (drop-in + errors, incl. job-log elapsed units)"
 slices:
   - file: 01-ci-green-doc-truth.md
     status: in_progress
@@ -23,14 +23,14 @@ slices:
     status: not_started
     percent: 0
   - file: 06-perf-hot-path-boot.md
-    status: not_started
-    percent: 0
+    status: in_progress
+    percent: 25
   - file: 07-algorithms.md
-    status: not_started
-    percent: 0
+    status: in_progress
+    percent: 20
   - file: 08-memory.md
-    status: not_started
-    percent: 0
+    status: in_progress
+    percent: 15
   - file: 09-dashboard.md
     status: not_started
     percent: 0
@@ -42,7 +42,7 @@ slices:
     percent: 0
   - file: 12-proof-harness.md
     status: in_progress
-    percent: 15
+    percent: 40
   - file: 13-human-decisions.md
     status: not_started
     percent: 0
@@ -68,8 +68,8 @@ slices:
     status: in_progress
     percent: 40
   - file: 21-counters-and-read-caching.md
-    status: not_started
-    percent: 0
+    status: in_progress
+    percent: 10
 decisions:
   - id: U2
     date: 2026-11-10
@@ -80,6 +80,11 @@ decisions:
     by: sebi (owner, in-session instruction)
     decision: "Public surfaces (README, docs/site/llms.txt, docs/site/index.html) may state that teams running billions of jobs a month on Wurk in production recommend it, labelled user-reported. Supersedes audit 2026-10-04 H8/R11 for user-reported volume only; published throughput still needs docs/benchmarks.md numbers (12 T1 soak). Guard: test/unit/forbidden_claims_test.rb SCALE_SOURCE."
 evidence:
+  - "wave 2 measured serially on a quiet host @ 8a4eda4 (docs/benchmarks.md Re-run 2026-11-11 + docs/benchmarks/2026-11-11/): vs Sidekiq 8.1.6 noop 0.86x, cpu 0.98x, io 1.00x, boot 0.49s vs 0.35s; noop gap 21.9us/job (fetch 58%, logger 17%, ACK 14%, middleware ~16%); short soak BALANCED (19,435 jobs, 0 lost, 0 unattributed, 12 faults); per-child Pss +160-220 kB/10k jobs after warmup. 24h soak still pending."
+  - "wave 2 (algobench): 7 benches + bench/algo/support.rb; deterministic before-values recorded for 07 A1-A11/A14/A16 and 21 K1-K5 (bench:algo_counts, CI step in bench.yml). Plan corrections: A19 DROPPED (ProcessSet cleanup lock is cluster-wide -> O(P)/min, not O(P^2)); A8 cost = classes x FOREIGN loops only; NEW for A7: never-fired loops walk next_fire_at minute-by-minute each tick (50 yearly loops -> ~1.2s tick)."
+  - "wave 2 (boot): bench/require_profile.rb; require 'wurk' = 248 features/159 own files/60.6k allocs vs sidekiq 100/20/27.9k; gap is Wurk's own files; L2 must use autoload (not const_missing: sidekiq-cron/failures probe defined?(Sidekiq::Web)); client tier ~33 files."
+  - "wave 2 finding (cpuprof, preliminary/contended): noop gap is CPU (~18us/job: fetch pipeline 62%, job logger 20%, ACK bookkeeping 17%, middleware make_new+traverse ~25%; dispatch/stats cheaper than Sidekiq). Drop-in divergence for wave 3: job log `elapsed` is ms in Wurk (lib/wurk/job_logger.rb:72) vs seconds in Sidekiq 8.1.6; spec docs/target/sidekiq-free.md:957 says ms; not in parity-divergences.md - needs oracle check."
+  - "release 1.12.0: PR #910 merged (8a4eda4); release.yml all jobs green; rubygems.org wurk 1.12.0 (2026-11-11T03:00Z); tag v1.12.0 -> 8a4eda4; GitHub Release Latest with wurk-1.12.0.gem; demo /demo/build = 8a4eda4. Carries wave 1 (#907) + changelog split (#909). Adopter bumps to 1.12.0 pending (14-18)."
   - "wave 1: PR #907 merged (ba211f1) - 02 R1+R2, 03 G1-G4+G10, 01 C3-C8, 102-10 S1, 12 T3+T6, unique/retry_for/timeout Durations, bin/redis; follow-up #908 (death handlers on lost reclaim reply)."
   - "01 C9: closed invalid - `# rubocop:disable-next` is a valid directive at pinned rubocop 1.92.2; a disable/enable pair trips Style/DirectiveScope."
   - "03 G3 follow-ups: no per-child 'child i/N' role line (needs lib/wurk/swarm/child_boot.rb); BootChecks.redis_pool_size duplicates private Capsule#main_pool_size; boot-check still logs the topology 'forking N children' line from Configuration#default_topology."

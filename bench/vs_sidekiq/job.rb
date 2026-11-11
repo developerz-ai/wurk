@@ -25,6 +25,13 @@ SHAPE      = ENV.fetch('WURK_BENCH_VS_SHAPE', 'noop')
 CPU_ITERS  = Integer(ENV.fetch('WURK_BENCH_VS_CPU_ITERS', '20000'))
 IO_SECONDS = Float(ENV.fetch('WURK_BENCH_VS_IO_SECONDS', '0.005'))
 DONE_KEY   = ENV.fetch('WURK_BENCH_VS_DONE_KEY', 'wurk-bench:vs:done')
+JOBS       = Integer(ENV.fetch('WURK_BENCH_VS_JOBS', '0'))
+CPU_KEY    = "#{DONE_KEY}:cpu".freeze
+EDGES      = [1, JOBS].freeze
+PROFILE    = ENV.fetch('WURK_BENCH_VS_PROFILE_OUT', nil)
+PROFILE_US = Integer(ENV.fetch('WURK_BENCH_VS_PROFILE_INTERVAL', '1000'))
+require 'json'
+require 'stackprof' if PROFILE
 
 # BenchJob is the job class name baked into the payloads the driver enqueues.
 class BenchJob
@@ -37,10 +44,42 @@ class BenchJob
     when 'cpu' then burn
     when 'io'  then sleep(IO_SECONDS)
     end
-    Sidekiq.redis { |conn| conn.call('INCR', DONE_KEY) }
+    done = Sidekiq.redis { |conn| conn.call('INCR', DONE_KEY) }
+    mark(done) if EDGES.include?(done)
   end
 
   private
+
+  # The profiler runs from the first completion to the last, like the CPU
+  # window, so boot and shutdown never show up as framework cost. Sampled in
+  # CPU mode: an idle thread parked in BLMOVE/BRPOP costs nothing and is not
+  # sampled, and a busy one is sampled whichever engine thread it is.
+  def mark(done)
+    edge = done == 1 ? 'first' : 'last'
+    snapshot = cost_snapshot
+    StackProf.start(mode: :cpu, raw: true, interval: PROFILE_US) if PROFILE && edge == 'first'
+    if PROFILE && edge == 'last'
+      StackProf.stop
+      StackProf.results(PROFILE)
+    end
+    Sidekiq.redis { |conn| conn.call('HSET', CPU_KEY, edge, snapshot) }
+  end
+
+  # Process-wide cost at a completion count: CPU across every thread (fetch,
+  # perform, heartbeat, poller — whatever the engine runs), its user/system
+  # split, and allocations. Taken by the jobs that see the first and the last
+  # completion, so the window is exactly the driver's drain window and costs
+  # two extra Redis writes per run, not one per job. The driver divides by the
+  # jobs in between (bench/vs_sidekiq/cost.rb).
+  def cost_snapshot
+    times = Process.times
+    JSON.generate(
+      'pid' => Process.pid,
+      'cpu' => Process.clock_gettime(Process::CLOCK_PROCESS_CPUTIME_ID),
+      'utime' => times.utime, 'stime' => times.stime,
+      'allocated' => GC.stat(:total_allocated_objects), 'gc' => GC.count
+    )
+  end
 
   # Fixed CPU cost per job, iteration-counted rather than clock-bounded: a
   # clock-bounded spin would measure GVL contention as extra work and flatter

@@ -1,0 +1,690 @@
+{
+  "ruby": "3.4.2",
+  "wurk": "1.12.0",
+  "app": "dummy",
+  "features": [
+    "plain"
+  ],
+  "count": 4,
+  "concurrency": 5,
+  "env": {},
+  "checkpoints": [
+    {
+      "jobs": 0,
+      "children": {
+        "1127287": {
+          "rss": 81300,
+          "pss": 33472,
+          "shared_clean": 7796,
+          "shared_dirty": 51260,
+          "private_clean": 0,
+          "private_dirty": 22244,
+          "shared": 59056,
+          "shared_ratio": 0.726
+        },
+        "1127291": {
+          "rss": 81292,
+          "pss": 33453,
+          "shared_clean": 7804,
+          "shared_dirty": 51268,
+          "private_clean": 0,
+          "private_dirty": 22220,
+          "shared": 59072,
+          "shared_ratio": 0.727
+        },
+        "1127296": {
+          "rss": 81388,
+          "pss": 33314,
+          "shared_clean": 7804,
+          "shared_dirty": 51628,
+          "private_clean": 0,
+          "private_dirty": 21956,
+          "shared": 59432,
+          "shared_ratio": 0.73
+        },
+        "1127300": {
+          "rss": 81388,
+          "pss": 33259,
+          "shared_clean": 7804,
+          "shared_dirty": 51716,
+          "private_clean": 0,
+          "private_dirty": 21868,
+          "shared": 59520,
+          "shared_ratio": 0.731
+        }
+      },
+      "parent": {
+        "rss": 87804,
+        "pss": 36291,
+        "shared_clean": 13920,
+        "shared_dirty": 51560,
+        "private_clean": 2256,
+        "private_dirty": 20068,
+        "shared": 65480,
+        "shared_ratio": 0.746
+      },
+      "redis_used_memory": 1645576,
+      "redis_dbsize": 7
+    },
+    {
+      "jobs": 10000,
+      "children": {
+        "1127287": {
+          "rss": 96284,
+          "pss": 53491,
+          "shared_clean": 8608,
+          "shared_dirty": 44064,
+          "private_clean": 0,
+          "private_dirty": 43612,
+          "shared": 52672,
+          "shared_ratio": 0.547
+        },
+        "1127291": {
+          "rss": 96296,
+          "pss": 53477,
+          "shared_clean": 8628,
+          "shared_dirty": 44076,
+          "private_clean": 0,
+          "private_dirty": 43592,
+          "shared": 52704,
+          "shared_ratio": 0.547
+        },
+        "1127296": {
+          "rss": 96320,
+          "pss": 53395,
+          "shared_clean": 8612,
+          "shared_dirty": 44284,
+          "private_clean": 0,
+          "private_dirty": 43424,
+          "shared": 52896,
+          "shared_ratio": 0.549
+        },
+        "1127300": {
+          "rss": 96320,
+          "pss": 53393,
+          "shared_clean": 8576,
+          "shared_dirty": 44336,
+          "private_clean": 0,
+          "private_dirty": 43408,
+          "shared": 52912,
+          "shared_ratio": 0.549
+        }
+      },
+      "parent": {
+        "rss": 87860,
+        "pss": 42124,
+        "shared_clean": 13920,
+        "shared_dirty": 44112,
+        "private_clean": 2256,
+        "private_dirty": 27572,
+        "shared": 58032,
+        "shared_ratio": 0.661
+      },
+      "redis_used_memory": 1828480,
+      "redis_dbsize": 14
+    },
+    {
+      "jobs": 20000,
+      "children": {
+        "1127287": {
+          "rss": 96700,
+          "pss": 53965,
+          "shared_clean": 8608,
+          "shared_dirty": 43992,
+          "private_clean": 0,
+          "private_dirty": 44100,
+          "shared": 52600,
+          "shared_ratio": 0.544
+        },
+        "1127291": {
+          "rss": 96764,
+          "pss": 54002,
+          "shared_clean": 8628,
+          "shared_dirty": 44004,
+          "private_clean": 0,
+          "private_dirty": 44132,
+          "shared": 52632,
+          "shared_ratio": 0.544
+        },
+        "1127296": {
+          "rss": 96780,
+          "pss": 53921,
+          "shared_clean": 8612,
+          "shared_dirty": 44212,
+          "private_clean": 0,
+          "private_dirty": 43956,
+          "shared": 52824,
+          "shared_ratio": 0.546
+        },
+        "1127300": {
+          "rss": 96760,
+          "pss": 53899,
+          "shared_clean": 8576,
+          "shared_dirty": 44264,
+          "private_clean": 0,
+          "private_dirty": 43920,
+          "shared": 52840,
+          "shared_ratio": 0.546
+        }
+      },
+      "parent": {
+        "rss": 87876,
+        "pss": 42232,
+        "shared_clean": 13920,
+        "shared_dirty": 43988,
+        "private_clean": 2256,
+        "private_dirty": 27712,
+        "shared": 57908,
+        "shared_ratio": 0.659
+      },
+      "redis_used_memory": 1829024,
+      "redis_dbsize": 14
+    },
+    {
+      "jobs": 30000,
+      "children": {
+        "1127287": {
+          "rss": 96988,
+          "pss": 54272,
+          "shared_clean": 8608,
+          "shared_dirty": 43968,
+          "private_clean": 0,
+          "private_dirty": 44412,
+          "shared": 52576,
+          "shared_ratio": 0.542
+        },
+        "1127291": {
+          "rss": 96932,
+          "pss": 54190,
+          "shared_clean": 8628,
+          "shared_dirty": 43980,
+          "private_clean": 0,
+          "private_dirty": 44324,
+          "shared": 52608,
+          "shared_ratio": 0.543
+        },
+        "1127296": {
+          "rss": 96984,
+          "pss": 54154,
+          "shared_clean": 8612,
+          "shared_dirty": 44188,
+          "private_clean": 0,
+          "private_dirty": 44184,
+          "shared": 52800,
+          "shared_ratio": 0.544
+        },
+        "1127300": {
+          "rss": 96944,
+          "pss": 54124,
+          "shared_clean": 8576,
+          "shared_dirty": 44216,
+          "private_clean": 0,
+          "private_dirty": 44152,
+          "shared": 52792,
+          "shared_ratio": 0.545
+        }
+      },
+      "parent": {
+        "rss": 87900,
+        "pss": 42325,
+        "shared_clean": 13920,
+        "shared_dirty": 43884,
+        "private_clean": 2256,
+        "private_dirty": 27840,
+        "shared": 57804,
+        "shared_ratio": 0.658
+      },
+      "redis_used_memory": 1830480,
+      "redis_dbsize": 16
+    },
+    {
+      "jobs": 40000,
+      "children": {
+        "1127287": {
+          "rss": 97196,
+          "pss": 54498,
+          "shared_clean": 8608,
+          "shared_dirty": 43948,
+          "private_clean": 0,
+          "private_dirty": 44640,
+          "shared": 52556,
+          "shared_ratio": 0.541
+        },
+        "1127291": {
+          "rss": 97080,
+          "pss": 54356,
+          "shared_clean": 8628,
+          "shared_dirty": 43960,
+          "private_clean": 0,
+          "private_dirty": 44492,
+          "shared": 52588,
+          "shared_ratio": 0.542
+        },
+        "1127296": {
+          "rss": 97188,
+          "pss": 54381,
+          "shared_clean": 8612,
+          "shared_dirty": 44164,
+          "private_clean": 0,
+          "private_dirty": 44412,
+          "shared": 52776,
+          "shared_ratio": 0.543
+        },
+        "1127300": {
+          "rss": 97108,
+          "pss": 54311,
+          "shared_clean": 8576,
+          "shared_dirty": 44192,
+          "private_clean": 0,
+          "private_dirty": 44340,
+          "shared": 52768,
+          "shared_ratio": 0.543
+        }
+      },
+      "parent": {
+        "rss": 87912,
+        "pss": 42401,
+        "shared_clean": 13920,
+        "shared_dirty": 43800,
+        "private_clean": 2256,
+        "private_dirty": 27936,
+        "shared": 57720,
+        "shared_ratio": 0.657
+      },
+      "redis_used_memory": 1835224,
+      "redis_dbsize": 16
+    },
+    {
+      "jobs": 50000,
+      "children": {
+        "1127287": {
+          "rss": 97296,
+          "pss": 54605,
+          "shared_clean": 8608,
+          "shared_dirty": 43940,
+          "private_clean": 0,
+          "private_dirty": 44748,
+          "shared": 52548,
+          "shared_ratio": 0.54
+        },
+        "1127291": {
+          "rss": 97208,
+          "pss": 54492,
+          "shared_clean": 8628,
+          "shared_dirty": 43952,
+          "private_clean": 0,
+          "private_dirty": 44628,
+          "shared": 52580,
+          "shared_ratio": 0.541
+        },
+        "1127296": {
+          "rss": 97320,
+          "pss": 54520,
+          "shared_clean": 8612,
+          "shared_dirty": 44156,
+          "private_clean": 0,
+          "private_dirty": 44552,
+          "shared": 52768,
+          "shared_ratio": 0.542
+        },
+        "1127300": {
+          "rss": 97300,
+          "pss": 54510,
+          "shared_clean": 8576,
+          "shared_dirty": 44184,
+          "private_clean": 0,
+          "private_dirty": 44540,
+          "shared": 52760,
+          "shared_ratio": 0.542
+        }
+      },
+      "parent": {
+        "rss": 87912,
+        "pss": 42424,
+        "shared_clean": 13920,
+        "shared_dirty": 43772,
+        "private_clean": 2256,
+        "private_dirty": 27964,
+        "shared": 57692,
+        "shared_ratio": 0.656
+      },
+      "redis_used_memory": 1836736,
+      "redis_dbsize": 16
+    },
+    {
+      "jobs": 60000,
+      "children": {
+        "1127287": {
+          "rss": 97460,
+          "pss": 54795,
+          "shared_clean": 8608,
+          "shared_dirty": 43916,
+          "private_clean": 0,
+          "private_dirty": 44936,
+          "shared": 52524,
+          "shared_ratio": 0.539
+        },
+        "1127291": {
+          "rss": 97348,
+          "pss": 54657,
+          "shared_clean": 8628,
+          "shared_dirty": 43928,
+          "private_clean": 0,
+          "private_dirty": 44792,
+          "shared": 52556,
+          "shared_ratio": 0.54
+        },
+        "1127296": {
+          "rss": 97684,
+          "pss": 55012,
+          "shared_clean": 8612,
+          "shared_dirty": 43996,
+          "private_clean": 0,
+          "private_dirty": 45076,
+          "shared": 52608,
+          "shared_ratio": 0.539
+        },
+        "1127300": {
+          "rss": 97456,
+          "pss": 54694,
+          "shared_clean": 8576,
+          "shared_dirty": 44160,
+          "private_clean": 0,
+          "private_dirty": 44720,
+          "shared": 52736,
+          "shared_ratio": 0.541
+        }
+      },
+      "parent": {
+        "rss": 87912,
+        "pss": 42457,
+        "shared_clean": 13920,
+        "shared_dirty": 43740,
+        "private_clean": 2256,
+        "private_dirty": 27996,
+        "shared": 57660,
+        "shared_ratio": 0.656
+      },
+      "redis_used_memory": 1916528,
+      "redis_dbsize": 23
+    },
+    {
+      "jobs": 70000,
+      "children": {
+        "1127287": {
+          "rss": 97512,
+          "pss": 54848,
+          "shared_clean": 8608,
+          "shared_dirty": 43916,
+          "private_clean": 0,
+          "private_dirty": 44988,
+          "shared": 52524,
+          "shared_ratio": 0.539
+        },
+        "1127291": {
+          "rss": 97488,
+          "pss": 54798,
+          "shared_clean": 8628,
+          "shared_dirty": 43928,
+          "private_clean": 0,
+          "private_dirty": 44932,
+          "shared": 52556,
+          "shared_ratio": 0.539
+        },
+        "1127296": {
+          "rss": 97764,
+          "pss": 55098,
+          "shared_clean": 8612,
+          "shared_dirty": 43988,
+          "private_clean": 0,
+          "private_dirty": 45164,
+          "shared": 52600,
+          "shared_ratio": 0.538
+        },
+        "1127300": {
+          "rss": 97592,
+          "pss": 54830,
+          "shared_clean": 8576,
+          "shared_dirty": 44160,
+          "private_clean": 0,
+          "private_dirty": 44856,
+          "shared": 52736,
+          "shared_ratio": 0.54
+        }
+      },
+      "parent": {
+        "rss": 87912,
+        "pss": 42461,
+        "shared_clean": 13920,
+        "shared_dirty": 43736,
+        "private_clean": 2256,
+        "private_dirty": 28000,
+        "shared": 57656,
+        "shared_ratio": 0.656
+      },
+      "redis_used_memory": 1941000,
+      "redis_dbsize": 22
+    },
+    {
+      "jobs": 80000,
+      "children": {
+        "1127287": {
+          "rss": 97644,
+          "pss": 54981,
+          "shared_clean": 8608,
+          "shared_dirty": 43916,
+          "private_clean": 0,
+          "private_dirty": 45120,
+          "shared": 52524,
+          "shared_ratio": 0.538
+        },
+        "1127291": {
+          "rss": 97568,
+          "pss": 54879,
+          "shared_clean": 8628,
+          "shared_dirty": 43928,
+          "private_clean": 0,
+          "private_dirty": 45012,
+          "shared": 52556,
+          "shared_ratio": 0.539
+        },
+        "1127296": {
+          "rss": 97904,
+          "pss": 55244,
+          "shared_clean": 8612,
+          "shared_dirty": 43980,
+          "private_clean": 0,
+          "private_dirty": 45312,
+          "shared": 52592,
+          "shared_ratio": 0.537
+        },
+        "1127300": {
+          "rss": 97708,
+          "pss": 54946,
+          "shared_clean": 8576,
+          "shared_dirty": 44160,
+          "private_clean": 0,
+          "private_dirty": 44972,
+          "shared": 52736,
+          "shared_ratio": 0.54
+        }
+      },
+      "parent": {
+        "rss": 87912,
+        "pss": 42462,
+        "shared_clean": 13920,
+        "shared_dirty": 43736,
+        "private_clean": 2256,
+        "private_dirty": 28000,
+        "shared": 57656,
+        "shared_ratio": 0.656
+      },
+      "redis_used_memory": 1945128,
+      "redis_dbsize": 23
+    },
+    {
+      "jobs": 90000,
+      "children": {
+        "1127287": {
+          "rss": 97716,
+          "pss": 55054,
+          "shared_clean": 8608,
+          "shared_dirty": 43916,
+          "private_clean": 0,
+          "private_dirty": 45192,
+          "shared": 52524,
+          "shared_ratio": 0.538
+        },
+        "1127291": {
+          "rss": 97776,
+          "pss": 55087,
+          "shared_clean": 8628,
+          "shared_dirty": 43928,
+          "private_clean": 0,
+          "private_dirty": 45220,
+          "shared": 52556,
+          "shared_ratio": 0.538
+        },
+        "1127296": {
+          "rss": 98020,
+          "pss": 55364,
+          "shared_clean": 8612,
+          "shared_dirty": 43976,
+          "private_clean": 0,
+          "private_dirty": 45432,
+          "shared": 52588,
+          "shared_ratio": 0.537
+        },
+        "1127300": {
+          "rss": 97756,
+          "pss": 54995,
+          "shared_clean": 8576,
+          "shared_dirty": 44160,
+          "private_clean": 0,
+          "private_dirty": 45020,
+          "shared": 52736,
+          "shared_ratio": 0.539
+        }
+      },
+      "parent": {
+        "rss": 87912,
+        "pss": 42476,
+        "shared_clean": 13920,
+        "shared_dirty": 43716,
+        "private_clean": 2256,
+        "private_dirty": 28020,
+        "shared": 57636,
+        "shared_ratio": 0.656
+      },
+      "redis_used_memory": 1973152,
+      "redis_dbsize": 25
+    },
+    {
+      "jobs": 100000,
+      "children": {
+        "1127287": {
+          "rss": 97740,
+          "pss": 55079,
+          "shared_clean": 8608,
+          "shared_dirty": 43916,
+          "private_clean": 0,
+          "private_dirty": 45216,
+          "shared": 52524,
+          "shared_ratio": 0.537
+        },
+        "1127291": {
+          "rss": 97816,
+          "pss": 55129,
+          "shared_clean": 8628,
+          "shared_dirty": 43928,
+          "private_clean": 0,
+          "private_dirty": 45260,
+          "shared": 52556,
+          "shared_ratio": 0.537
+        },
+        "1127296": {
+          "rss": 98116,
+          "pss": 55461,
+          "shared_clean": 8612,
+          "shared_dirty": 43976,
+          "private_clean": 0,
+          "private_dirty": 45528,
+          "shared": 52588,
+          "shared_ratio": 0.536
+        },
+        "1127300": {
+          "rss": 97784,
+          "pss": 55024,
+          "shared_clean": 8576,
+          "shared_dirty": 44160,
+          "private_clean": 0,
+          "private_dirty": 45048,
+          "shared": 52736,
+          "shared_ratio": 0.539
+        }
+      },
+      "parent": {
+        "rss": 87912,
+        "pss": 42498,
+        "shared_clean": 13920,
+        "shared_dirty": 43688,
+        "private_clean": 2256,
+        "private_dirty": 28048,
+        "shared": 57608,
+        "shared_ratio": 0.655
+      },
+      "redis_used_memory": 1954952,
+      "redis_dbsize": 25
+    }
+  ],
+  "slopes_kb_per_10k": {
+    "1127287": {
+      "all": {
+        "rss": 837.0,
+        "pss": 1079.9,
+        "private_dirty": 1142.6
+      },
+      "steady": {
+        "rss": 149.1,
+        "pss": 161.8,
+        "private_dirty": 162.7
+      }
+    },
+    "1127291": {
+      "all": {
+        "rss": 839.4,
+        "pss": 1081.5,
+        "private_dirty": 1144.3
+      },
+      "steady": {
+        "rss": 153.4,
+        "pss": 166.1,
+        "private_dirty": 167.0
+      }
+    },
+    "1127296": {
+      "all": {
+        "rss": 871.5,
+        "pss": 1137.3,
+        "private_dirty": 1205.3
+      },
+      "steady": {
+        "rss": 191.1,
+        "pss": 223.0,
+        "private_dirty": 228.4
+      }
+    },
+    "1127300": {
+      "all": {
+        "rss": 838.3,
+        "pss": 1092.4,
+        "private_dirty": 1157.2
+      },
+      "steady": {
+        "rss": 155.0,
+        "pss": 170.9,
+        "private_dirty": 171.4
+      }
+    }
+  }
+}

@@ -359,6 +359,10 @@ knows about:
   processor thread per incident, and nothing reports it.
 - **A job that failed while Redis was down**, where the retry booking and the
   requeue both raised. The requeue failure is logged at ERROR.
+- **A job that finished while Redis was down.** Its ACK (`LREM`) failed, so the
+  payload stays in the private list and runs again when this check or a
+  graceful shutdown requeues it. That is a duplicate, never a loss (observed by
+  the chaos soak, `bench/soak/`).
 
 So every worker checks its own lists on every reaper tick. A payload in the list
 that no thread's claim and no pending ACK accounts for is suspect. Seen stranded
