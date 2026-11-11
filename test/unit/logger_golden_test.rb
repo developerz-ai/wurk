@@ -81,15 +81,18 @@ class LoggerGoldenTest < Wurk::Test::UnitCase
 
   # The allocation the cut removed, pinned: a `done` line with the default
   # context used to build ~11 objects on top of the line itself. Measured with
-  # GC disabled so a sweep cannot hide a regression.
-  def test_a_done_line_allocates_at_most_four_objects
+  # GC disabled so a sweep cannot hide a regression. Ruby 3.2 allocates 3 more
+  # for the same line (measured on the 3.2.11 compat leg; 3.3+ measure 4).
+  MAX_DONE_LINE_ALLOCATIONS = RUBY_VERSION < '3.3' ? 7 : 4
+
+  def test_a_done_line_allocates_at_most_the_pinned_count
     formatter = Wurk::Logger::Formatters::Pretty.new
     Thread.current[Wurk::Context::KEY] = { jid: 'abc123', class: 'HardJob', elapsed: 0.007 }
     time = Time.now
     allocations { formatter.call('INFO', time, nil, 'done') } # warm the line and the helper
 
     # The line, the timestamp, the context buffer, the elapsed Float#to_s.
-    assert_operator allocations { formatter.call('INFO', time, nil, 'done') }, :<=, 4
+    assert_operator allocations { formatter.call('INFO', time, nil, 'done') }, :<=, MAX_DONE_LINE_ALLOCATIONS
   end
 
   private

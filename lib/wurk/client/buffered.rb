@@ -364,8 +364,8 @@ module Wurk
           buffer.size < cap && (bytes_cap.nil? || @buffer_bytes + entry.bytes <= bytes_cap)
         end
 
-        # The three buffer mutations, each under buffer_mutex, each keeping
-        # @buffer_bytes in step.
+        # The three buffer mutations, each under buffer_mutex, each keeping the
+        # byte total (`@buffer_bytes`) in step.
         def push_entry(entry)
           @buffer_bytes += entry.bytes
           buffer << entry
