@@ -26,6 +26,27 @@ class ErrorCoalescerTest < Wurk::Test::UnitCase
     assert_equal 0, @coalescer.admit(:b)
   end
 
+  # M6: keys can come from data; the map stays bounded.
+  def test_remembers_at_most_max_keys
+    coalescer = Wurk::ErrorCoalescer.new(window: 60, max_keys: 3, clock: -> { @now })
+    10.times { |i| coalescer.admit("k#{i}") }
+
+    assert_equal 3, coalescer.size
+  end
+
+  # A full map first drops keys whose window passed with nothing swallowed, so
+  # a key still counting suppressions keeps its count.
+  def test_a_full_map_evicts_settled_keys_before_one_still_counting
+    coalescer = Wurk::ErrorCoalescer.new(window: 60, max_keys: 2, clock: -> { @now })
+    coalescer.admit(:busy)
+    coalescer.admit(:busy)
+    coalescer.admit(:quiet)
+    @now = 61
+    coalescer.admit(:new)
+
+    assert_equal 1, coalescer.admit(:busy)
+  end
+
   def test_configuration_coalesces_fetch_errors_for_any_handler_and_counts_them_all
     seen = []
     config = Wurk::Configuration.new

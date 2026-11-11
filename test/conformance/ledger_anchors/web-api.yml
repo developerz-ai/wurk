@@ -20,7 +20,7 @@
     def retry_job    = single_entry_action(::Wurk::RetrySet.new, RETRY_ACTIONS, params[:cmd])
     def retries_bulk = bulk_entry_action(::Wurk::RetrySet.new, RETRY_ACTIONS)
 - entry: "Dashboard job-set HTTP request shapes differ from Sidekiq Web"
-  anchor: "app/controllers/wurk/api_controller.rb#L395-L410"
+  anchor: "app/controllers/wurk/api_controller.rb#L399-L414"
   fragment: |-
     method = actions[params[:cmd].to_s]
     return render(json: { error: 'unknown action' }, status: :bad_request) unless method
@@ -46,7 +46,7 @@
   fragment: |-
     scope :api, defaults: { format: :json } do
 - entry: "Busy-control HTTP request-shape parity is unsupported"
-  anchor: "config/routes.rb#L61-L66"
+  anchor: "config/routes.rb#L65-L70"
   fragment: |-
     post 'busy/quiet', to: 'api#quiet_process', as: :api_quiet_process
     post 'busy/stop',  to: 'api#stop_process',  as: :api_stop_process
@@ -56,7 +56,7 @@
     def quiet_process = signal_processes(:quiet!)
     def stop_process  = signal_processes(:stop!)
 - entry: "Busy-control HTTP request-shape parity is unsupported"
-  anchor: "app/controllers/wurk/api_controller.rb#L442-L453"
+  anchor: "app/controllers/wurk/api_controller.rb#L446-L457"
   fragment: |-
     identity = params[:identity].to_s
     if identity.empty? || identity == 'all'

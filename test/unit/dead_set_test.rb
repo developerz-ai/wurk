@@ -89,6 +89,18 @@ class DeadSetTest < Wurk::Test::UnitCase
     assert_instance_of RuntimeError, ex
     assert_equal Wurk::DeadSet::API_KILL_MESSAGE, ex.message
     refute_nil ex.backtrace
+    assert_match(/dead_set_test\.rb/, ex.backtrace.first, 'the backtrace starts at whoever called kill')
+  end
+
+  # M7: the synthesized exception is built only for the handlers, so a kill
+  # that notifies none never walks the caller's stack.
+  def test_a_kill_without_notification_builds_no_exception
+    built = 0
+    set = dead_set
+    set.define_singleton_method(:api_kill_error) { (built += 1) && super() }
+    set.kill(Wurk.dump_json(base_item('jid' => "quiet-#{@ns}")), notify_failure: false)
+
+    assert_equal 0, built
   end
 
   def test_kill_uses_provided_exception

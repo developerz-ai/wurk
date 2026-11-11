@@ -162,6 +162,62 @@ class LimiterConcurrentTest < Wurk::Test::UnitCase
     assert_equal s['held'], s['immediate'] + s['waited']
   end
 
+  # A slot taken on the first attempt is `immediate`; one taken after the
+  # holder released is `waited`. Both are booked by the acquire script, and the
+  # holder's release books `held_time`, so a job is two round trips.
+  def test_first_try_is_immediate_and_a_retry_is_waited
+    name = "iw-#{@suffix}"
+    l = Wurk::Limiter.concurrent(name, 1, wait_timeout: 5)
+    waiter = nil
+    l.within_limit do
+      waiter = Thread.new { Wurk::Limiter.concurrent(name, 1, wait_timeout: 5).within_limit { :in } }
+      await_parked(waiter)
+    end
+
+    assert_equal :in, waiter.value
+    s = l.status
+
+    assert_equal [2, 1, 1, 0], s.values_at('held', 'immediate', 'waited', 'overages')
+  ensure
+    waiter&.kill&.join(1)
+  end
+
+  # Waits for `thread` to sleep in the limiter's retry loop. A waiter that
+  # finished instead (raised, or wrongly took the occupied slot) fails here
+  # rather than hanging the suite.
+  def await_parked(thread, within: 5)
+    now = -> { ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) }
+    deadline = now.call + within
+    until thread.backtrace&.first&.include?('sleep')
+      flunk("the waiter finished without waiting: #{thread.value.inspect}") unless thread.alive?
+      flunk("the waiter did not park within #{within}s") if now.call > deadline
+      sleep 0.01
+    end
+  end
+
+  # Acquire and release, the counters booked inside both scripts. Building
+  # the limiter inside the job adds its registration, every time: a
+  # process-local "already registered" memo would leave it unlisted after a
+  # flush or an eviction until the memo aged out.
+  def test_one_job_costs_two_round_trips_and_a_construction_one_more
+    one = Wurk::RedisPool.new(size: 1, url: Wurk::Test.redis_url, timeout: 2, name: 'ccrt')
+    Wurk::Limiter.config.redis = one
+    l = Wurk::Limiter.concurrent("rt-#{@suffix}", 1)
+    l.within_limit { nil }
+    sent = 0
+    counter = Module.new { define_method(:call) { |*a, **k, &b| (sent += 1) && super(*a, **k, &b) } }
+    one.with { |c| c.singleton_class.prepend(counter) }
+
+    l.within_limit { nil }
+
+    assert_equal 2, sent
+    Wurk::Limiter.concurrent("rt-#{@suffix}", 1).within_limit { nil }
+
+    assert_equal 5, sent
+  ensure
+    one&.disconnect!
+  end
+
   # A rejected acquire must not count as held — the bump lives in the ZADD
   # branch of the acquire script, not on every call.
   def test_held_not_counted_for_rejected_acquire

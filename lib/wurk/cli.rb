@@ -204,19 +204,17 @@ module Wurk
       # Mark server mode BEFORE the app loads so `configure_server` blocks in
       # the required initializer actually fire (they gate on `config.server?`).
       # Matches Sidekiq, which sets `Sidekiq.server = true` before requiring
-      # the app in its CLI. Skipping this drops server middleware, error
-      # handlers, and lifecycle hooks registered via configure_server, and each
-      # skip logs one WARN naming the gate (`configure_server` / `server? is
-      # false`).
+      # the app in its CLI. Each configure_server block the app's load reaches
+      # before it would be kept and run only here, after the app's own code.
       enter_server_mode
       boot_application if boot_app
       Swarm::TestModeGuard.enforce!(@config.logger)
       self_read, self_write = ::IO.pipe
       begin
         trap_signals(self_write)
-        validate_redis!
+        info = validate_redis!
         validate_pool_sizes!
-        BootChecks.run(@config, redis_info)
+        BootChecks.run(@config, info)
         BootChecks.warn_on_ignored_topology(@config, 'wurk')
         BootChecks.log_process_role(@config, 'wurk')
         @config[:identity] = identity
@@ -243,9 +241,9 @@ module Wurk
     # This is the only way to get fork-based parallelism without Rails — the
     # railtie auto-boot path is Rails-only. Honors the swarm preload knobs
     # (`WURK_PRELOAD`/`SIDEKIQ_PRELOAD` Bundler groups, `WURK_PRELOAD_APP`/
-    # `SIDEKIQ_PRELOAD_APP` whole-app eager-load) and boots `Process.warmup`
-    # before the fork so children share warmed pages (copy-on-write). Spec §7.
-    def run_swarm(boot_app: true, warmup: true) # rubocop:disable Metrics/AbcSize
+    # `SIDEKIQ_PRELOAD_APP` whole-app eager-load); Swarm#boot warms the heap
+    # before the fork so children share its pages (Swarm::Prefork). Spec §7.
+    def run_swarm(boot_app: true) # rubocop:disable Metrics/AbcSize
       raise StartupError, "the swarm runner takes no subcommand; run `wurk #{@command}` instead" if @command
 
       # Server mode before the app loads — see #run. The flag rides through the
@@ -256,12 +254,11 @@ module Wurk
       # crash-looping the fleet until the crash-loop exit.
       Health.options_from_env
       boot_swarm_application if boot_app
-      validate_redis!
+      info = validate_redis!
       validate_pool_sizes!
-      BootChecks.run(@config, redis_info)
+      BootChecks.run(@config, info)
       log_swarm_role
       @config[:identity] = identity
-      warm_up_process if warmup
       @swarm = Wurk::Swarm.new(topology: @config.topology, config: @config, exit_on_crash_loop: true,
                                shutdown_timeout: @config[:timeout] || Swarm::DEFAULT_SHUTDOWN_TIMEOUT)
       begin
@@ -352,9 +349,9 @@ module Wurk
       Wurk.enter_server_mode(@config)
     end
 
-    # Pre-fault and compact the heap before workers start — in `run_swarm` that
-    # happens before the fork, so children share the warmed pages copy-on-write.
-    # RUBY_DISABLE_WARMUP=1 is the escape hatch for hosts that already warmed up.
+    # Pre-fault and compact the heap before workers start (the swarm does its
+    # own, before the fork: Swarm::Prefork). RUBY_DISABLE_WARMUP=1 is the escape
+    # hatch for hosts that already warmed up.
     def warm_up_process
       return unless ::Process.respond_to?(:warmup) && ENV['RUBY_DISABLE_WARMUP'] != '1'
 
@@ -436,6 +433,8 @@ module Wurk
       warn "wurk: USR2 log reopen failed, still writing to the previous log: #{e.class}: #{e.message}"
     end
 
+    # Returns the INFO it read, so a boot pays one round trip for the version
+    # check and BootChecks together.
     def validate_redis!
       info = redis_info
       ver = ::Gem::Version.new(info['redis_version'])
@@ -444,7 +443,7 @@ module Wurk
       end
 
       maxmemory_policy = info['maxmemory_policy']
-      return if maxmemory_policy.nil? || maxmemory_policy.empty? || maxmemory_policy == 'noeviction'
+      return info if maxmemory_policy.nil? || maxmemory_policy.empty? || maxmemory_policy == 'noeviction'
 
       logger.warn { <<~WARN }
 
@@ -453,6 +452,7 @@ module Wurk
         The 'noeviction' maxmemory policy is recommended (current policy: '#{maxmemory_policy}').
 
       WARN
+      info
     end
 
     def redis_info
@@ -504,7 +504,6 @@ module Wurk
       return unless @config[:boot_check_redis]
 
       validate_redis!
-      redis_info
     end
 
     def log_swarm_role

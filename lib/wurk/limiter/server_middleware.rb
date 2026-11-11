@@ -33,6 +33,10 @@ module Wurk
     class ServerMiddleware
       include Wurk::Middleware::ServerMiddleware
 
+      # One instance per chain entry, shared by every job (Middleware::Chain::Entry):
+      # #call keeps its state in locals and writes no ivar.
+      def self.shared_instance? = true
+
       DEAD_REASON = 'rate_limited'
 
       def call(_worker, job, _queue)

@@ -62,17 +62,19 @@ module Wurk
       end
 
       # `[public, private, public, private, ...]` for queues 2..n, fetch_first's
-      # KEYS. Strict mode with nothing paused hands #walk the same frozen array
-      # every pass, so the steady state reuses one build; a shuffled or filtered
-      # list is a fresh array per pass and rebuilds. Keyed on the pid too, for
-      # the reason #queue_keys is. Copy-on-write: processor threads share this
-      # fetcher.
+      # KEYS, built as one Array rather than a pair per queue flattened. Strict
+      # mode with nothing paused hands #walk the same frozen array every pass,
+      # so the steady state reuses one build; a shuffled or filtered list is a
+      # fresh array per pass and rebuilds. Keyed on the pid too, for the reason
+      # #queue_keys is. Copy-on-write: processor threads share this fetcher.
       def claim_keys(queues)
         pid = PidCache.pid
         cached = @claim_keys
         return cached[2] if cached && cached[0].equal?(queues) && cached[1] == pid
 
-        keys = queues.drop(1).flat_map { |public_q| [public_q, queue_keys(public_q).first] }.freeze
+        keys = []
+        queues.each_with_index { |public_q, i| keys << public_q << queue_keys(public_q).first unless i.zero? }
+        keys.freeze
         @claim_keys = [queues, pid, keys].freeze
         keys
       end

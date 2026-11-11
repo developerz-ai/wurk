@@ -30,6 +30,10 @@ module Wurk
     class InterruptHandler
       include Wurk::Middleware::ServerMiddleware
 
+      # One instance per chain entry, shared by every job (Middleware::Chain::Entry):
+      # #call and its helpers keep their state in locals and write no ivar.
+      def self.shared_instance? = true
+
       def call(_job_instance, job, queue)
         yield
       rescue Wurk::Job::Interrupted

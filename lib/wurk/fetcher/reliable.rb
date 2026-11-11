@@ -36,7 +36,7 @@ module Wurk
     #
     # Spec: docs/target/sidekiq-pro.md §3 (super_fetch, §3.3 poll interval),
     # docs/target/sidekiq-free.md §15 (TIMEOUT=2).
-    class Reliable < Fetcher
+    class Reliable < Fetcher # rubocop:disable Metrics/ClassLength
       include Component
       # Global per-queue concurrency, as a decorator over #walk. Prepended
       # rather than mixed in so there stays exactly one copy of the uncapped
@@ -58,6 +58,16 @@ module Wurk
       # config knob — see
       # docs/plans/2026/08/06/101-faster-than-sidekiq/00-semantics-signoff.md.
       PAUSED_TTL = 2
+
+      # The clock that cache is timed on, read once per fetch. A TTL in seconds
+      # does not need CLOCK_MONOTONIC's nanoseconds, and that clock is a real
+      # syscall wherever the kernel's clocksource has no vDSO read (hpet, some
+      # hypervisors), while the coarse one is a vDSO read everywhere Linux has
+      # it. It lags by up to its resolution, which the cache deadline gives back
+      # (PAUSED_CLOCK_SLACK), so the cache still never outlives PAUSED_TTL.
+      PAUSED_CLOCK =
+        defined?(::Process::CLOCK_MONOTONIC_COARSE) ? ::Process::CLOCK_MONOTONIC_COARSE : ::Process::CLOCK_MONOTONIC
+      PAUSED_CLOCK_SLACK = ::Process.clock_getres(PAUSED_CLOCK)
 
       # Backoff for the quieted short-circuit. Manager#quiet terminates the
       # shared fetcher before it terminates the processors, and Processor#run
@@ -234,12 +244,17 @@ module Wurk
       # prebuilt array as-is — the steady-state fetch allocates nothing here,
       # matching Sidekiq's own strict path (fetch.rb:79-87). Random/weighted
       # shuffle each call — `@queues` is pre-expanded by weight in
-      # Capsule#queues=, so uniform shuffle yields weighted fairness; .uniq
-      # trims duplicates. Paused queues are filtered after shuffle so the
-      # membership test runs on the smallest possible set.
+      # Capsule#queues=, so uniform shuffle yields weighted fairness, and
+      # duplicates are trimmed in place, only from a list that has any. Paused
+      # queues are filtered after shuffle so the membership test runs on the
+      # smallest possible set.
       def queues_cmd
         paused = paused_keys
-        keys = config.mode == :strict ? prefixed_queues : prefixed_queues.shuffle.uniq
+        keys, distinct = prefixed_queues
+        unless config.mode == :strict
+          keys = keys.shuffle
+          keys.uniq! unless distinct
+        end
         return keys if paused.empty?
 
         keys.reject { |key| paused.include?(key) }
@@ -344,8 +359,8 @@ module Wurk
       # tests them against the `queue:<name>` keys it is about to LMOVE, and
       # prefixing here is once per TTL instead of once per queue per pass.
       #
-      # Monotonic clock, so an NTP step can't pin the cache open. Per instance,
-      # so it dies with the fetcher and can never cross a fork.
+      # Monotonic clock (PAUSED_CLOCK), so an NTP step can't pin the cache open.
+      # Per instance, so it dies with the fetcher and can never cross a fork.
       #
       # Processor threads share one fetcher and race here. The loser pays a
       # second SMEMBERS and overwrites with an equally fresh read; @paused is
@@ -353,35 +368,39 @@ module Wurk
       # can never see the value they don't belong to.
       def paused_keys
         generation = self.class.paused_generation
-        now = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+        now = ::Process.clock_gettime(PAUSED_CLOCK)
         return @paused if @paused_generation == generation && now < @paused_expires_at
 
         members = config.redis(idempotent: true) { |conn| conn.call('SMEMBERS', Keys::PAUSED_SET) }
         @paused = members.to_set { |q| "#{Keys::QUEUE_PREFIX}#{q}" }
         @paused_generation = generation
-        @paused_expires_at = now + PAUSED_TTL
+        @paused_expires_at = now + PAUSED_TTL - PAUSED_CLOCK_SLACK
         @paused
       end
 
-      # `queue:<name>` for every queue this capsule serves. Rebuilt only when
-      # Capsule#queues= swaps the list in — it always allocates a fresh array,
-      # so identity is the whole check. Published before the source it came
-      # from, so a reader that trusts the source can never see a list built
-      # from a different one.
+      # `[queue:<name> for every queue this capsule serves, whether those are
+      # all distinct]` — a weighted list repeats each queue once per weight.
+      # Rebuilt only when Capsule#queues= swaps the list in — it always
+      # allocates a fresh array, so identity is the whole check. One frozen pair,
+      # published before the source it came from, so a reader that trusts the
+      # source can never see a list built from a different one.
       def prefixed_queues
         source = config.queues
         return @prefixed_queues if @prefixed_source.equal?(source)
 
-        @prefixed_queues = source.map { |q| "#{Keys::QUEUE_PREFIX}#{q}".freeze }.freeze
+        queues = source.map { |q| "#{Keys::QUEUE_PREFIX}#{q}".freeze }.freeze
+        @prefixed_queues = [queues, queues.uniq.size == queues.size].freeze
         @prefixed_source = source
         @prefixed_queues
       end
 
-      # The two strings a fetch derives from a public queue key: this process's
-      # private list for it (a `gethostname` syscall plus a five-part
-      # interpolation) and the unprefixed name the Processor tags the job with.
-      # Both are pure functions of the queue and this process's identity, so
-      # they cost one build per queue rather than two per job.
+      # What a fetch derives from a public queue key: this process's private
+      # list for it (a `gethostname` syscall plus a five-part interpolation), the
+      # unprefixed name the Processor tags the job with, and the LMOVE between
+      # the two. All pure functions of the queue and this process's identity, so
+      # they cost one build per queue rather than one per job. The LMOVE goes
+      # out by `call_v`: `call` re-collects its arguments into a fresh Array and
+      # a keyword Hash on every job, through two layers of client decorators.
       #
       # Rebuilt when the pid moves: a fetcher materialized before a fork would
       # otherwise keep claiming into a private list stamped with the parent's
@@ -402,8 +421,9 @@ module Wurk
         cached = cache[public_q]
         return cached if cached
 
-        built = [self.class.private_queue_name(public_q).freeze,
-                 public_q.delete_prefix(Keys::QUEUE_PREFIX).freeze].freeze
+        priv = self.class.private_queue_name(public_q).freeze
+        built = [priv, public_q.delete_prefix(Keys::QUEUE_PREFIX).freeze,
+                 ['LMOVE', public_q, priv, 'RIGHT', 'LEFT'].freeze].freeze
         @queue_keys = cache.merge(public_q => built)
         built
       end
@@ -418,15 +438,15 @@ module Wurk
       # A replayed ACK is a no-op (LREM removes nothing the second time, DEL is
       # already done), so folding it in costs the retry nothing.
       def lmove(public_q, ack = nil)
-        priv, name = queue_keys(public_q)
+        priv, name, command = queue_keys(public_q)
         job = config.redis(idempotent: true) do |conn|
           if ack
             conn.pipelined do |pipe|
               ack.write_ack(pipe)
-              pipe.call('LMOVE', public_q, priv, 'RIGHT', 'LEFT')
+              pipe.call_v(command)
             end.last
           else
-            conn.call('LMOVE', public_q, priv, 'RIGHT', 'LEFT')
+            conn.call_v(command)
           end
         end
         job ? unit_of_work(public_q, priv, name, job) : nil
@@ -459,8 +479,7 @@ module Wurk
       # Both fetch paths hand the unit every string its Processor and its ACK
       # will need, so neither re-derives one per job.
       def unit_of_work(public_q, priv, name, job)
-        uow = UnitOfWork.new(queue: public_q, queue_name: name, private_queue: priv,
-                             job: job, config: config, fetcher: self)
+        uow = UnitOfWork.claimed(public_q, name, priv, job, config, self)
         ::Thread.current.thread_variable_set(CLAIM_KEY, uow)
         uow
       end

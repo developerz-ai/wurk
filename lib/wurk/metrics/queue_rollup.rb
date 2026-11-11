@@ -82,24 +82,47 @@ module Wurk
 
       # One sampling pass, bypassing the leader gate and the sleep loop. Public
       # so deterministic specs and a manual "sample now" can drive it directly.
+      #
+      # A zero gauge is not stored: readers default a missing field to 0, and
+      # an idle fleet's queues are mostly empty, so storing them cost two
+      # fields per queue in every bucket for nothing. It is HDEL'd instead of
+      # skipped, so a queue that drained inside a coarse bucket reads 0 there
+      # rather than keeping the earlier sample. All three buckets go in one
+      # pipeline.
       def sample(now = ::Time.now)
         gauges = queue_gauges
         return if gauges.empty?
 
-        fields = gauges.flat_map do |name, (size, lat)|
-          ["#{name}|#{SIZE_KIND}", size, "#{name}|#{LAT_KIND}", lat]
-        end
-        BUCKETS.each do |bucket, (step, ttl)|
-          key = self.class.bucket_key(bucket, (now.to_i / step) * step)
-          redis do |c|
-            c.call('HSET', key, *fields)
-            c.call('EXPIRE', key, ttl)
-          end
-        end
+        set, zero = gauge_fields(gauges)
+        keys = bucket_keys(now)
+        redis { |c| c.pipelined { |p| keys.each { |key, ttl| write_bucket(p, key, ttl, set, zero) } } }
         nil
       end
 
       private
+
+      # [[bucket key, ttl], ...] for the bucket `now` falls in at each resolution.
+      def bucket_keys(now)
+        BUCKETS.map { |bucket, (step, ttl)| [self.class.bucket_key(bucket, (now.to_i / step) * step), ttl] }
+      end
+
+      def write_bucket(pipe, key, ttl, set, zero)
+        pipe.call('HSET', key, *set) unless set.empty?
+        pipe.call('HDEL', key, *zero) unless zero.empty?
+        pipe.call('EXPIRE', key, ttl)
+      end
+
+      # [flat field/value pairs to HSET, fields to HDEL], zero gauges in the
+      # second list.
+      def gauge_fields(gauges)
+        set = []
+        zero = []
+        gauges.each do |name, (size, lat)|
+          size.zero? ? zero << "#{name}|#{SIZE_KIND}" : set.push("#{name}|#{SIZE_KIND}", size)
+          lat.zero? ? zero << "#{name}|#{LAT_KIND}" : set.push("#{name}|#{LAT_KIND}", lat)
+        end
+        [set, zero]
+      end
 
       # [[queue_name, [size, latency_seconds]], ...] for every live queue. The
       # latency is the head-of-line wait — the tail of the LIST is the oldest

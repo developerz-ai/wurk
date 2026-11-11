@@ -12,6 +12,13 @@ module Wurk
     # the API can answer 400. The Sidekiq-shaped API is Query's instance side.
     module DashboardSeries
       TOTAL_FIELDS = %w[p f ms].freeze
+      TOTAL_KINDS = { 'p' => :p, 'f' => :f, 'ms' => :ms }.freeze
+      NO_FIELD = [nil, nil].freeze
+
+      # Buckets per pipelined read in #top_jobs. A 30-day window is 4320
+      # buckets of every class's fields; reading and folding a day at a time
+      # keeps one day's replies in memory instead of the whole month's.
+      TOP_JOBS_SLICE = 144
 
       # Dashboard top-N: `[[klass, {p:, f:, ms:}], …]` over the window,
       # busiest (`p`, which counts failures) first. `class_filter` is a
@@ -19,7 +26,7 @@ module Wurk
       # Query#top_jobs, whose per-bucket series a table never shows.
       def top_jobs(class_filter: nil, minutes: 60, hours: nil, now: ::Time.now)
         _stamps, keys = window_buckets(minutes, hours, now)
-        rows = sum_totals(pipeline_hgetall(keys)).to_a
+        rows = sum_totals(keys).to_a
         rows.select! { |(klass, _)| klass.start_with?(class_filter) } if class_filter && !class_filter.empty?
         rows.sort_by { |(_k, sums)| -sums[:p] }
       end
@@ -55,8 +62,8 @@ module Wurk
         names = queue_names(queues)
         return [] if names.empty?
 
-        hashes = queue_bucket_hashes(bucket, starts)
-        names.map { |name| { name: name, points: queue_points(name, starts, hashes) } }
+        rows = queue_bucket_rows(bucket, starts, names)
+        names.each_with_index.map { |name, i| { name: name, points: queue_points(i, starts, rows) } }
       end
 
       private
@@ -89,15 +96,28 @@ module Wurk
         [nil, (checked / 10.0).ceil]
       end
 
-      def sum_totals(hashes)
+      # Every bucket repeats the same few hundred `<klass>|<kind>` fields, so
+      # each distinct field is split once per call, not once per bucket.
+      def sum_totals(keys)
         totals = ::Hash.new { |h, k| h[k] = { p: 0, f: 0, ms: 0 } }
-        hashes.each do |raw|
-          hash_reply(raw).each do |field, value|
-            klass, kind = field.split('|', 2)
-            totals[klass][kind.to_sym] += value.to_i if kind && TOTAL_FIELDS.include?(kind)
-          end
+        parsed = ::Hash.new { |h, field| h[field] = parse_total_field(field) }
+        keys.each_slice(TOP_JOBS_SLICE) do |slice|
+          pipeline_hgetall(slice).each { |raw| fold_totals(totals, parsed, hash_reply(raw)) }
         end
         totals
+      end
+
+      def fold_totals(totals, parsed, hash)
+        hash.each do |field, value|
+          klass, kind = parsed[field]
+          totals[klass][kind] += value.to_i if kind
+        end
+      end
+
+      def parse_total_field(field)
+        klass, kind = field.split('|', 2)
+        kind = TOTAL_KINDS[kind]
+        kind ? [klass, kind] : NO_FIELD
       end
 
       def hash_reply(raw)
@@ -108,8 +128,12 @@ module Wurk
         stamps.zip(rows).map { |at, (p, f, ms)| { at: at, p: p.to_i, f: f.to_i, ms: ms.to_i } }
       end
 
-      def queue_bucket_hashes(bucket, starts)
-        pipeline_hgetall(starts.map { |s| QueueRollup.bucket_key(bucket, s) }).map { |h| hash_reply(h) }
+      # Only the requested queues' two fields per bucket, not every queue's: a
+      # bucket holds a pair per live queue, and a series names at most
+      # MAX_QUEUE_SERIES of them.
+      def queue_bucket_rows(bucket, starts, names)
+        fields = names.flat_map { |name| ["#{name}|#{QueueRollup::SIZE_KIND}", "#{name}|#{QueueRollup::LAT_KIND}"] }
+        pipeline_hmget(starts.map { |s| QueueRollup.bucket_key(bucket, s) }, fields)
       end
 
       def queue_names(queues)
@@ -117,11 +141,9 @@ module Wurk
         names.sort.first(Query::MAX_QUEUE_SERIES)
       end
 
-      def queue_points(name, starts, hashes)
-        size_field = "#{name}|#{QueueRollup::SIZE_KIND}"
-        lat_field  = "#{name}|#{QueueRollup::LAT_KIND}"
-        starts.zip(hashes).map do |at, hash|
-          { at: at, size: hash[size_field].to_i, latency: (hash[lat_field] || 0).to_f }
+      def queue_points(index, starts, rows)
+        starts.zip(rows).map do |at, row|
+          { at: at, size: row[index * 2].to_i, latency: (row[(index * 2) + 1] || 0).to_f }
         end
       end
 

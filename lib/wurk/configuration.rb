@@ -494,6 +494,10 @@ module Wurk
       @periodic_manager
     end
 
+    # The periodic manager if `config.periodic` was ever called, else nil:
+    # unlike #periodic, never creates one (Swarm::Prefork reads it).
+    attr_reader :periodic_manager
+
     # Writes the `config.periodic` registrations to Redis. Launcher#boot calls
     # it, so the loops are registered by a booting server, against the Redis
     # settings the app ended up with.
@@ -875,6 +879,11 @@ module Wurk
     # time, and under the railtie that is Bundler.require, before the
     # `wurk.server_mode` initializer: dropping it left sidekiq-cron, sentry-sidekiq
     # and the like silently absent from a process that does run workers.
+    #
+    # So the skip is DEBUG, as in stock Sidekiq, which skips it silently: every
+    # worker entry point enters server mode and runs the kept blocks, and a
+    # process that never does (a test run, `rails runner`, a web process) is
+    # meant to skip them. A WARN here was noise in each of those.
     def configure_server(&block)
       return unless block
       return run_server_block(block) if server?
@@ -883,7 +892,7 @@ module Wurk
       return if @configure_server_skip_warned
 
       @configure_server_skip_warned = true
-      logger.warn { 'configure_server block skipped: server? is false' }
+      logger.debug { 'configure_server block skipped: server? is false' }
       nil
     end
 
@@ -952,11 +961,27 @@ module Wurk
       @memory_limit_mb = value.nil? ? nil : Integer(value)
     end
 
-    # Threshold in KB, the unit the swarm compares against /proc/<pid>/statm
-    # (pages × 4KB). nil when recycling is disabled.
+    # Threshold in KB, the unit the swarm reads child memory in. nil when
+    # recycling is disabled.
     def memory_limit_kb
       mb = memory_limit_mb
       mb&.positive? ? mb * 1024 : nil
+    end
+
+    # What `memory_limit_mb` is compared against. `:rss` (the default, and
+    # Enterprise's) counts pages still shared copy-on-write with the parent, so
+    # every child carries the whole preloaded app; `:pss` splits shared pages
+    # across their sharers and `:uss` counts only the child's own. Wurk-only;
+    # WURK_MAXMEM_METRIC sets it, an explicit value wins.
+    MEMORY_LIMIT_METRICS = %i[rss pss uss].freeze
+
+    def memory_limit_metric
+      @memory_limit_metric || env_memory_limit_metric || :rss
+    end
+
+    def memory_limit_metric=(value)
+      guard_frozen!
+      @memory_limit_metric = value.nil? ? nil : parse_memory_limit_metric(value)
     end
 
     # The pre-fork half of `freeze!`, and the only half a forking parent can
@@ -1172,6 +1197,21 @@ module Wurk
       Integer(raw)
     rescue ArgumentError, TypeError
       nil
+    end
+
+    def env_memory_limit_metric
+      raw = ENV.fetch('WURK_MAXMEM_METRIC', nil)
+      return nil if raw.nil? || raw.strip.empty?
+
+      parse_memory_limit_metric(raw.strip.downcase)
+    end
+
+    def parse_memory_limit_metric(value)
+      metric = value.to_s.to_sym
+      return metric if MEMORY_LIMIT_METRICS.include?(metric)
+
+      raise ArgumentError,
+            "memory_limit_metric must be one of #{MEMORY_LIMIT_METRICS.join(', ')} (got #{value.inspect})"
     end
 
     def guard_frozen!

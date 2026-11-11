@@ -15,6 +15,8 @@ require_relative 'swarm/crash_watch'
 require_relative 'swarm/restart'
 require_relative 'swarm/orphan_guard'
 require_relative 'swarm/liveness'
+require_relative 'swarm/memory_watch'
+require_relative 'swarm/prefork'
 
 module Wurk
   # Parent supervisor. Forks N children per the worker topology, monitors
@@ -48,7 +50,6 @@ module Wurk
     SUPERVISE_TICK = 0.2
     RESPAWN_BACKOFF = 1.0
     HEARTBEAT_WAIT = 30
-    MEMORY_CHECK_INTERVAL = 10
     DEFAULT_SHUTDOWN_TIMEOUT = 25
 
     # The supervisor's own Redis pool: one connection, disjoint from every
@@ -132,7 +133,6 @@ module Wurk
                    crash_exit_after: config.swarm_crash_exit_after, exit_on_crash_loop: false)
       @topology = topology
       @config = config
-      @memory_limit = memory_limit
       @shutdown_timeout = shutdown_timeout
       # One reentrant lock covers the child table AND the restart machine: they
       # are mutually recursive (Restart#advance calls back into `describe` and
@@ -149,7 +149,6 @@ module Wurk
       @shutdown_requested = false
       @quieted = false
       @requiet_at = 0
-      @last_memory_check = 0
       @respawn_backoff = Backoff.new(base: RESPAWN_BACKOFF)
       @crash_watch = CrashWatch.new(exit_after: crash_exit_after, young_within: Backoff::RESET_AFTER)
       @exit_on_crash_loop = exit_on_crash_loop
@@ -157,6 +156,7 @@ module Wurk
       @title_program = nil
       @restart = build_restart
       @liveness = build_liveness(heartbeat_timeout)
+      @memory_watch = build_memory_watch(memory_limit)
       @orphan_reaper = Fetcher::Reaper.new(config)
       init_fork_unsafe_handles
     end
@@ -171,12 +171,14 @@ module Wurk
     # children. Installed first, the trap queues the TERM and the supervise
     # loop drains it (relaying to children) even if it arrives mid-boot.
     #
-    # `prepare_for_fork!` is the last thing before the fork and stays after
-    # `close_parent_sockets`: it materializes the slot-independent config so
-    # every child inherits it copy-on-write, and none of what it touches opens
-    # a socket — anything that did would land back on the wrong side of step 3.
+    # `prepare_for_fork!` stays after `close_parent_sockets`: it materializes
+    # the slot-independent config so every child inherits it copy-on-write, and
+    # none of what it touches opens a socket — anything that did would land
+    # back on the wrong side of step 3. `settle_memory_before_fork` comes last,
+    # after every parent allocation, so the compaction covers them; it opens no
+    # socket either.
     #
-    # Nothing else belongs between steps 3 and 4. #101 boot-audit: a pre-fork
+    # Nothing that talks to Redis belongs between steps 3 and 4. #101 boot-audit: a pre-fork
     # `SCRIPT LOAD` was tried here (the cache is server-global, so one upload
     # could serve the whole fleet) and MEASURED SLOWER — `bench:swarm_boot`
     # 152 -> 95 i/s, a 36.7% regression. Step 3 has just closed every parent
@@ -196,6 +198,7 @@ module Wurk
       install_signal_handlers if install_signals
       close_parent_sockets
       @config.prepare_for_fork!
+      settle_memory_before_fork
       fork_children
       update_proctitle
       child_pids
@@ -300,7 +303,7 @@ module Wurk
       check_liveness unless @stopping
       check_crash_loop unless @stopping
       requiet_children
-      check_memory_pressure
+      @memory_watch&.tick(child_ages)
       update_proctitle
     rescue StandardError => e
       handle_exception(e, { context: 'swarm-supervise' })
@@ -351,6 +354,19 @@ module Wurk
                   ))
     end
 
+    def build_memory_watch(limit_kb)
+      return nil unless limit_kb
+
+      MemoryWatch.new(limit_kb: limit_kb, metric: @config.memory_limit_metric, logger: logger,
+                      recycle: ->(pid) { @lock.synchronize { @restart.enqueue([pid]) } })
+    end
+
+    # `{ pid => [seconds since fork, slot index] }` for every child in the table.
+    def child_ages
+      now = monotonic
+      @lock.synchronize { @children.transform_values { |meta| [now - meta[:spawned_at], meta[:index]] } }
+    end
+
     def build_liveness(configured)
       timeout = Liveness.timeout_from(configured)
       return nil unless timeout
@@ -374,6 +390,13 @@ module Wurk
 
       paused = @quieted || !@lock.synchronize { @restart.idle? }
       @liveness.tick(child_pids, paused: paused)
+    end
+
+    # Between steps 3 and 4, once per swarm (a respawn forks from a parent that
+    # may be serving requests, where a full compaction is a pause they feel).
+    def settle_memory_before_fork
+      Prefork.run(periodic: @config.periodic_manager)
+      @memory_watch&.warn_if_unreadable
     end
 
     # Step 3.
@@ -573,6 +596,7 @@ module Wurk
       return unless meta
 
       @liveness&.forget(pid)
+      @memory_watch&.forget(pid)
       return meta if @restart.claim_exit(pid)
 
       if @stopping
@@ -679,36 +703,6 @@ module Wurk
 
       @requiet_at = now + REQUIET_INTERVAL
       relay_signal('TSTP')
-    end
-
-    def check_memory_pressure
-      return unless @memory_limit
-
-      now = monotonic
-      return if now - @last_memory_check < MEMORY_CHECK_INTERVAL
-
-      @last_memory_check = now
-      child_pids.each { |pid| recycle_if_bloated(pid) }
-    end
-
-    # Route a bloated child through the restart state machine (same path as a
-    # rolling restart) so recycle is graceful — a healthy replacement takes over
-    # before the old child is TERMed — and can't overlap a restart already in
-    # flight on the slot.
-    def recycle_if_bloated(pid)
-      rss = pid_rss_kb(pid)
-      return if rss.nil? || rss < @memory_limit
-
-      logger.warn { "swarm: child #{pid} RSS #{rss}KB >= #{@memory_limit}KB; recycling" }
-      @lock.synchronize { @restart.enqueue([pid]) }
-    end
-
-    def pid_rss_kb(pid)
-      return nil unless ::File.exist?("/proc/#{pid}/statm")
-
-      Heartbeat.statm_rss_kb(::File.read("/proc/#{pid}/statm"))
-    rescue StandardError
-      nil
     end
 
     def relay_signal(sig)

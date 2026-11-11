@@ -110,7 +110,7 @@ class SwarmTest < Wurk::Test::UnitCase
   def test_initialize_accepts_memory_limit
     swarm = Wurk::Swarm.new(topology: topology, config: @config, memory_limit: 500_000)
 
-    assert_equal 500_000, swarm.instance_variable_get(:@memory_limit)
+    assert_equal 500_000, memory_watch(swarm).instance_variable_get(:@limit_kb)
   end
 
   # #119: with no explicit memory_limit, the swarm picks up the config's
@@ -120,13 +120,49 @@ class SwarmTest < Wurk::Test::UnitCase
     @config.memory_limit_mb = 750
     swarm = Wurk::Swarm.new(topology: topology, config: @config)
 
-    assert_equal 750 * 1024, swarm.instance_variable_get(:@memory_limit)
+    assert_equal 750 * 1024, memory_watch(swarm).instance_variable_get(:@limit_kb)
   end
 
   def test_initialize_memory_limit_nil_when_config_unset
     swarm = Wurk::Swarm.new(topology: topology, config: @config)
 
-    assert_nil swarm.instance_variable_get(:@memory_limit)
+    assert_nil memory_watch(swarm)
+  end
+
+  def test_memory_watch_compares_the_configured_metric
+    @config.memory_limit_metric = :pss
+    swarm = Wurk::Swarm.new(topology: topology, config: @config, memory_limit: 1024)
+
+    assert_equal :pss, memory_watch(swarm).instance_variable_get(:@metric)
+  end
+
+  # The swarm hands the watch each child's age and slot, and a recycle lands in
+  # the restart machine, which already dedups a pid queued twice.
+  def test_memory_recycle_queues_an_old_bloated_child_once_and_spares_a_fresh_one
+    swarm = FakeForkSwarm.new(topology: topology(2), config: @config, memory_limit: 1024).tap { |s| @swarms << s }
+    old, fresh = swarm.boot(install_signals: false)
+    swarm.instance_variable_get(:@children)[old][:spawned_at] -= Wurk::Swarm::MemoryWatch::FRESH + 1
+    Dir.mktmpdir do |root|
+      [old, fresh].each { |pid| write_statm(root, pid, size_kb: 2048) }
+      watch = Wurk::Swarm::MemoryWatch.new(limit_kb: 1024, metric: :rss, logger: @config.logger, interval: 0,
+                                           recycle: memory_watch(swarm).instance_variable_get(:@recycle),
+                                           proc_root: root)
+      swarm.instance_variable_set(:@memory_watch, watch)
+      2.times { watch.tick(swarm.send(:child_ages)) }
+    end
+
+    assert_equal [old], swarm.instance_variable_get(:@restart).instance_variable_get(:@queue)
+    refute_equal fresh, old
+  end
+
+  def test_a_retired_child_is_forgotten_by_the_memory_watch
+    swarm = FakeForkSwarm.new(topology: topology, config: @config, memory_limit: 1024).tap { |s| @swarms << s }
+    pid = swarm.boot(install_signals: false).first
+    marked = memory_watch(swarm).instance_variable_get(:@marked)
+    marked[pid] = true
+    swarm.send(:retire_child, pid, nil)
+
+    refute marked.key?(pid)
   end
 
   # --- boot validation --------------------------------------------------
@@ -374,20 +410,6 @@ class SwarmTest < Wurk::Test::UnitCase
     assert_equal [['redis down', 'swarm-supervise']] * 2, reported
   end
 
-  # --- memory recycle: RSS units (K26) ------------------------------
-
-  # statm counts pages; on a 16KB-page arm64 kernel a hard-coded 4KB read RSS
-  # at a quarter of its size and the memory limit never recycled anything.
-  def test_pid_rss_kb_scales_statm_pages_by_the_kernel_page_size
-    swarm = bare_swarm
-    statm = '/proc/4242/statm'
-    with_page_size(16_384) do
-      with_stubbed_file(statm, "900 50 10 1 0 40 0\n") do
-        assert_equal 800, swarm.send(:pid_rss_kb, 4242)
-      end
-    end
-  end
-
   # --- includes -----------------------------------------------------
 
   def test_includes_component
@@ -404,10 +426,18 @@ class SwarmTest < Wurk::Test::UnitCase
     assert_kind_of Numeric, Wurk::Swarm::SUPERVISE_TICK
     assert_kind_of Numeric, Wurk::Swarm::RESPAWN_BACKOFF
     assert_kind_of Numeric, Wurk::Swarm::HEARTBEAT_WAIT
-    assert_kind_of Numeric, Wurk::Swarm::MEMORY_CHECK_INTERVAL
+    assert_kind_of Numeric, Wurk::Swarm::MemoryWatch::CHECK_INTERVAL
   end
 
   private
+
+  def memory_watch(swarm) = swarm.instance_variable_get(:@memory_watch)
+
+  def write_statm(root, pid, size_kb:)
+    FileUtils.mkdir_p(File.join(root, pid.to_s))
+    pages = size_kb * 1024 / Wurk::Heartbeat::PAGE_SIZE
+    File.write(File.join(root, pid.to_s, 'statm'), "#{pages * 2} #{pages} 10 1 0 40 0\n")
+  end
 
   def topology(count = 1)
     Wurk::Topology.flat(count: count, queues: ['default'], concurrency: 1)
@@ -438,29 +468,6 @@ class SwarmTest < Wurk::Test::UnitCase
   # `@children` map, a different PID.
   def non_owner_swarm
     owner_swarm.tap { |swarm| swarm.instance_variable_set(:@owner_pid, ::Process.pid + 1) }
-  end
-
-  def with_page_size(bytes)
-    original = Wurk::Heartbeat::PAGE_SIZE
-    Wurk::Heartbeat.send(:remove_const, :PAGE_SIZE)
-    Wurk::Heartbeat.const_set(:PAGE_SIZE, bytes)
-    yield
-  ensure
-    Wurk::Heartbeat.send(:remove_const, :PAGE_SIZE)
-    Wurk::Heartbeat.const_set(:PAGE_SIZE, original)
-  end
-
-  # `path` exists and reads as `content`; every other path is untouched.
-  def with_stubbed_file(path, content)
-    exist = ::File.method(:exist?)
-    read = ::File.method(:read)
-    sc = ::File.singleton_class
-    sc.define_method(:exist?) { |p, *a| p == path || exist.call(p, *a) }
-    sc.define_method(:read) { |p, *a, **k| p == path ? content : read.call(p, *a, **k) }
-    yield
-  ensure
-    sc.define_method(:exist?) { |*a| exist.call(*a) }
-    sc.define_method(:read) { |*a, **k| read.call(*a, **k) }
   end
 
   # Minitest 6 dropped minitest/mock; this hand-rolled stub swaps Process.fork

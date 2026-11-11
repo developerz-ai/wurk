@@ -58,7 +58,9 @@ module Wurk
       # Returned by the append helpers when everything fit.
       NOTHING_UNDELIVERED = [].freeze
 
-      Entry = Struct.new(:payload, :origin)
+      # `bytes` is the payload's JSON size, what `reliable_push_buffer_bytes`
+      # counts.
+      Entry = Struct.new(:payload, :origin, :bytes)
 
       # Where a buffered payload has to be replayed. What must NOT be captured
       # is a pool object the config hands out: `reset_redis_pools!` — every
@@ -159,6 +161,7 @@ module Wurk
       @install_mutex = Mutex.new
       @buffer_mutex  = Mutex.new
       @replaying     = 0
+      @buffer_bytes  = 0
       @circuit       = Circuit.new
 
       # Process that owns the state above; a mismatch means we're running in a
@@ -195,8 +198,28 @@ module Wurk
           @buffer_cap = value
         end
 
+        # Optional second cap, in bytes of payload JSON (Wurk-only; nil, the
+        # default, leaves only the entry cap). The entry cap alone lets a burst
+        # of large payloads hold `cap x payload size` in a web process for the
+        # whole outage. Over either cap the overflow mode applies; a payload
+        # larger than this cap on its own never fits, so it is the one dropped
+        # (or raised).
+        attr_reader :buffer_bytes_cap
+
+        def buffer_bytes_cap=(value)
+          unless value.nil? || (value.is_a?(Integer) && value.positive?)
+            raise ArgumentError, 'reliable_push_buffer_bytes must be nil or a positive Integer'
+          end
+
+          @buffer_bytes_cap = value
+        end
+
         def buffer_size
           buffer_mutex.synchronize { buffer.size }
+        end
+
+        def buffer_bytes
+          buffer_mutex.synchronize { @buffer_bytes }
         end
 
         def overflow_mode
@@ -220,7 +243,9 @@ module Wurk
         def reset!
           buffer_mutex.synchronize do
             @buffer = []
+            @buffer_bytes = 0
             @buffer_cap = nil
+            @buffer_bytes_cap = nil
             @overflow_mode = nil
             @replaying = 0
           end
@@ -263,6 +288,7 @@ module Wurk
           @install_mutex         = Mutex.new
           @buffer_mutex          = Mutex.new
           @buffer                = []
+          @buffer_bytes          = 0
           @replaying             = 0
           @circuit               = Circuit.new
           @drops                 = DropLog.new
@@ -283,29 +309,34 @@ module Wurk
         # `client` is the one whose push failed; every payload is tagged with
         # the Redis that client was writing to (see Origin).
         def enbuffer(payloads, client:)
-          origin = Origin.for(client)
-          entries = payloads.map { |payload| Entry.new(payload, origin) }
-
-          cap  = buffer_cap
+          entries = entries_for(payloads, client)
+          caps = [buffer_cap, buffer_bytes_cap]
           mode = overflow_mode
           undelivered = buffer_mutex.synchronize do
-            mode == :raise ? append_within_capacity(entries, cap) : append_dropping_oldest(entries, cap)
+            mode == :raise ? append_within_capacity(entries, *caps) : append_dropping_oldest(entries, *caps)
           end
 
           raise Overflow, undelivered.map(&:payload) unless undelivered.empty?
         ensure
-          drops.report(cap)
+          drops.report(*caps)
         end
 
         private
 
+        def entries_for(payloads, client)
+          origin = Origin.for(client)
+          payloads.map { |payload| Entry.new(payload, origin, Wurk.dump_json(payload).bytesize) }
+        end
+
         # Both append helpers run with buffer_mutex held and return the entries
         # they could not take.
 
-        def append_dropping_oldest(entries, cap)
+        def append_dropping_oldest(entries, cap, bytes_cap)
           entries.each do |entry|
-            drops.record(buffer.shift.payload) if buffer.size >= cap
-            buffer << entry
+            next drops.record(entry.payload) if bytes_cap && entry.bytes > bytes_cap
+
+            drops.record(take_oldest.payload) until fits?(entry, cap, bytes_cap)
+            push_entry(entry)
           end
           NOTHING_UNDELIVERED
         end
@@ -316,15 +347,38 @@ module Wurk
         # negative when the cap was lowered after the buffer filled — clamped,
         # so an over-full buffer rejects the whole call instead of raising on
         # `first`/`drop`.
-        def append_within_capacity(entries, cap)
+        def append_within_capacity(entries, cap, bytes_cap)
           room = (cap - buffer.size).clamp(0, entries.size)
-          if room == entries.size
-            buffer.concat(entries)
-            return NOTHING_UNDELIVERED
-          end
+          room = bytes_room(entries.first(room), bytes_cap) if bytes_cap
+          entries.first(room).each { |entry| push_entry(entry) }
+          room == entries.size ? NOTHING_UNDELIVERED : entries.drop(room)
+        end
 
-          buffer.concat(entries.first(room))
-          entries.drop(room)
+        # How many of `entries`, in order, fit under the byte cap.
+        def bytes_room(entries, bytes_cap)
+          total = @buffer_bytes
+          entries.take_while { |entry| (total += entry.bytes) <= bytes_cap }.size
+        end
+
+        def fits?(entry, cap, bytes_cap)
+          buffer.size < cap && (bytes_cap.nil? || @buffer_bytes + entry.bytes <= bytes_cap)
+        end
+
+        # The three buffer mutations, each under buffer_mutex, each keeping the
+        # byte total (`@buffer_bytes`) in step.
+        def push_entry(entry)
+          @buffer_bytes += entry.bytes
+          buffer << entry
+        end
+
+        def take_oldest
+          remove_at(0)
+        end
+
+        def remove_at(index)
+          entry = buffer.delete_at(index)
+          @buffer_bytes -= entry.bytes
+          entry
         end
 
         public
@@ -508,7 +562,7 @@ module Wurk
             next unless index
 
             @replaying += 1
-            buffer.delete_at(index)
+            remove_at(index)
           end
         end
 
@@ -550,7 +604,10 @@ module Wurk
         end
 
         def restore(entry)
-          buffer_mutex.synchronize { buffer.unshift(entry) }
+          buffer_mutex.synchronize do
+            @buffer_bytes += entry.bytes
+            buffer.unshift(entry)
+          end
         end
 
         # Drain marks the thread so our prepended raw_push re-raises the
@@ -587,7 +644,7 @@ module Wurk
           @lock.synchronize { @pending << payload }
         end
 
-        def report(cap)
+        def report(cap, bytes_cap = nil)
           dropped, announce = @lock.synchronize do
             next [nil, false] if @pending.empty?
 
@@ -599,7 +656,7 @@ module Wurk
           end
           return unless dropped
 
-          log(dropped.first, cap) if announce
+          log(dropped.first, cap, bytes_cap) if announce
           dropped.size.times { count_drop }
         end
 
@@ -620,13 +677,14 @@ module Wurk
           nil
         end
 
-        def log(first, cap)
+        def log(first, cap, bytes_cap)
           Wurk.configuration.logger.error do
-            "reliable_push buffer full (cap=#{cap}): dropping the oldest buffered jobs to make room — " \
+            "reliable_push buffer full (cap=#{cap}#{", bytes=#{bytes_cap}" if bytes_cap}): " \
+              'dropping the oldest buffered jobs to make room — ' \
               "#{first['class']} jid=#{first['jid']} is the first of this burst and will never run. " \
               'Further drops are counted in statsd jobs.dropped.push until Redis takes a replay. Raise ' \
-              '`Wurk::Client.reliable_push_buffer`, or set `reliable_push_overflow = :raise` to handle ' \
-              'overflow yourself.'
+              '`Wurk::Client.reliable_push_buffer` (or `reliable_push_buffer_bytes`), or set ' \
+              '`reliable_push_overflow = :raise` to handle overflow yourself.'
           end
         rescue StandardError
           nil
@@ -849,6 +907,14 @@ module Wurk
 
       def reliable_push_buffer=(value)
         Buffered.buffer_cap = value
+      end
+
+      def reliable_push_buffer_bytes
+        Buffered.buffer_bytes_cap
+      end
+
+      def reliable_push_buffer_bytes=(value)
+        Buffered.buffer_bytes_cap = value
       end
 
       def reliable_push_overflow

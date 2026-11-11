@@ -457,8 +457,8 @@ time — there is nothing to require or enable.
 | `SortedSet#scan(match) { \|SortedEntry\| … }` | | one SortedEntry per match |
 
 ```ruby
-Wurk::Queue.new("default").delete_job(jid)         # one round trip
-Wurk::Queue.new("default").delete_by_class(MyJob)  # one round trip
+Wurk::Queue.new("default").delete_job(jid)         # one round trip per 1,000 jobs
+Wurk::Queue.new("default").delete_by_class(MyJob)  # one round trip per 1,000 jobs
 
 Wurk::RetrySet.new.scan("NoMethodError") { |entry| entry.delete }
 Wurk::DeadSet.new.scan("CustomerJob")    { |entry| entry.retry }
@@ -472,9 +472,19 @@ surfaced. With no block, `scan` returns an enumerator over the entries.
 **Prefer the Lua paths on large sets.** `Queue#find_job(jid).delete` walks the
 list 50 payloads at a time over the network, parses JSON per candidate, then
 issues an `LREM` — on a million-entry queue that's ~20 000 round trips.
-`delete_job` is a single `EVALSHA`; the scan happens inside Redis, no payload
-crosses the wire. The trade is that the Lua script blocks Redis for the
-duration of its `LRANGE` — acceptable for an admin action, not for a loop.
+`delete_job` walks it 1,000 entries per `EVALSHA` from the head; the match
+happens inside Redis, no non-matching payload crosses the wire, and Redis is
+held for one window, not for the whole queue. A window with no match costs
+well under 2 ms at any depth. A call that removes something also scans the list
+from its nearer end to the window (Redis cannot remove by index), so at most
+100 matches are removed per call: measured on a 1M-entry queue, a call removing
+matches at the ends held Redis about 1 ms, and one removing them halfway in
+held it about 10 ms. The single script this replaced held it for the whole
+queue (~300 ms at 100k jobs). Every
+match is removed, duplicates included, and nothing else: each window is
+atomic. Workers popping and clients pushing during the walk cannot make it
+miss a match; another delete on the same queue at the same time can, and a
+second call then finds it.
 
 The scripts are `SCRIPT LOAD`ed once per pool and invoked by `EVALSHA`
 thereafter. `delete_job` matches on the literal `"jid":"<jid>"` substring and

@@ -334,7 +334,7 @@ room for `leaky`/`points`.
 `concurrent#status` additionally merges its counters — `held`, `held_time`,
 `immediate`, `waited`, `wait_time`, `overages`, `reclaimed`. `held`/`held_time`
 count acquired slots and the seconds they were held, `immediate` counts acquires
-that didn't wait, `waited`/`wait_time` those that did, `overages` holders that
+that took a slot on the first attempt, `waited`/`wait_time` those that did, `overages` holders that
 outran `lock_timeout` (their slot was already gone when they released),
 `reclaimed` slots evicted because they outlived `lock_timeout`.
 
@@ -390,11 +390,14 @@ Ruby if you need to zero a bucket mid-period. And there is no Delete button —
 
 ## Gotchas
 
-- **Limiters are cheap but not free to construct.** The constructor does a
-  Redis round-trip (`SADD` + `HSET` + `EXPIRE`) to register itself. Hoisting
-  one into a constant, as in the examples, is the right default; constructing
-  per-tenant limiters inside `perform` is fine but pays that write each time.
-  Pass `register: false` to the class constructor for read-only introspection.
+- **Limiters are cheap but not free to construct.** The first construction of
+  a name in a process does a Redis round-trip (`HSET` + `EXPIRE`, plus `SADD`
+  when new) to register it, on every construction, so a limiter built inside
+  `perform` adds that round trip to each job. Build it once (a constant) where
+  the name allows. Pass `register: false` to the class constructor for
+  read-only introspection.
+- **A `concurrent` job is two Redis round trips** (acquire, release); the
+  counters are booked inside those scripts.
 - **Limiters don't compose.** There is no AND combinator. For "5/min AND
   100/hr", enforce the tighter bound and let the upstream API police the rest.
 - **`concurrent` fairness is not guaranteed.** Waiters poll every 50 ms and the

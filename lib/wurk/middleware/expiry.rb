@@ -43,6 +43,10 @@ module Wurk
     class Expiry
       include Wurk::Middleware::ServerMiddleware
 
+      # One instance per chain entry, shared by every job (Middleware::Chain::Entry):
+      # #call and its helpers keep their state in locals and write no ivar.
+      def self.shared_instance? = true
+
       # The rescue is scoped to the guarded call rather than the method body:
       # only a job that carries a cutoff can be cut by one, and a job that
       # raises `DeadlineExceeded` from its own code without carrying one has to

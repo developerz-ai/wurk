@@ -288,6 +288,72 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     assert_includes queued, ['fresh']
   end
 
+  # --- byte cap (M5) -----------------------------------------------------
+
+  def test_byte_cap_is_off_by_default_and_validated
+    assert_nil Wurk::Client.reliable_push_buffer_bytes
+    Wurk::Client.reliable_push_buffer_bytes = 1_024
+
+    assert_equal 1_024, Wurk::Client.reliable_push_buffer_bytes
+    assert_raises(ArgumentError) { Wurk::Client.reliable_push_buffer_bytes = 0 }
+    assert_raises(ArgumentError) { Wurk::Client.reliable_push_buffer_bytes = '1mb' }
+    Wurk::Client.reliable_push_buffer_bytes = nil
+
+    assert_nil Wurk::Client.reliable_push_buffer_bytes
+  end
+
+  # Ten 1 KB payloads against a 2.5 KB cap: the entry cap (1000) never binds,
+  # the byte cap drops the oldest until the newest two fit.
+  def test_byte_cap_drops_the_oldest_until_the_new_payload_fits
+    size = payload_bytes(big_item(0))
+    failing = build_client(failing_pool)
+    Wurk::Client.reliable_push_buffer_bytes = (size * 2.5).to_i
+    10.times { |i| failing.push(big_item(i)) }
+
+    assert_equal [8, 9], buffered_args.map(&:first)
+    assert_equal Wurk::Client::Buffered.buffer.sum(&:bytes), Wurk::Client::Buffered.buffer_bytes
+  end
+
+  def test_a_payload_larger_than_the_byte_cap_is_itself_dropped
+    cap = payload_bytes(big_item(0)) / 2
+    failing = build_client(failing_pool)
+    failing.push(base_item('args' => ['small']))
+    Wurk::Client.reliable_push_buffer_bytes = cap
+    failing.push(big_item(1))
+
+    assert_equal [['small']], buffered_args
+  end
+
+  def test_byte_cap_under_raise_buffers_what_fits_and_raises_the_rest
+    cap = (payload_bytes(big_item(0)) * 2.5).to_i
+    Wurk::Client.reliable_push_overflow = :raise
+    failing = build_client(failing_pool)
+    Wurk::Client.reliable_push_buffer_bytes = cap
+    failing.push(big_item(0))
+    err = assert_raises(Wurk::Client::Buffered::Overflow) do
+      failing.push_bulk(base_item('args' => [[1, 'x' * 1_000], [2, 'x' * 1_000], [3, 'x' * 1_000]]))
+    end
+
+    assert_equal [0, 1], buffered_args.map(&:first)
+    assert_equal [2, 3], payload_args(err.payloads).map(&:first)
+  end
+
+  # Replay takes entries out and a refused replay puts them back: the byte
+  # count follows both, so a drained buffer holds zero bytes.
+  def test_buffer_bytes_follow_replay_and_restore
+    client, pool = outage_client
+    client.push(base_item('args' => ['a']))
+    client.push(base_item('args' => ['b']))
+
+    assert_operator Wurk::Client::Buffered.buffer_bytes, :>, 0
+
+    recover(pool)
+    client.push(base_item('args' => ['c']))
+
+    assert_equal 0, Wurk::Client::Buffered.buffer_size
+    assert_equal 0, Wurk::Client::Buffered.buffer_bytes
+  end
+
   # --- circuit: a dead Redis costs one caller, not every caller -----------
 
   def test_second_push_during_an_outage_does_not_touch_redis
@@ -1034,6 +1100,18 @@ class ClientBufferedTest < Wurk::Test::UnitCase
 
   def buffered_args
     payload_args(Wurk::Client::Buffered.buffer.map(&:payload))
+  end
+
+  def big_item(index)
+    base_item('args' => [index, 'x' * 1_000], 'jid' => format('%024d', index))
+  end
+
+  # What the buffer counts: the JSON the push would have written, once
+  # Client#normalize has filled in the payload.
+  def payload_bytes(item)
+    failing = build_client(failing_pool)
+    failing.push(item)
+    Wurk::Client::Buffered.buffer.last.bytes.tap { Wurk::Client::Buffered.reset! }
   end
 
   def payload_args(payloads)

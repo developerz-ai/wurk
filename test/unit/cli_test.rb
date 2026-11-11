@@ -548,6 +548,34 @@ class CLITest < Wurk::Test::UnitCase
     assert_match(/will evict Wurk data/, io.string)
   end
 
+  # P5: the version check and BootChecks share one INFO round trip.
+  def test_run_reads_info_once_and_hands_it_to_the_boot_checks
+    with_require_set { @cli.parse(['-q', 'default']) }
+    info = { 'redis_version' => '7.2.0', 'maxmemory_policy' => 'noeviction' }
+    reads = 0
+    @cli.define_singleton_method(:redis_info) { (reads += 1) && info }
+    @cli.define_singleton_method(:trap_signals) { |_| nil }
+    @cli.define_singleton_method(:validate_pool_sizes!) { nil }
+    @cli.define_singleton_method(:launch) { |_self_read| nil }
+    seen = with_recorded_boot_checks { @cli.run(boot_app: false, warmup: false) }
+
+    assert_equal 1, reads
+    assert_equal [info], seen
+  end
+
+  def test_run_swarm_reads_info_once_and_hands_it_to_the_boot_checks
+    info = { 'redis_version' => '7.4.0', 'maxmemory_policy' => 'noeviction' }
+    reads = 0
+    @cli.define_singleton_method(:redis_info) { (reads += 1) && info }
+    @cli.define_singleton_method(:validate_pool_sizes!) { nil }
+    @cli.define_singleton_method(:identity) { 'host:1:abc' }
+    fake_swarm = swarm_double(boot: ->(**) {}, supervise: -> {}, shutdown: -> {})
+    seen = with_recorded_boot_checks { with_stub_swarm(fake_swarm) { @cli.run_swarm(boot_app: false) } }
+
+    assert_equal 1, reads
+    assert_equal [info], seen
+  end
+
   def test_run_raises_when_pool_size_under_concurrency
     with_require_set { @cli.parse(['-q', 'default']) }
     @cli.define_singleton_method(:redis_info) { { 'redis_version' => '7.2.0', 'maxmemory_policy' => 'noeviction' } }
@@ -876,7 +904,7 @@ class CLITest < Wurk::Test::UnitCase
     fake_swarm = swarm_double(boot: ->(**) {}, supervise: -> {}, shutdown: -> {})
     @cli.define_singleton_method(:redis_info) { { 'redis_version' => '7.4.0' } }
 
-    with_stub_swarm(fake_swarm) { @cli.run_swarm(boot_app: false, warmup: false) }
+    with_stub_swarm(fake_swarm) { @cli.run_swarm(boot_app: false) }
 
     assert_match(/wurk: wurkswarm parent; 3 processes × 4 threads \(redis pool 10, fetch 4\)/, io.string)
   end
@@ -890,7 +918,7 @@ class CLITest < Wurk::Test::UnitCase
     fake_swarm = swarm_double(boot: ->(**) {}, supervise: -> { order << :supervise },
                               shutdown: -> { order << :shutdown })
 
-    with_stub_swarm(fake_swarm) { @cli.run_swarm(boot_app: true, warmup: false) }
+    with_stub_swarm(fake_swarm) { @cli.run_swarm(boot_app: true) }
 
     assert_equal %i[preload_bundler_groups boot_application eager_load_application supervise shutdown], order
   end
@@ -905,7 +933,7 @@ class CLITest < Wurk::Test::UnitCase
     ENV['WURK_HEALTH_PORT'] = 'nope'
 
     with_stub_swarm(fake_swarm) do
-      assert_raises(ArgumentError) { @cli.run_swarm(boot_app: false, warmup: false) }
+      assert_raises(ArgumentError) { @cli.run_swarm(boot_app: false) }
     end
   ensure
     ENV.delete('WURK_HEALTH_PORT')
@@ -916,7 +944,7 @@ class CLITest < Wurk::Test::UnitCase
     fake_swarm = swarm_double(boot: ->(**) {}, supervise: -> {}, shutdown: -> {}, crash_looped?: -> { true })
 
     error = assert_raises(SystemExit) do
-      with_stub_swarm(fake_swarm) { @cli.run_swarm(boot_app: false, warmup: false) }
+      with_stub_swarm(fake_swarm) { @cli.run_swarm(boot_app: false) }
     end
 
     assert_equal 1, error.status
@@ -961,7 +989,7 @@ class CLITest < Wurk::Test::UnitCase
                               shutdown: -> { called << :shutdown })
 
     with_stub_swarm(fake_swarm) do
-      assert_raises(Errno::EAGAIN) { @cli.run_swarm(boot_app: false, warmup: false) }
+      assert_raises(Errno::EAGAIN) { @cli.run_swarm(boot_app: false) }
     end
 
     assert_equal [:shutdown], called
@@ -975,7 +1003,7 @@ class CLITest < Wurk::Test::UnitCase
     end
     fake_swarm = swarm_double(boot: ->(**) {}, supervise: -> {}, shutdown: -> {})
 
-    with_stub_swarm(fake_swarm) { @cli.run_swarm(boot_app: false, warmup: false) }
+    with_stub_swarm(fake_swarm) { @cli.run_swarm(boot_app: false) }
 
     assert_empty called
   end
@@ -1205,6 +1233,16 @@ class CLITest < Wurk::Test::UnitCase
     fake = Object.new
     { crash_looped?: -> { false } }.merge(bodies).each { |name, body| fake.define_singleton_method(name, &body) }
     fake
+  end
+
+  def with_recorded_boot_checks
+    seen = []
+    original = Wurk::BootChecks.method(:run)
+    Wurk::BootChecks.define_singleton_method(:run) { |_config, info| seen << info }
+    yield
+    seen
+  ensure
+    Wurk::BootChecks.define_singleton_method(:run, original)
   end
 
   def with_stub_swarm(fake)

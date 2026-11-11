@@ -56,6 +56,10 @@ module Wurk
     class Timeout
       include Wurk::Middleware::ServerMiddleware
 
+      # One instance per chain entry, shared by every job (Middleware::Chain::Entry):
+      # #call and its helpers keep their state in locals and write no ivar.
+      def self.shared_instance? = true
+
       # A named block, not `&`: Ruby 3.3.0 rejects an anonymous block forwarded
       # from inside another block (fixed in 3.3.1, but within the gem's floor).
       def call(_worker, job, _queue, &block)

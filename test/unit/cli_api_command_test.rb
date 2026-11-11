@@ -115,7 +115,7 @@ class CLIApiCommandTest < Wurk::Test::UnitCase
     @cli.config.default_capsule.concurrency = 5
     parse(%w[api])
 
-    error = assert_raises(ArgumentError) { @cli.run_swarm(boot_app: false, warmup: false) }
+    error = assert_raises(ArgumentError) { @cli.run_swarm(boot_app: false) }
 
     assert_match(/no subcommand/, error.message)
   end

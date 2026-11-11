@@ -4,11 +4,11 @@
   fragment: |-
     raise ArgumentError, 'jid required' if jid.nil? || jid.to_s.empty?
 - entry: 'Fast Lua API ships free and loads by default'
-  anchor: 'lib/wurk/api/fast.rb#L53'
+  anchor: 'lib/wurk/api/fast.rb#L39'
   fragment: |-
     Wurk::Queue.include(Wurk::API::Fast::QueueExt)
 - entry: 'Fast Lua API ships free and loads by default'
-  anchor: 'lib/wurk.rb#L371'
+  anchor: 'lib/wurk.rb#L370'
   fragment: |-
     # Pro Fast API: Lua-backed Queue#delete_job / #delete_by_class, mixed into
 - entry: 'Search covers queue LISTs too, with explicit scan bounds'
@@ -35,7 +35,7 @@
   fragment: |-
     def expired   = date_stat_hash('expired')
 - entry: '`Stats#expired`/`reset` extend the OSS Stats surface'
-  anchor: 'lib/wurk/middleware/expiry.rb#L102-L105'
+  anchor: 'lib/wurk/middleware/expiry.rb#L105-L108'
   fragment: |-
     def drop(job)
       Wurk::Processor::EXPIRED.incr
@@ -95,7 +95,7 @@
 
       Array(klass.outer_of)
 - entry: '`Chain#add` honours a class-declared `outer_of` ordering anchor'
-  anchor: 'lib/wurk/batch/server_middleware.rb#L44-L65'
+  anchor: 'lib/wurk/batch/server_middleware.rb#L46-L67'
   fragment: |-
     anchors << Wurk::Middleware::Expiry if defined?(Wurk::Middleware::Expiry)
     anchors << Wurk::Limiter::ServerMiddleware if defined?(Wurk::Limiter::ServerMiddleware)
@@ -135,12 +135,12 @@
     def web_redis_pool
       @web_redis_pool ||= build_redis_pool(size: web_pool_size, name: 'web', pool_timeout: WEB_POOL_TIMEOUT)
 - entry: 'Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported'
-  anchor: 'lib/wurk/configuration.rb#L1240-L1244'
+  anchor: 'lib/wurk/configuration.rb#L1280-L1284'
   fragment: |-
     def build_redis_pool(size:, name:, **overrides)
       RedisPool.new(size: size, name: name, on_error: method(:dispatch_redis_error),
 - entry: 'Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported'
-  anchor: 'lib/wurk/swarm.rb#L377-L381'
+  anchor: 'lib/wurk/swarm.rb#L400-L404'
   fragment: |-
     # Step 3.
     def close_parent_sockets

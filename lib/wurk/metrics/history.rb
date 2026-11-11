@@ -24,13 +24,18 @@ module Wurk
     # (`14:05`), the 10-minute bucket always one (`14:0`). `<klass>` is the
     # `wrapped` class for ActiveJob payloads, like upstream.
     #
-    # Every bucket TTL is set on every write (not NX), as upstream does.
+    # Every bucket TTL is set on every flush (not NX), once per bucket key after
+    # its HINCRBYs, as upstream's ExecutionTracker#flush does.
     #
     # The middleware is hot-path — every job pays for it — so it does not touch
     # Redis at all. Each execution folds into a process-wide Accumulator and
     # Wurk::Metrics::Flusher writes the whole tree out every FLUSH_INTERVAL.
     class History
       include Wurk::Middleware::ServerMiddleware
+
+      # One instance per chain entry, shared by every job (Middleware::Chain::Entry):
+      # #call keeps its state in locals and writes no ivar.
+      def self.shared_instance? = true
 
       # Upstream's ExecutionTracker constants, same names. MID_TERM diverges:
       # upstream TTLs the 10-minute buckets at 3 days, but Wurk's dashboard
@@ -178,24 +183,33 @@ module Wurk
           at.to_i / 60
         end
 
+        # The `j|` keys are shared by every class, so each gets its EXPIRE once,
+        # after the last HINCRBY into it; a 10-minute key two minutes share gets
+        # one too. A histogram key is per class and minute, so it keeps its own.
         def write(pool, minutes)
           with_pool(pool) do |conn|
             conn.pipelined do |pipe|
-              minutes.each do |minute, classes|
-                at = ::Time.at(minute * 60).utc
-                short = minute_key(at)
-                keys = [short, short.chop]
-                classes.each { |klass, counts| write_class(pipe, keys, at, klass, counts) }
-              end
+              ttls = minutes.each_with_object({}) { |(minute, classes), acc| write_minute(pipe, minute, classes, acc) }
+              ttls.each { |key, ttl| pipe.call('EXPIRE', key, ttl) }
             end
           end
+        end
+
+        # Writes one minute's classes and notes its two `j|` keys' TTLs in `ttls`.
+        def write_minute(pipe, minute, classes, ttls)
+          at = ::Time.at(minute * 60).utc
+          short = minute_key(at)
+          keys = [short, short.chop]
+          classes.each { |klass, counts| write_class(pipe, keys, at, klass, counts) }
+          ttls[keys[1]] = MID_TERM
+          ttls[keys[0]] = SHORT_TERM
         end
 
         # `keys` is [minute key, 10-minute key].
         def write_class(pipe, keys, at, klass, counts)
           fields = ["#{klass}|p", "#{klass}|f", "#{klass}|ms"]
-          incr_bucket(pipe, keys[1], fields, counts, MID_TERM)
-          incr_bucket(pipe, keys[0], fields, counts, SHORT_TERM)
+          incr_bucket(pipe, keys[1], fields, counts)
+          incr_bucket(pipe, keys[0], fields, counts)
           return unless counts[3]
 
           pipe.call(*Histogram.incr_command(klass, at, counts[3]))
@@ -206,12 +220,11 @@ module Wurk
         # `f` when something failed, `ms` when something succeeded (by zero
         # included). `HINCRBY <field> 0` beyond that would materialize a
         # counter Sidekiq never writes.
-        def incr_bucket(pipe, key, fields, counts, ttl)
+        def incr_bucket(pipe, key, fields, counts)
           processed, failed, ms = counts
           pipe.call('HINCRBY', key, fields[0], processed)
           pipe.call('HINCRBY', key, fields[1], failed) if failed.positive?
           pipe.call('HINCRBY', key, fields[2], ms) if processed > failed
-          pipe.call('EXPIRE', key, ttl)
         end
       end
 

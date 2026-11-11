@@ -9,11 +9,14 @@ require_relative 'algo/support'
 #
 #   top-jobs 720h  — Metrics::Query.top_jobs(hours: 720), what GET
 #                    /api/metrics?hours=720 runs: one HGETALL per 10-minute
-#                    bucket (4320) over CLASSES classes x 3 fields each.
+#                    bucket (4320) over CLASSES classes x 3 fields each, read
+#                    and summed a day (144 buckets) per pipeline.
 #   queue history  — Metrics::Query.queue_history('1m', 24h, queues: [one]),
 #                    what GET /api/queue-history/1m?queue=<name> runs: one
-#                    HGETALL per minute bucket (1440) carrying all QUEUES
-#                    queues' 2 fields, to read one queue's.
+#                    HMGET of that queue's 2 fields per minute bucket (1440).
+#                    It was an HGETALL of all QUEUES queues' fields.
+#   flush          — Metrics::History.flush of FLUSH_CLASSES classes that ran
+#                    in one minute (21-K4): one EXPIRE per shared `j|` key.
 #
 # Every bucket is seeded full (the worst case: every class ran in every bucket).
 # Round trips, commands and the field-value pairs Redis hands back are
@@ -32,13 +35,17 @@ HOURS   = 720
 CLASSES = Integer(ENV.fetch('WURK_BENCH_METRICS_CLASSES', '200'))
 QUEUES  = Integer(ENV.fetch('WURK_BENCH_METRICS_QUEUES', '500'))
 
-# [round trips, commands, field pairs returned], recorded on this tree at the
-# defaults: the "before" of 07-A9 and A10. Exact; a fix lowers its row in the
-# same change. Another shape prints counts ungated.
+# [round trips, commands, fields returned] at the defaults. Exact; a fix lowers
+# its row in the same change. Another shape prints counts ungated. Before
+# 07-A9/A10 and 21-K4: top-jobs [1, 4320, 2,592,000], queue history [1, 1440,
+# 1,440,000], flush [1, 400]. A9 slices top-jobs (peak memory, allocations);
+# Redis still hands back every class's fields.
 BUDGETS = {
-  'top-jobs 720h' => [1, 4320, 4320 * 200 * 3],
-  'queue history 1m/24h, one queue' => [1, 1440, 1440 * 500 * 2]
+  'top-jobs 720h' => [30, 4320, 4320 * 200 * 3],
+  'queue history 1m/24h, one queue' => [1, 1440, 1440 * 2],
+  'flush, 50 classes in one minute' => [1, 302]
 }.freeze
+FLUSH_CLASSES = 50
 GATED = CLASSES == 200 && QUEUES == 500
 
 config = Wurk.configuration
@@ -64,7 +71,7 @@ def seed_queue_history
   AlgoBench.seed(POOL, rows, slice: 100)
 end
 
-# Field pairs the HGETALL replies carried into Ruby: what the fix shrinks.
+# Fields the HGETALL / HMGET replies carried into Ruby: what A10 shrinks.
 module PairCount
   class << self
     attr_accessor :pairs
@@ -75,6 +82,10 @@ module PairCount
 
   def pipeline_hgetall(keys)
     super.tap { |replies| PairCount.pairs += replies.sum { |r| r.is_a?(Hash) ? r.size : r.size / 2 } }
+  end
+
+  def pipeline_hmget(keys, fields)
+    super.tap { |replies| PairCount.pairs += replies.sum(&:size) }
   end
 end
 Wurk::Metrics::Query.singleton_class.prepend(PairCount)
@@ -87,12 +98,12 @@ def measure(label, &query)
   raise "#{label} returned nothing: the seed missed the window" if result.empty?
 
   AlgoBench.print_count(label, cost)
-  printf("  %-52s %10d field pairs returned\n", '', pairs)
+  printf("  %-52s %10d fields returned\n", '', pairs)
   if GATED
     budget = BUDGETS.fetch(label)
     AlgoBench.budget!("#{label} (round trips)", cost.round_trips, budget[0])
     AlgoBench.budget!("#{label} (commands)", cost.commands, budget[1])
-    AlgoBench.budget!("#{label} (field pairs)", pairs, budget[2])
+    AlgoBench.budget!("#{label} (fields)", pairs, budget[2])
   end
   rates(label, &query) unless AlgoBench.counts_only?
 end
@@ -122,6 +133,14 @@ begin
   measure('queue history 1m/24h, one queue') do
     Wurk::Metrics::Query.queue_history('1m', 86_400, queues: ['q7'], now: NOW)
   end
+  POOL.with { |c| c.call('FLUSHDB') }
+
+  label = 'flush, 50 classes in one minute'
+  acc = Wurk::Metrics::Accumulator.new
+  FLUSH_CLASSES.times { |c| acc.add(nil, "BenchFlush#{c}Job", NOW.to_i / 60, 5, true) }
+  cost = AlgoBench.count { Wurk::Metrics::History.flush(acc) }
+  AlgoBench.print_count(label, cost)
+  AlgoBench.budget_count!(label, cost, BUDGETS.fetch(label)) if GATED
 ensure
   POOL.with { |c| c.call('FLUSHDB') }
 end

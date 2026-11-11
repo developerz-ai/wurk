@@ -21,6 +21,12 @@ class FetcherAtMaxmemoryTest < Wurk::Test::UnitCase
       __getobj__.call(*args, **, &)
     end
 
+    def call_v(command, &)
+      raise OOM if REFUSED.include?(command.first)
+
+      __getobj__.call_v(command, &)
+    end
+
     def blocking_call(timeout, *args, **, &)
       raise OOM if REFUSED.include?(args.first)
 
@@ -39,6 +45,12 @@ class FetcherAtMaxmemoryTest < Wurk::Test::UnitCase
       raise OOM if FullRedisConnection::REFUSED.include?(args.first)
 
       __getobj__.call(*args, **, &)
+    end
+
+    def call_v(command, &)
+      raise OOM if FullRedisConnection::REFUSED.include?(command.first)
+
+      __getobj__.call_v(command, &)
     end
   end
 

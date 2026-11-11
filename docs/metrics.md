@@ -75,11 +75,11 @@ Wurk does **not** write to Redis per job. Each worker process accumulates
 `processed` / `failed` / `ms` in memory, keyed by job class and by the minute
 bucket the job ran in, and flushes the whole accumulator every **≤5 seconds** in
 one pipeline per Redis pool — the same `HINCRBY` / `EXPIRE` commands against the
-same keys and fields, up to ten per (class, minute) inside that pool's
-pipeline: `HINCRBY` of `p`, `f` (only when something failed) and `ms` (only when
-something succeeded) plus an `EXPIRE` on each of the two `j|` buckets, then a
-`BITFIELD` and an `EXPIRE` on the histogram — eight in the common all-success
-case. `HINCRBY` is additive, so a flushed batch of N executions leaves Redis
+same keys and fields: per (class, minute), `HINCRBY` of `p`, `f` (only when
+something failed) and `ms` (only when something succeeded) on each of the two
+`j|` buckets, then a `BITFIELD` and an `EXPIRE` on the histogram — six in the
+common all-success case; per `j|` bucket, one `EXPIRE` after its last
+`HINCRBY`, as Sidekiq's own flush does. `HINCRBY` is additive, so a flushed batch of N executions leaves Redis
 in byte-identical state to N individual writes. It also flushes on a graceful
 stop.
 
@@ -196,7 +196,8 @@ elected leader writes):
   `<queue>|sz` and `<queue>|lt`. Same three resolutions and the same
   24h / 7d / 30d TTLs. These are **gauges**, so within a coarse bucket each
   minute's sample overwrites the previous one — the bucket holds the last value
-  in its window, not a sum.
+  in its window, not a sum. A zero is not stored: its field is deleted and
+  reads back as 0, so an idle queue costs no bucket space.
 
 Both tick every 60 seconds by default; override with
 `config[:metrics_rollup_interval]` (seconds — mainly a test hook).

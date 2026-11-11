@@ -74,7 +74,26 @@ module Wurk
 
       MAX_LOOKAHEAD_MINUTES = 366 * 24 * 60 * 4
 
+      # Distinct schedules a process keeps parsed. A loop is rebuilt from its
+      # hash on every tick, and a fleet has far fewer schedules than loops.
+      CACHE_LIMIT = 1024
+
       attr_reader :expression, :fields
+
+      @cache = {}
+      @cache_mutex = ::Mutex.new
+
+      # A shared, already-parsed Parser for `expression`. Raises ArgumentError
+      # like `new` on a bad one, which is never cached. Parsers are not mutated
+      # after construction, so sharing one across loops and threads is safe.
+      def self.cached(expression)
+        @cache_mutex.synchronize do
+          @cache.fetch(expression) do
+            @cache.clear if @cache.size >= CACHE_LIMIT
+            @cache[expression] = new(expression)
+          end
+        end
+      end
 
       def initialize(expression)
         parts = normalize_expression(expression)
@@ -287,13 +306,18 @@ module Wurk
         @klass = klass
         @options = stringify_options(options)
         @tz = tz
-        @parser = Parser.new(schedule)
+        @parser = Parser.cached(schedule)
         @lid = lid || Cron.lid(schedule, klass, @options)
         @paused = paused.nil? ? [true, '1', 1].include?(@options['paused']) : paused
+        @fire_marks = nil
       end
 
+      # The raw `lf` / `nf` strings of the hash this loop was read from, so a
+      # tick decides on the read it already made; nil for a loop built in code.
+      attr_accessor :fire_marks
+
       def parser
-        @parser ||= Parser.new(@schedule)
+        @parser ||= Parser.cached(@schedule)
       end
 
       def paused?
@@ -492,7 +516,8 @@ module Wurk
         return self unless @deferred
 
         @deferred = false
-        @loops.each { |loop_obj| persist(loop_obj) }
+        Cron.persist_all(@loops)
+        prune_superseded(@loops.map(&:klass).uniq)
         prune_unregistered if @authoritative
         self
       end
@@ -530,7 +555,7 @@ module Wurk
 
       def persist(loop_obj)
         Cron.persist(loop_obj)
-        prune_superseded(loop_obj.klass)
+        prune_superseded([loop_obj.klass])
       end
 
       def prune_unregistered
@@ -559,12 +584,14 @@ module Wurk
       # an edited `register` line yields a new loop and orphans the old one).
       # Registering the same class twice in one block is fine — the second
       # register re-persists its loop right after the first one's prune.
-      def prune_superseded(klass_name)
+      def prune_superseded(klass_names)
         return unless @prune
-        return if @pruned_klasses[klass_name]
 
-        @pruned_klasses[klass_name] = true
-        Cron.prune_superseded(klass_name, @loops.map(&:lid))
+        fresh = klass_names.reject { |name| @pruned_klasses[name] }
+        return if fresh.empty?
+
+        fresh.each { |name| @pruned_klasses[name] = true }
+        Cron.prune_superseded(fresh, @loops.map(&:lid))
       end
     end
 
@@ -588,13 +615,7 @@ module Wurk
       def each
         return enum_for(:each) unless block_given?
 
-        rows = redis do |c|
-          c.call('SMEMBERS', PERIODIC_KEY).filter_map do |lid|
-            h = c.call('HGETALL', "#{LOOP_PREFIX}#{lid}")
-            [lid, h] unless h.nil? || h.empty?
-          end
-        end
-        rows.each do |lid, h|
+        read_rows.each do |lid, h|
           loop_obj = parse(lid, h)
           yield loop_obj if loop_obj
         end
@@ -616,8 +637,23 @@ module Wurk
 
       private
 
+      # [lid, hash] for every registered loop that still has its hash: one
+      # SMEMBERS, then every HGETALL in one pipeline.
+      def read_rows
+        redis(idempotent: true) do |c|
+          lids = c.call('SMEMBERS', PERIODIC_KEY)
+          next [] if lids.empty?
+
+          hashes = c.pipelined { |p| lids.each { |lid| p.call('HGETALL', "#{LOOP_PREFIX}#{lid}") } }
+          lids.zip(hashes).filter_map do |lid, h|
+            h = h.each_slice(2).to_h if h.is_a?(Array)
+            [lid, h] unless h.nil? || h.empty?
+          end
+        end
+      end
+
       def parse(lid, hash)
-        Loop.from_redis(lid, hash)
+        Loop.from_redis(lid, hash).tap { |lp| lp.fire_marks = hash.values_at('lf', 'nf') }
       rescue JSON::ParserError, ArgumentError => e
         Wurk.logger&.warn("[cron] skipping unreadable loop lid=#{lid}: #{e.class}: #{e.message}")
         nil
@@ -679,6 +715,7 @@ module Wurk
         @sleeper = ::ConditionVariable.new
         @on_leader = method(:wake_for_leadership)
         @unknown_reported = ::Set.new
+        @derived = {}
       end
 
       # The loop waits one interval before its first tick unless this process
@@ -720,11 +757,14 @@ module Wurk
       def tick
         return unless leader?
 
+        seen = ::Set.new
         LoopSet.new(@config).each do |lp|
-          enqueue_if_due(lp)
+          seen << derived_key(lp)
+          enqueue_if_due(lp, lp.fire_marks)
         rescue StandardError => e
           handle_exception(e, { context: 'cron-poller', lid: lp.lid, klass: lp.klass })
         end
+        @derived.select! { |key, _| seen.include?(key) }
       rescue StandardError => e
         handle_exception(e, { context: 'cron-poller' })
       end
@@ -741,11 +781,14 @@ module Wurk
       # One claim, one push at most, whichever slot it pushes for: the occurrence
       # due now stands in for a stale one under the stale one's mark, so a poller
       # that read the same mark loses the CAS for both.
-      def enqueue_if_due(loop_obj)
+      #
+      # `marks` is the raw [`lf`, `nf`] pair the caller just read (a tick's
+      # LoopSet read); without it they are read here.
+      def enqueue_if_due(loop_obj, marks = nil)
         return if loop_obj.paused?
 
         now = ::Time.now.to_i
-        slot, mark = due_slot(loop_obj, now)
+        slot, mark = due_slot(loop_obj, now, marks)
         return if slot.nil?
 
         firing = slot_to_fire(loop_obj, slot, now)
@@ -822,12 +865,30 @@ module Wurk
       # the loop has no resolvable occurrence or none is due yet. The token is
       # the stored `nf` when there is one, otherwise the slot we derived — see
       # the `cron_claim_fire` script for how the two cases differ.
-      def due_slot(loop_obj, now)
-        prev_fire, next_fire, mark = read_fire_marks(loop_obj.lid)
-        next_fire ||= loop_obj.next_fire_at(prev_fire || (now - @tick_interval))
+      def due_slot(loop_obj, now, marks)
+        prev_fire, next_fire, mark = marks ? parse_fire_marks(marks) : read_fire_marks(loop_obj.lid)
+        next_fire ||= derived_next_fire(loop_obj, prev_fire || (now - @tick_interval))
         return if next_fire.nil? || next_fire > now
 
         [next_fire, mark || next_fire.to_s]
+      end
+
+      # A loop with no `nf` (never fired, or an exhausted schedule) derives its
+      # next occurrence by walking Parser#next_fire_at minute by minute: a year
+      # of minutes for a yearly loop, on every tick. The answer for one origin
+      # still holds for any later origin it is past, so it is kept per loop
+      # until the origin overtakes it. Nothing is written: the stored hash stays
+      # what a first fire leaves.
+      def derived_next_fire(loop_obj, from)
+        key = derived_key(loop_obj)
+        origin, found = @derived[key]
+        return found if origin && from >= origin && (found ? found > from : from == origin)
+
+        loop_obj.next_fire_at(from).tap { |epoch| @derived[key] = [from, epoch] }
+      end
+
+      def derived_key(loop_obj)
+        [loop_obj.lid, loop_obj.schedule, loop_obj.tz_name]
       end
 
       # Never tighter than a tick and a half: a raised tick interval must not
@@ -928,16 +989,17 @@ module Wurk
         job.provider_job_id if job.respond_to?(:provider_job_id)
       end
 
+      def read_fire_marks(lid)
+        parse_fire_marks(@config.redis { |c| c.call('HMGET', "#{LOOP_PREFIX}#{lid}", 'lf', 'nf') })
+      end
+
       # Third element is the raw `nf` string — the CAS token for #claim_fire.
       # Comparing the bytes Redis holds, not the parsed integer, keeps the
-      # token exact regardless of how the value was written.
-      def read_fire_marks(lid)
-        @config.redis do |c|
-          prev_fire, next_fire = c.call('HMGET', "#{LOOP_PREFIX}#{lid}", 'lf', 'nf')
-          # Preserve nil: treat missing or empty 'nf' as nil, not 0.
-          next_fire = nil if next_fire.nil? || next_fire.empty?
-          [prev_fire&.to_i, next_fire&.to_i, next_fire]
-        end
+      # token exact regardless of how the value was written. A missing or
+      # empty `nf` is nil, not 0.
+      def parse_fire_marks((prev_fire, next_fire))
+        next_fire = nil if next_fire.nil? || next_fire.empty?
+        [prev_fire&.to_i, next_fire&.to_i, next_fire]
       end
 
       def record_fire(loop_obj, jid, fired_at, future)
@@ -992,36 +1054,61 @@ module Wurk
       # the field belongs to the runtime (Web UI pause/unpause). Writing it
       # unconditionally un-paused a dashboard-paused loop on the next boot.
       def persist(loop_obj)
-        fields = loop_obj.to_redis_hash
-        paused = fields.delete('paused')
-        key = "#{LOOP_PREFIX}#{loop_obj.lid}"
-        Wurk.redis do |c|
-          c.call('SADD', PERIODIC_KEY, loop_obj.lid)
-          c.call('HSET', key, *fields.flatten)
-          c.call('HSETNX', key, 'paused', paused)
-        end
+        persist_all([loop_obj])
         loop_obj
       end
 
-      # Drop every registered loop for `klass` except `keep_lids` — the loops a
-      # booting process just registered for that class. Editing a schedule or
-      # any option changes the lid, so without this the pre-edit loop stays in
-      # `periodic` and keeps firing next to its replacement, forever.
+      # #persist for many loops in one pipelined round trip: a booting process
+      # (each swarm child) writes its whole `config.periodic` block at once.
+      # Nothing here reads, so a pipeline is the same writes in the same order.
+      def persist_all(loops)
+        return loops if loops.empty?
+
+        Wurk.redis do |c|
+          c.pipelined do |p|
+            loops.each do |loop_obj|
+              fields = loop_obj.to_redis_hash
+              paused = fields.delete('paused')
+              key = "#{LOOP_PREFIX}#{loop_obj.lid}"
+              p.call('SADD', PERIODIC_KEY, loop_obj.lid)
+              p.call('HSET', key, *fields.flatten)
+              p.call('HSETNX', key, 'paused', paused)
+            end
+          end
+        end
+        loops
+      end
+
+      # Drop every registered loop for `klass` (a name or a list of names)
+      # except `keep_lids` — the loops a booting process just registered for
+      # those classes. Editing a schedule or any option changes the lid, so
+      # without this the pre-edit loop stays in `periodic` and keeps firing next
+      # to its replacement, forever.
       #
-      # Scoped to one class deliberately: the registry is fleet-wide, so a
+      # Scoped to the registered classes deliberately: the registry is fleet-wide, so a
       # process that registers a subset of the fleet's loops (or none at all,
       # e.g. a client-only app) must never delete loops for classes it doesn't
       # register. Idempotent and safe to race — two processes booting the same
       # code compute the same candidate set, and SREM/DEL repeat harmlessly.
+      #
+      # One SMEMBERS and one pipelined HGET per candidate, however many classes:
+      # a boot registering C classes used to read every foreign loop C times.
       def prune_superseded(klass, keep_lids)
+        klasses = Array(klass)
         keep = Array(keep_lids)
-        stale = Wurk.redis do |c|
-          candidates = c.call('SMEMBERS', PERIODIC_KEY) - keep
-          candidates.select { |lid| c.call('HGET', "#{LOOP_PREFIX}#{lid}", 'klass') == klass }
-        end
+        stale = Wurk.redis { |c| superseded_lids(c, klasses, keep) }
         stale.each { |lid| unregister(lid) }
         stale
       end
+
+      def superseded_lids(conn, klasses, keep)
+        candidates = conn.call('SMEMBERS', PERIODIC_KEY) - keep
+        return [] if candidates.empty?
+
+        owners = conn.pipelined { |p| candidates.each { |lid| p.call('HGET', "#{LOOP_PREFIX}#{lid}", 'klass') } }
+        candidates.zip(owners).filter_map { |lid, owner| lid if klasses.include?(owner) }
+      end
+      private :superseded_lids
 
       # Drop a loop entirely: registry membership, hash, and fire history.
       # Public API for retiring a loop whose `register(...)` line is gone (no
@@ -1048,6 +1135,19 @@ module Wurk
 
       def jobs
         LoopSet.new
+      end
+
+      # For the swarm parent's pre-fork step (Swarm::Prefork): resolve the IANA
+      # zone of every loop `manager` registered, so tzinfo and the zone data
+      # are loaded once and shared copy-on-write rather than loaded by the
+      # leader child on its first tick. Opens no socket. `erb` and `yaml` need
+      # no warming: Manager#load_file runs in the parent, at configuration.
+      def prefork(manager)
+        manager&.loops&.each do |lp|
+          name = lp.tz_name
+          Parser.resolve_zone(name) if lp.tz.is_a?(String) && !name.empty?
+        end
+        nil
       end
 
       # Test/ops helper: fire one registered loop immediately, ignoring the

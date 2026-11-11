@@ -259,15 +259,18 @@ class QueuePauseTest < Wurk::Test::UnitCase
   end
 
   # The half a rewound deadline can't prove: that the deadline really is one
-  # PAUSED_TTL out on the monotonic clock. With the test above, this pins "a
-  # cross-process pause lands within 2 seconds" without spending 2 seconds.
+  # PAUSED_TTL out on the fetcher's monotonic clock, less the slack that clock
+  # can lag by. With the test above, this pins "a cross-process pause lands
+  # within 2 seconds" without spending 2 seconds.
   def test_cache_deadline_is_one_paused_ttl_out_on_the_monotonic_clock
     fetcher, capsule = build_fetcher(%W[#{@qname}])
-    opened = monotonic_now
+    ttl = Wurk::Fetcher::Reliable::PAUSED_TTL - Wurk::Fetcher::Reliable::PAUSED_CLOCK_SLACK
+    opened = paused_clock_now
     fetcher.queues_cmd
     deadline = fetcher.instance_variable_get(:@paused_expires_at)
 
-    assert_operator deadline, :>=, opened + Wurk::Fetcher::Reliable::PAUSED_TTL
+    assert_operator deadline, :>=, opened + ttl
+    assert_operator deadline, :<=, paused_clock_now + ttl
     assert_operator deadline, :<=, monotonic_now + Wurk::Fetcher::Reliable::PAUSED_TTL
   ensure
     capsule&.stop
@@ -321,6 +324,10 @@ class QueuePauseTest < Wurk::Test::UnitCase
 
   def monotonic_now
     ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+  end
+
+  def paused_clock_now
+    ::Process.clock_gettime(Wurk::Fetcher::Reliable::PAUSED_CLOCK)
   end
 
   def drain_for_one_second(fetcher)

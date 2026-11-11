@@ -11,9 +11,11 @@ require_relative 'algo/support'
 #             schedules that have fired once, so each carries its next-fire
 #             mark (`nf`). The steady state the leader repeats every minute.
 #   tick, never fired — the same with no `nf` yet (a loop between deploy and
-#             its first fire): due_slot then walks Parser#next_fire_at minute
-#             by minute to the next occurrence, per loop, per tick. Timed only,
-#             over NEVER_FIRED loops; the walk is CPU, not Redis.
+#             its first fire): due_slot derives the next occurrence by walking
+#             Parser#next_fire_at minute by minute. The poller keeps the answer
+#             per loop, so a repeat tick walks nothing: `never-fired walks` is
+#             the walks on the second tick over NEVER_FIRED loops (was one per
+#             loop per tick). The walk is CPU, not Redis, hence also timed.
 #   apply!  — Cron::Manager#apply! for a booting process (each swarm child
 #             runs one) that registered LOOPS loops over CLASSES classes, with
 #             the same loops already in Redis. `+ foreign` adds FOREIGN loops
@@ -35,15 +37,17 @@ FOREIGN = Integer(ENV.fetch('WURK_BENCH_CRON_FOREIGN', '500'))
 NEVER_FIRED = Integer(ENV.fetch('WURK_BENCH_CRON_NEVER_FIRED', '50'))
 YEARLY  = '0 0 1 1 *'
 
-# [round trips, commands] at the defaults (500 loops, 50 classes, 500 foreign),
-# recorded on this tree: the "before" of 07-A7 and A8. Parsers are counted
-# apart. Exact; a fix lowers its row in the same change. Another shape prints
-# counts ungated.
+# [round trips, commands] at the defaults (500 loops, 50 classes, 500 foreign).
+# Parsers and walks are counted apart. Exact; a fix lowers its row in the same
+# change. Another shape prints counts ungated. Before 07-A7/A8: tick 1001/1001
+# with 500 parsers and 50 never-fired walks, apply! 1550/1550, apply! + foreign
+# 26,550/26,550.
 BUDGETS = {
-  'tick, nothing due' => [1001, 1001],
-  'tick parsers' => 500,
-  'apply!' => [1550, 1550],
-  'apply! + foreign' => [26_550, 26_550]
+  'tick, nothing due' => [2, 501],
+  'tick parsers' => 0,
+  'never-fired walks' => 0,
+  'apply!' => [2, 1501],
+  'apply! + foreign' => [3, 2001]
 }.freeze
 GATED = LOOPS == 500 && CLASSES == 50 && FOREIGN == 500
 
@@ -52,19 +56,30 @@ config.logger = Logger.new(IO::NULL)
 config.redis = AlgoBench.redis_options('3')
 POOL = AlgoBench.check_pool!(config.redis_pool)
 
-# Counts Parser constructions: A7's per-loop, per-tick parse.
+# Counts Parser constructions (A7's per-loop, per-tick parse) and
+# Parser#next_fire_at walks (A7's never-fired loops).
 module ParserTally
   class << self
-    attr_accessor :built
+    attr_accessor :built, :walks
   end
   self.built = 0
+  self.walks = 0
 
   def new(...)
     ParserTally.built += 1
     super
   end
+
+  # Prepended to the instances.
+  module Walk
+    def next_fire_at(...)
+      ParserTally.walks += 1
+      super
+    end
+  end
 end
 Wurk::Cron::Parser.singleton_class.prepend(ParserTally)
+Wurk::Cron::Parser.prepend(ParserTally::Walk)
 
 def manager(config)
   Wurk::Cron::Manager.new(config, deferred: true).tap do |mgr|
@@ -88,6 +103,13 @@ def never_fired_tick(config)
   NEVER_FIRED.times { |i| mgr.register(YEARLY, "NeverFired#{i}Job", args: [i]) }
   poller = Wurk::Cron::Poller.new(config)
   poller.define_singleton_method(:leader?) { true }
+  poller.tick
+  ParserTally.walks = 0
+  poller.tick
+  printf("  %-52s %10d\n", 'never-fired walks', ParserTally.walks)
+  gate('never-fired walks', ParserTally.walks, 'never-fired walks')
+  return if AlgoBench.counts_only?
+
   AlgoBench.timed("cron tick (#{NEVER_FIRED} never-fired yearly loops)", time: 3, min: 2) { poller.tick }
 end
 
@@ -142,7 +164,7 @@ begin
   rebuild = -> { pending = manager(config) }
   label = "cron apply! (#{LOOPS} loops, #{CLASSES} classes, + #{FOREIGN} foreign)"
   AlgoBench.timed(label, time: 5, setup: rebuild) { pending.apply! }
-  never_fired_tick(config) unless AlgoBench.counts_only?
+  never_fired_tick(config)
 ensure
   POOL.with { |c| c.call('FLUSHDB') }
 end

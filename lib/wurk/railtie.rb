@@ -24,9 +24,9 @@ module Wurk
 
     # Enter server mode BEFORE config/initializers load — otherwise the app's
     # `Sidekiq.configure_server` blocks gate on `config.server?` (still false)
-    # and are dropped, each skip logging one WARN naming the gate
-    # (`configure_server` / `server? is false`). RailsBoot decides whether this
-    # process serves.
+    # and are deferred, running only when server mode is entered — after the
+    # rest of the app's initializers instead of in their place. RailsBoot
+    # decides whether this process serves.
     initializer 'wurk.server_mode', before: :load_config_initializers do |app|
       Wurk::RailsBoot.boot_scheduled = true
       Wurk::RailsBoot.enter_server_mode_if_serving(app)

@@ -212,7 +212,7 @@ class SwarmCliTest < Wurk::Test::UnitCase
     config.topology = Wurk::Topology.flat(count: 1, queues: [@queue_name], concurrency: 1)
     cli = Wurk::CLI.instance
     cli.instance_variable_set(:@config, config)
-    cli.run_swarm(boot_app: true, warmup: false)
+    cli.run_swarm(boot_app: true)
     exit 0
   end
 
@@ -248,7 +248,7 @@ class SwarmCliTest < Wurk::Test::UnitCase
       yield config if block_given?
       cli = Wurk::CLI.instance
       cli.instance_variable_set(:@config, config)
-      cli.run_swarm(boot_app: false, warmup: false)
+      cli.run_swarm(boot_app: false)
       exit 0
     end
   end

@@ -154,7 +154,7 @@ module Wurk
       def traverse(entries, index, args, &block)
         return yield if index == entries.size
 
-        entries[index].make_new.call(*args) do
+        entries[index].instance.call(*args) do
           traverse(entries, index + 1, args, &block)
         end
       end
@@ -188,6 +188,15 @@ module Wurk
       # instantiation until `retrieve`/`invoke` runs so each job gets a fresh
       # object.
       #
+      # One opt-in exception, for Wurk's own built-ins: a class that defines
+      # `self.shared_instance?` as true on itself is built once per entry, when
+      # the entry is bound to its config, and `invoke` hands every job that one
+      # instance. Only for a class whose #call writes no instance state — it
+      # runs on every processor thread of the capsule at once. Asked of the
+      # class itself, never inherited: a host's subclass of a built-in may keep
+      # state, and gets Sidekiq's fresh instance per job like any other
+      # middleware. `make_new`, and so `retrieve`, always builds a fresh one.
+      #
       # Whether the class declares `config=` is resolved once, at registration,
       # so the common case (the setter comes from `include
       # Wurk::Middleware::ServerMiddleware`) skips a `respond_to?` on every job
@@ -197,13 +206,26 @@ module Wurk
       # `method_missing`, or one added to the class after it was registered — so
       # a class that does not declare it still gets asked.
       class Entry
-        attr_reader :klass
-        attr_accessor :config
+        attr_reader :klass, :config
 
         def initialize(klass, *args)
           @klass = klass
           @args = args
           @takes_config = klass.public_method_defined?(:config=)
+          @shared = klass.singleton_class.method_defined?(:shared_instance?, false) && klass.shared_instance?
+          @instance = nil
+        end
+
+        # Rebuilds the shared instance too: Chain#copy_for rebinds a duplicate
+        # entry to a capsule, and the instance must answer to that capsule.
+        def config=(value)
+          @config = value
+          @instance = make_new if @shared
+        end
+
+        # What `invoke` runs: the shared instance, or a fresh one.
+        def instance
+          @instance || make_new
         end
 
         def make_new

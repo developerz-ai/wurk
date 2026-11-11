@@ -305,7 +305,7 @@
     A Pro-shaped string marker on b-<bid>-success has the same Redis type as
     Wurk's "already fired" marker but the opposite meaning, so the :success
     callback is lost silently while the :complete callback still fires.
-  source: docs/idea/parity-divergences.md#L835-L862
+  source: docs/idea/parity-divergences.md#L838-L865
   promise: >-
     The loss is event-specific: the `EXISTS` gate reads `b-<bid>-<event>` per
     event, so a Pro-shaped string on `b-<bid>-success` makes the gate return
@@ -477,7 +477,7 @@
 - id: fetch.deferred-ack
   area: reliable-fetch
   behavior: Successful acknowledgements are removed on the next fetch.
-  source: docs/idea/parity-divergences.md#L384-L388
+  source: docs/idea/parity-divergences.md#L387-L391
   promise: >-
     the `LREM
     <private list> 1 <job JSON>` that retires it is held in the fetcher and sent in
@@ -486,7 +486,7 @@
 - id: fetch.terminate-ack
   area: reliable-fetch
   behavior: Termination flushes deferred acknowledgements.
-  source: docs/idea/parity-divergences.md#L384-L392
+  source: docs/idea/parity-divergences.md#L387-L395
   promise: >-
     Any pending ACK is flushed — as its own round
     trip — before the fetcher blocks in `BLMOVE`, before the all-paused/no-queues
@@ -611,7 +611,7 @@
 - id: crypto.decrypt-failure
   area: encryption
   behavior: A decrypt failure dead-sets the job tagged with Wurk::Encryption::DecryptionError and never retries it.
-  source: docs/idea/parity-divergences.md#L1218-L1220
+  source: docs/idea/parity-divergences.md#L1221-L1223
   promise: >-
     a decrypt failure (unknown key version, a key resolver that returns nil or
     raises, a corrupt envelope) raises `Wurk::Encryption::DecryptionError`,
@@ -693,7 +693,7 @@
 - id: web.api-idempotency-divergence
   area: machine-api
   behavior: An unknown write outcome retains the pending idempotency key until TTL to avoid duplicate enqueue.
-  source: docs/idea/parity-divergences.md#L745-L747
+  source: docs/idea/parity-divergences.md#L748-L750
   promise: >-
     an unknown outcome (lost reply) keeps the key pending until its TTL (1h default), so a client retry gets 409 "in progress" rather than a second enqueue.
   oracles: [WebApiParityTest#test_a_lost_reply_keeps_the_idempotency_key_pending_until_its_ttl]
@@ -947,7 +947,7 @@
 - id: module.server-flag
   area: module
   behavior: server? reports whether this process is running workers, false in a client process and true in a worker.
-  source: docs/idea/parity-divergences.md#L1865-L1873
+  source: docs/idea/parity-divergences.md#L1868-L1876
   promise: >-
     `Sidekiq.server?` reports whether this process is running workers. It is false in a client process and true in a worker process.
   oracles: [ModuleApiParityTest#test_server_flag]
@@ -1671,7 +1671,7 @@
 - id: logger.context-thread-local
   area: logging
   behavior: The logging context is thread-local and lives under Wurk's own context key.
-  source: docs/idea/parity-divergences.md#L1875-L1883
+  source: docs/idea/parity-divergences.md#L1878-L1886
   promise: >-
     `Sidekiq::Context` stores its thread-local logging context under `Thread.current[:wurk_context]`. A context added on one thread is not visible on another.
   oracles: [LoggerParityTest#test_context_thread_local]

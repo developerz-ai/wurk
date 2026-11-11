@@ -54,6 +54,21 @@ module Wurk
           end
         end
 
+        # The fetch path's constructor. Positional, filling the members straight
+        # in: the keyword form costs the caller's Hash, a second one for the
+        # `**` forward, and Struct's keyword parsing — per job, for six fields
+        # whose names never change.
+        def self.claimed(queue, queue_name, private_queue, job, config, fetcher) # rubocop:disable Metrics/ParameterLists
+          uow = allocate
+          uow.queue = queue
+          uow.queue_name = queue_name
+          uow.private_queue = private_queue
+          uow.job = job
+          uow.config = config
+          uow.fetcher = fetcher
+          uow
+        end
+
         # Deferred, never skipped: the LREM goes back to the fetcher, which
         # pipelines it in front of the next fetch's LMOVE instead of spending a
         # round trip of its own. Ordering against the job is unchanged — the
@@ -75,7 +90,7 @@ module Wurk
         # wire-frozen, so the reaper cannot flag it). Reading the counter to
         # decide would spend the very round trip the DEL is riding for free.
         def write_ack(pipe)
-          pipe.call('LREM', private_queue, LREM_COUNT, job)
+          pipe.call_v(['LREM', private_queue, LREM_COUNT, job])
           job_jid = jid.to_s
           Middleware::PoisonPill.clear_in(pipe, job_jid) unless job_jid.empty?
           release_slot_in(pipe) if slot_key

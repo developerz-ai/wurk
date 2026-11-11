@@ -65,18 +65,22 @@ module Wurk
     # receive `(job, ex)`. `max_jobs:` / `timeout:` propagate to the auto-trim;
     # see `#trim` for the rationale.
     def kill(message, opts = {})
-      notify = opts.fetch(:notify_failure, true)
-      do_trim = opts.fetch(:trim, true)
-      ex = opts[:ex] || RuntimeError.new(API_KILL_MESSAGE).tap { |e| e.set_backtrace(caller) }
-
       now = ::Process.clock_gettime(::Process::CLOCK_REALTIME)
       Wurk.redis { |conn| conn.call('ZADD', @name, now.to_s, message) }
-      trim(max_jobs: opts[:max_jobs], timeout: opts[:timeout]) if do_trim
-      fire_death_handlers(message, ex) if notify
+      trim(max_jobs: opts[:max_jobs], timeout: opts[:timeout]) if opts.fetch(:trim, true)
+      fire_death_handlers(message, opts[:ex] || api_kill_error) if opts.fetch(:notify_failure, true)
       true
     end
 
     private
+
+    # Only the death handlers see it, so a kill that notifies none (a UI kill,
+    # `kill_all` over a whole set) never pays for the caller's backtrace.
+    def api_kill_error
+      error = RuntimeError.new(API_KILL_MESSAGE)
+      error.set_backtrace(caller(2))
+      error
+    end
 
     def fire_death_handlers(message, ex)
       job = parse_message(message)

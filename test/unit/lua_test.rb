@@ -39,7 +39,7 @@ class LuaTest < Wurk::Test::UnitCase
       %i[zpopbyscore reliable_schedule_promote scheduled_claim reliable_requeue requeue_unit reclaim_orphan
          batch_push batch_schedule batch_ack_success batch_ack_failed batch_ack_complete batch_invalidate
          batch_append_callback batch_hold batch_kid_done batch_remove_jobs batch_delete
-         fast_delete_job fast_delete_by_class release_if_owner leader_campaign cron_claim_fire
+         fast_delete_window release_if_owner leader_campaign cron_claim_fire
          limiter_register limiter_list_sweep
          limiter_concurrent_acquire limiter_concurrent_release
          limiter_bucket_acquire limiter_window_acquire limiter_window_status limiter_leaky_acquire
@@ -79,14 +79,13 @@ class LuaTest < Wurk::Test::UnitCase
   # :zpopbyscore is exempt: Scheduled::Enq::LUA_ZPOPBYSCORE is public surface per
   # spec §16, though Enq now claims instead of popping.
   # lib/wurk/lua.rb is excluded — it declares the inline names as SCRIPTS
-  # hash keys — and lib/wurk/lua/** is excluded too: its Loader consumes
-  # SCRIPTS generically (SCRIPTS.fetch / SOURCE_LIST / script_load_all /
+  # hash keys — and so is lib/wurk/lua/loader.rb: it consumes SCRIPTS
+  # generically (SCRIPTS.fetch / SOURCE_LIST / script_load_all /
   # load_missing), so neither can ever prove a caller exists.
   def test_every_registered_script_has_a_ruby_caller_under_lib
-    registry = File.join(LIB, 'wurk', 'lua.rb')
-    loader = File.join(LIB, 'wurk', 'lua') + File::SEPARATOR
+    excluded = [File.join(LIB, 'wurk', 'lua.rb'), File.join(LIB, 'wurk', 'lua', 'loader.rb')]
     sources = Dir.glob(File.join(LIB, '**', '*.rb'))
-                 .reject { |path| path == registry || path.start_with?(loader) }
+                 .reject { |path| excluded.include?(path) }
                  .map { |path| File.read(path) }
     orphaned = (Wurk::Lua::SCRIPTS.keys - [:zpopbyscore]).reject { |name| sources.any? { |src| src.match?(/:#{name}\b/) } }
 

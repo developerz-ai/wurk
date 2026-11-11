@@ -164,25 +164,31 @@ class SwarmBootTest < Wurk::Test::UnitCase
     end
   end
 
-  # #119 (Ent §7.5): a child whose RSS exceeds the memory limit is recycled
-  # through the rolling-restart state machine — a healthy replacement is spawned
-  # first, and only once it takes over is the bloated child TERMed. A 1 MB limit
-  # guarantees every real Ruby child exceeds it. Each child logs its pid on
-  # startup; we boot, wait for the first child to be fully up (so the
-  # supervisor's immediate first memory check can't recycle it mid-boot), then
-  # start the supervisor and watch a different pid take over AND the original
-  # drain out (it lives on briefly past the replacement's boot).
-  def test_swarm_recycles_a_child_that_exceeds_the_memory_limit
+  # #119 (Ent §7.5): a child whose RSS crosses the memory limit after its
+  # fresh window is recycled through the rolling-restart state machine — a
+  # healthy replacement is spawned first, and only once it takes over is the
+  # bloated child TERMed. A 1 MB limit is below every real Ruby child, so the
+  # replacement is over it from boot: recycling it again would fork-loop the
+  # slot, and the watch spares it instead and says so once. The watch is
+  # rebuilt with a short interval and fresh window so the test does not wait
+  # out the production 10s/60s.
+  def test_swarm_recycles_a_bloated_child_once_and_does_not_fork_loop
     log_boot_pids
+    io = StringIO.new
+    @config.logger = ::Logger.new(io)
     @config.memory_limit_mb = 1
     swarm = Wurk::Swarm.new(topology: topology_n(1), config: @config, shutdown_timeout: 5)
+    fresh = 2.0
+    swarm.instance_variable_set(:@memory_watch, short_memory_watch(swarm, fresh: fresh))
     supervisor = nil
 
     begin
       original = swarm.boot(install_signals: false).first
+      booted_at = monotonic_now
 
       assert_equal original.to_s, wait_for_boot_count(1)&.first,
                    "first child #{original} never finished booting"
+      sleep [fresh - (monotonic_now - booted_at), 0].max + 0.2
 
       supervisor = Thread.new { swarm.supervise }
       pids = wait_for_boot_count(2)
@@ -191,6 +197,11 @@ class SwarmBootTest < Wurk::Test::UnitCase
       refute_equal pids[0], pids[1], 'the bloated child should be replaced by a new pid'
       assert wait_until_dead(original),
              'the original (bloated) child should be TERMed once its replacement took over'
+
+      sleep fresh * 2
+
+      assert_equal 2, boot_pids.size, "the replacement was recycled too: #{boot_pids.inspect}"
+      assert_equal 1, io.string.scan('already over memory_limit_mb').size, io.string
     ensure
       begin
         swarm.shutdown(timeout: 5)
@@ -307,6 +318,12 @@ class SwarmBootTest < Wurk::Test::UnitCase
 
   # Each child appends its pid to a Redis list as it boots (via :startup),
   # giving a race-free, fork-safe record of the recycle → respawn sequence.
+  def short_memory_watch(swarm, fresh:)
+    recycle = swarm.instance_variable_get(:@memory_watch).instance_variable_get(:@recycle)
+    Wurk::Swarm::MemoryWatch.new(limit_kb: @config.memory_limit_kb, metric: :rss, logger: @config.logger,
+                                 recycle: recycle, interval: 0.2, fresh: fresh)
+  end
+
   def log_boot_pids
     redis_url = Wurk::Test.redis_url
     key = @boot_log_key

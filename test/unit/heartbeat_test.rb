@@ -73,6 +73,36 @@ class HeartbeatTest < Wurk::Test::UnitCase
     assert_equal @identity, info['identity']
   end
 
+  # ProcessSet, the dashboard and Sidekiq Web parse this JSON; its bytes —
+  # field order included — are part of the wire format.
+  def test_beat_writes_the_info_json_byte_for_byte
+    started_at = 1_700_000_000.25
+    hb = Wurk::Heartbeat.new(identity: @identity, config: @config, started_at: started_at)
+    hb.beat!
+    facts = hb.send(:host_facts)
+    json = ->(value) { Wurk.dump_json(value) }
+    expected = [
+      %({"hostname":#{json[Wurk::Component.hostname]}),
+      %("started_at":1700000000.25),
+      %("pid":#{::Process.pid}),
+      %("tag":#{json[@ns]}),
+      %("concurrency":3),
+      %("capsules":{"default":{"concurrency":3,"mode":"strict","weights":{"default":0}}}),
+      %("queues":["default"]),
+      %("weights":[{"default":0}]),
+      %("labels":[]),
+      %("identity":#{json[@identity]}),
+      %("version":#{json[Wurk::VERSION]}),
+      %("embedded":false),
+      %("cpu_model":#{json[facts['cpu_model']]}),
+      %("cores":#{json[facts['cores']]}),
+      %("memory_total_kb":#{json[facts['memory_total_kb']]}})
+    ].join(',')
+    written = @pool.with { |c| c.call('HGET', @identity, 'info') }
+
+    assert_equal expected, written
+  end
+
   # Additive host facts ride the info JSON so the dashboard can group the
   # Busy page by machine. cpu_model may legitimately be nil on exotic
   # platforms; cores and total memory must be positive on any CI box.
@@ -301,6 +331,31 @@ class HeartbeatTest < Wurk::Test::UnitCase
 
     assert_equal 0, remaining.to_i
     assert_equal %w[TSTP TERM], sigs
+  end
+
+  # The drain is one counted RPOP: it still takes at most BEAT_PAUSE entries a
+  # beat, oldest first, and leaves the rest for the next one.
+  def test_beat_drains_at_most_beat_pause_signals_oldest_first
+    sig_key = "#{@identity}-signals"
+    sent = Array.new(Wurk::Heartbeat::BEAT_PAUSE + 2) { |i| "SIG#{i}" }
+    @pool.with { |c| sent.each { |sig| c.call('LPUSH', sig_key, sig) } }
+    hb = build_heartbeat
+
+    first = hb.beat!
+    second = hb.beat!
+
+    assert_equal sent.first(Wurk::Heartbeat::BEAT_PAUSE), first
+    assert_equal sent.drop(Wurk::Heartbeat::BEAT_PAUSE), second
+  end
+
+  def test_signal_drain_is_one_command
+    spy = Wurk::Test::CommandSpy.new(@pool)
+    hb = build_heartbeat
+    hb.define_singleton_method(:redis) { |idempotent: false, &blk| spy.with(&blk) } # rubocop:disable Lint/UnusedBlockArgument
+
+    hb.send(:drain_signals)
+
+    assert_equal 1, spy.count
   end
 
   def test_beat_returns_empty_array_when_no_signals

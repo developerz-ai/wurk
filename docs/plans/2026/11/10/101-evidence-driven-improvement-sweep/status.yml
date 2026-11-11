@@ -4,8 +4,8 @@ status: in_progress        # not_started | in_progress | blocked | complete | su
 created_by: sebi
 worked_by: "sebi (Claude Code)"
 owner: sebi
-percent: 30
-current_focus: "wave 3 PR; then release 1.13.0, adopter bumps, wave 4 (cut cost: 06 L1-L4/P2-P6, 08, 07 A1-A6, 21 K1-K5)"
+percent: 45
+current_focus: "wave 4a PR; sales #380 unblock (visual QA fix-forward); then 4b lazy load tiers (06 L1-L9), release 1.14.0, wave 5 long tail"
 slices:
   - file: 01-ci-green-doc-truth.md
     status: in_progress
@@ -24,13 +24,13 @@ slices:
     percent: 100
   - file: 06-perf-hot-path-boot.md
     status: in_progress
-    percent: 25
+    percent: 60
   - file: 07-algorithms.md
     status: in_progress
-    percent: 20
+    percent: 65
   - file: 08-memory.md
     status: in_progress
-    percent: 15
+    percent: 85
   - file: 09-dashboard.md
     status: not_started
     percent: 0
@@ -57,10 +57,10 @@ slices:
     percent: 50
   - file: 17-adopter-hiscore.md
     status: in_progress
-    percent: 60
+    percent: 75
   - file: 18-adopter-legald.md
-    status: not_started
-    percent: 0
+    status: in_progress
+    percent: 70
   - file: 19-infra-tesote.md
     status: in_progress
     percent: 40
@@ -69,7 +69,7 @@ slices:
     percent: 40
   - file: 21-counters-and-read-caching.md
     status: in_progress
-    percent: 10
+    percent: 80
 decisions:
   - id: U3
     date: 2026-11-11
@@ -93,6 +93,10 @@ decisions:
     by: sebi (owner, in-session instruction)
     decision: "Public surfaces (README, docs/site/llms.txt, docs/site/index.html) may state that teams running billions of jobs a month on Wurk in production recommend it, labelled user-reported. Supersedes audit 2026-10-04 H8/R11 for user-reported volume only; published throughput still needs docs/benchmarks.md numbers (12 T1 soak). Guard: test/unit/forbidden_claims_test.rb SCALE_SOURCE."
 evidence:
+  - "wave 4a (branch wave4a-cut-cost): hotpath 105->79 allocs/job (logger buffer + pid cache, golden bytes; 8 built-in middleware shared per chain entry, audited; positional UnitOfWork, prebuilt LMOVE/LREM call_v; coarse clock on paused cache; heartbeat RPOP count), 3.00 cmds/job unchanged; P2 dropped (measured), lock-free ACK slot dropped (mutex ~150ns). dashboard K1/K2/K3/K5 + A1/A2/A6/A11/A14/A16: SSE+stats 9->2 RT, queues 6->2, queue detail 5->1, batches p999 25276->2, retry_all 2.02->0.06 RT/entry. algo A3 windowed fast delete, A5 limiter 6/7->2/3 RT (registration memo REMOVED at integration: hid limiters after flush/eviction, demo self-heal test), A7 never-fired walk 1.2s->1ms, A8 26550->3 RT, A9/A10/A15, K4 (= Sidekiq 8.1.6 flush shape). A4 NOT shipped: no cheaper check keeps the 90-140s lost-host bound (measured). memory M1 fresh-child guard (no fork-loop) + rss/pss/uss metric, M2 prefork warmup on every swarm path (shared 0.57->0.72 vs no warmup), M3, M5 byte cap opt-in, M6 bounded caches, M7 dead-set lazy backtrace, P5 one INFO; configure_server skip WARN->DEBUG (adopter finding). Coordinator: buffered drain before push_prepared (test fails without), Cron.prefork wired, bench tally excludes connection upkeep. Gate: suite 6528/0 (98.25/91.64), parity 407/0, ecosystem/frontend/python green. Timing deferred to PR bench vs base + wave 6 (box loaded)."
+  - "1.13.0 adopters (tesote): tesote.com #522 merged 50d1f0a, ArgoCD tesote-com-production Synced/Healthy sha-50d1f0a, worker `Wurk 1.13.0 on dragonfly 1.34.0`; gringotts #17 merged 93f3066, gringotts-production Synced/Healthy sha-93f3066, worker `Wurk 1.13.0`; sales #380 (removes `unless Wurk.server?` around configure_client, proven DEBUG on 1.13.0) BLOCKED by required visual QA red on main since sales #378 (48/760 pictures) - fix-forward agent dispatched. `elapsed` unit change: no reader in any adopter repo or infra origin/main."
+  - "release 1.13.0: PR #914 merged (112e11b); release.yml all green; rubygems wurk 1.13.0 (06:44Z); tag v1.13.0 -> 112e11b; GitHub Release Latest + .gem; demo /demo/build 112e11b. Carries wave 3 (#913). Follow-up #915 (keepalive PING excluded from commands-per-job) merged 038981d."
+  - "17 hiscore 1.13.0: hiscore-ro/hiscore.ro#115 merged (a534217), boot-check --runner wurk in CI, deployed via bin/deploy (REVISION a534217, log `Wurk 1.13.0 on redis 8.10.2`, elapsed in seconds, site 200). 18 legald: #312 (1.12.0, 3f0c9f4) + #314 (1.13.0, a844683) merged; bin/wurk-boot-check --runner wurk; ArgoCD rolled sha-a844683, worker `Wurk 1.13.0 on dragonfly 1.39.0`, 0 WARN; configure_client WARN retired. Kept: legald Sidekiq.redis stub in tests (app /up probe), /profiles/:key deny for per-session read-only. New wurk finding -> wave 4a memory agent: `configure_server block skipped` WARN in non-server processes (Sidekiq silent)."
   - "wave 3 (branch wave3-dropin-errors): boot-check can no longer write Redis (Preflight::RedisGuard; preflight --app too), --runner wurk, configure_client WARN -> DEBUG + client-only WARN, G5(boot part)/G7/G8/G11-G15 guards, G6+G9 proven unnecessary with regression tests; D1 sidekiq exe (U3), D2 pinned shim, D3/D4, D5 /stats + HEAD / routes, D7 tests, D8 checklist, job-log elapsed in seconds (oracle vs 8.1.6); E1-E8 (E2 excluded_exceptions, E4 interrupted-job WARN + docs/idempotency.md, rest matched upstream by oracle) + timeout string read side; R3-R6 + D6 proctitle + #908 fixed without a new key. Full-suite leak found+guarded: require sidekiq/testing at load flipped a worker into fake mode (global_test_mode_guard_test). Gate: suite 6434/0 (98.21/91.78), parity 407/0, ecosystem + frontend green."
   - "U2/C2 closed: PR #912 merged (16484e9) - watcher job bound to environment sidekiq-release-watcher (main-only). Dry-run dispatch 42961393721 on main: key check passed, POST step ran (gated on API_KEY), `filed=0 skipped=0 dry_run=true`; first scheduled run will file one ask per fetched release (no prior marker)."
   - "14 tesote.com: tesote/tesote.com#521 merged (66715b0) + deployed (Deploy run 42959265542, ArgoCD Synced/Healthy 04:30Z, worker `Wurk 1.12.0 on dragonfly 1.34.0`): wurk ~> 1.12, unique_for back to 5.minutes (test fails on 1.11.1), S5 boot-check in CI + bin/check (env parity test). S4 workarounds all still needed (none retired by 1.12.0). WAVE-3 PRIORITY wurk bug: `wurk boot-check` runs server-mode initializers/configure_server blocks, so app code that writes Redis (tesote.com dev flushdb in config/initializers/wurk/2server.rb) runs during the check; it must not write without --redis (read-only/refusing client like preflight) and the docs must say so."

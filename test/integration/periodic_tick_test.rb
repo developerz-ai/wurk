@@ -296,7 +296,7 @@ class PeriodicTickTest < Wurk::Test::UnitCase
     mgr = Wurk::Cron::Manager.new
     3.times { |i| @lids << mgr.register('* * * * *', PeriodicTickPlainWorker.name, args: [i]).lid }
     attempted = []
-    @poller.define_singleton_method(:enqueue_if_due) do |lp|
+    @poller.define_singleton_method(:enqueue_if_due) do |lp, *|
       attempted << lp.lid
       raise 'boom'
     end
