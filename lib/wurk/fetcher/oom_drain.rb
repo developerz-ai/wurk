@@ -50,7 +50,6 @@ module Wurk
         return nil
       LUA
 
-      RECLAIM = (HEADER + Lua::RELIABLE_RECLAIM).freeze
       REQUEUE = (HEADER + Lua::RELIABLE_REQUEUE).freeze
 
       # KEYS = [lock], ARGV = [ttl_ms]. The reaper's sweep lock: refused, no sweep
@@ -70,10 +69,6 @@ module Wurk
       # cannot run the script. Returns [queue_index, payload] or nil.
       def claim(conn, error, keys:, info:, beat:)
         run(conn, error, CLAIM, [Keys::PROCESSES, Component.identity, *keys], [info, beat, HEARTBEAT_TTL])
-      end
-
-      def reclaim(conn, error, source, destination)
-        run(conn, error, RECLAIM, [source, destination], [])
       end
 
       # Returns 1 when moved, 0 when the job has left the private list since.

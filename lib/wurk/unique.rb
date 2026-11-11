@@ -202,8 +202,14 @@ module Wurk
     end
 
     # Coerce `unique_for` to a numeric seconds value. Accepts Integer,
-    # Numeric, ActiveSupport::Duration (any `to_i`-respondent), or `false`
-    # (skip). Returns nil when uniqueness should be skipped.
+    # Numeric, ActiveSupport::Duration (any `to_i`-respondent), a numeric
+    # String, or `false` (skip). Returns nil when uniqueness should be skipped.
+    #
+    # The String is what every reader after the push sees for a Duration:
+    # JSON.generate writes `5.minutes` as "300", in Sidekiq as here, so the
+    # server middleware and the death handler get "300" back off the queue.
+    # Refusing it left every `unique_for: 5.minutes` lock held until its TTL
+    # (tesote/tesote.com#519).
     def self.coerce_ttl(value)
       return nil if value.nil? || value == false
       # `.to_i`, not `value`: ActiveSupport::Duration overrides `is_a?(Integer)`
@@ -212,10 +218,14 @@ module Wurk
       # EX arg and raised TypeError at enqueue (#253).
       return value.to_i if value.is_a?(Integer) && value.positive?
       return value.to_i if value.is_a?(Numeric)
+      return value.to_f.to_i if value.is_a?(String) && value.match?(NUMERIC_TTL)
       return value.to_i if duration_like?(value)
 
       nil
     end
+
+    # Duration#to_s: "300" for `5.minutes`, "90.0" for `1.5.minutes`.
+    NUMERIC_TTL = /\A\d+(?:\.\d+)?\z/
 
     def self.duration_like?(value)
       return false unless value.respond_to?(:to_i)

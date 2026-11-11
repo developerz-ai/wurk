@@ -16,6 +16,9 @@ module PostEdit
   RUBOCOP_SECONDS = '12'
   ANCHOR_GLOB = 'test/conformance/ledger_anchors/*.yml'
   WIRE_FILES = %w[lib/wurk/keys.rb lib/wurk/job_util.rb].freeze
+  # `bundle exec` exits 1 with this in a stack trace when the lockfile's gems are
+  # not installed: the edit went unlinted, and it is not a rubocop offense.
+  GEMS_MISSING = 'Bundler::GemNotFound'
 
   module_function
 
@@ -29,11 +32,16 @@ module PostEdit
 
     out, status = run('timeout', RUBOCOP_SECONDS, 'bundle', 'exec', 'rubocop', '--force-exclusion',
                       '--format', 'emacs', path)
-    out if status&.exitstatus == 1
+    @gems_missing = out.to_s.include?(GEMS_MISSING)
+    out if status&.exitstatus == 1 && !@gems_missing
+  end
+
+  def bundle_note
+    'Gems are missing, so rubocop did not lint this edit: run `bundle install` (or `bin/setup`).' if @gems_missing
   end
 
   def advice(path, root)
-    notes = [anchor_note(path, root), parity_note(path), wire_note(path), version_note(path)]
+    notes = [bundle_note, anchor_note(path, root), parity_note(path), wire_note(path), version_note(path)]
     notes << lint_note(path)
     notes.compact
   end
@@ -45,7 +53,7 @@ module PostEdit
     return if count.zero?
 
     "#{count} ledger anchors pin line ranges in #{path}. If lines moved, run `bin/repin-anchors` on the tree " \
-      'the PR will contain, then `bin/rake test:parity`; `bin/check fast` does not check them.'
+      'the PR will contain, then `bin/rake test:parity`; `bin/check` reports drift but does not fix it.'
   end
 
   def parity_note(path)

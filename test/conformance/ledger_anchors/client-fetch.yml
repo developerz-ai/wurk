@@ -20,12 +20,12 @@
       pipe.call('LPUSH', "queue:#{queue}", *serialized)
 
 - entry: "Immediate plain multi-queue pushes register queues per group"
-  anchor: "test/parity/client_push_test.rb#L386"
+  anchor: "test/parity/client_push_test.rb#L397"
   fragment: |-
     def test_push_bulk_registers_exactly_the_routed_queues_and_delivers_each_payload
 
 - entry: "Immediate plain multi-queue pushes register queues per group"
-  anchor: "test/parity/client_push_test.rb#L416"
+  anchor: "test/parity/client_push_test.rb#L427"
   fragment: |-
     def test_push_bulk_failure_before_second_group_leaves_only_first_queue_registered
 
@@ -137,14 +137,14 @@
     cur[:phase] = :await_exit
 
 - entry: "Reaper liveness has a residual local pid-reuse blind spot — shared with `super_fetch`, not fixed"
-  anchor: "lib/wurk/fetcher/reaper.rb#L256-L267"
+  anchor: "lib/wurk/fetcher/reaper.rb#L255-L266"
   fragment: |-
     def orphaned?(key, owner, owners)
       _public_q, host, pid, nonce = owner
       return !local_pid_alive?(pid) if nonce == process_nonce && host == hostname
 
 - entry: "Reaper liveness has a residual local pid-reuse blind spot — shared with `super_fetch`, not fixed"
-  anchor: "lib/wurk/fetcher/reaper.rb#L283-L293"
+  anchor: "lib/wurk/fetcher/reaper.rb#L282-L292"
   fragment: |-
     def local_pid_alive?(pid)
       ::Process.kill(0, pid)

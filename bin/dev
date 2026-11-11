@@ -2,8 +2,9 @@
 # Run the Wurk dashboard locally with hot-reload.
 #
 # One command boots the whole dev loop:
-#   • Redis          — reuses one already on :6379, else starts a throwaway
-#                      Docker container (removed on exit).
+#   • Redis          — REDIS_URL when set, else this checkout's own private
+#                      server from `bin/redis up dev` (kept between runs;
+#                      `bin/redis down dev` removes it). Never the shared :6379.
 #   • Vite dev server — SolidJS HMR for the dashboard SPA (frontend/, bun).
 #   • test/dummy      — the Rails host app that mounts the engine at /wurk,
 #                      run with WURK_VITE_DEV=1 so its shell pulls modules +
@@ -26,32 +27,21 @@ PORT="${PORT:-3000}"
 export VITE_PORT="${VITE_PORT:-5173}"
 
 pids=()
-redis_cid=""
 cleanup() {
   trap - INT TERM EXIT
   for pid in "${pids[@]}"; do kill "$pid" 2>/dev/null || true; done
-  [ -n "$redis_cid" ] && docker rm -f "$redis_cid" >/dev/null 2>&1 || true
 }
 trap cleanup INT TERM EXIT
 
-redis_up() { (exec 3<>/dev/tcp/127.0.0.1/6379) 2>/dev/null; }
-
 echo "==> Redis"
-if redis_up; then
-  echo "    reusing Redis already on :6379"
-elif command -v docker >/dev/null 2>&1; then
-  redis_cid="$(docker run -d --rm -p 6379:6379 redis:7-alpine)"
-  echo "    started Docker Redis ($redis_cid)"
-  ready=0
-  for _ in $(seq 1 30); do redis_up && { ready=1; break; }; sleep 0.5; done
-  if [ "$ready" != "1" ]; then
-    echo "    ERROR: Redis container didn't become ready in time." >&2
-    exit 1
-  fi
+if [ -n "${REDIS_URL:-}" ]; then
+  echo "    using REDIS_URL"
 else
-  echo "    ERROR: no Redis on :6379 and Docker is unavailable." >&2
-  echo "    Start a Redis (e.g. \`docker run -p 6379:6379 redis:7\`) and retry." >&2
-  exit 1
+  # The dummy app writes DB 0 of whatever it is pointed at, so it gets a
+  # server of its own rather than the shared :6379.
+  REDIS_URL="$(bin/redis up dev)/0"
+  export REDIS_URL
+  echo "    private server $REDIS_URL (bin/redis down dev removes it)"
 fi
 
 if ! command -v bun >/dev/null 2>&1; then

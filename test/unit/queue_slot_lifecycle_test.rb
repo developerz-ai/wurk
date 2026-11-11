@@ -327,24 +327,19 @@ class QueueSlotLifecycleTest < Wurk::Test::UnitCase
   end
 
   # A pipelined EVALSHA surfaces NOSCRIPT only when the pipeline finalizes, so
-  # without the reload-and-replay arm a flushed script cache costs this process
+  # without the reload-and-replay arm a cold script cache costs this process
   # every beat until some other caller happens to reload — and a hold that stops
   # being refreshed is capacity that evaporates under a running job.
-  def test_a_flushed_script_cache_does_not_cost_the_beat_its_refresh
+  def test_a_cold_script_cache_does_not_cost_the_beat_its_refresh
     Wurk::QueueSlot.acquire(@queue_name, capacity: 1, ttl: 3, pool: @pool)
     Wurk::QueueSlot::HELD.hold(Wurk::QueueSlot.token, @slot_key)
     before = hold_expiry
-    @pool.with { |conn| conn.call('SCRIPT', 'FLUSH') }
 
-    refute_nil build_heartbeat.beat!, 'the beat landed rather than falling into its rescue'
+    Wurk::Test::NoscriptFault.stage(@config.redis_pool) do |fault|
+      refute_nil build_heartbeat.beat!, 'the beat landed rather than falling into its rescue'
+      assert_predicate fault, :fired?, 'the beat never met a cold script cache'
+    end
     assert_operator hold_expiry, :>, before + Wurk::QueueSlot::TTL_SECONDS - 5
-  ensure
-    # The EVALSHA cache is SERVER-wide, not per-DB, so this flush is visible to
-    # every parallel_fork worker. Reload the moment the assertion below is done
-    # so the window a sibling suite can be caught in is a handful of commands
-    # rather than the rest of this test. (ClientBatchPipelineTest, which counts
-    # pipelines, detects the interference and skips rather than failing.)
-    @pool.with { |c| Wurk::Lua::Loader.script_load_all(c) }
   end
 
   # Every hold rides one call, so a process running N capped jobs beats with the

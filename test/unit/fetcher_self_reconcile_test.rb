@@ -246,13 +246,31 @@ class FetcherSelfReconcileTest < Wurk::Test::UnitCase
     assert_equal 2, in_private.size
   end
 
-  def test_a_move_is_handed_to_on_moved
-    strand('lost')
-    moved = []
-    reconcile = build_reconcile(on_moved: ->(queue, payload) { moved << [queue, payload] })
+  # A payload put back is a recovery like a reclaim: counted, and past the cap
+  # it goes to the dead set without ever reaching the queue a worker could be
+  # parked on.
+  def test_a_payload_past_the_poison_cap_goes_to_the_dead_set_not_the_queue
+    jid = SecureRandom.hex(12)
+    job = Wurk.dump_json('class' => 'X', 'args' => [], 'queue' => @queue_name, 'jid' => jid)
+    @pool.with { |c| c.call('SET', Wurk::Middleware::PoisonPill.counter_key(jid), '3') }
+    strand(job)
+    reconcile = build_reconcile
     2.times { reconcile.sweep }
 
-    assert_equal [[@public_queue, 'lost']], moved
+    assert_empty in_private
+    assert_empty in_public
+    assert_equal([job], @pool.with { |c| c.call('ZRANGE', Wurk::Keys::DEAD, 0, -1) })
+  end
+
+  def test_a_payload_under_the_cap_is_counted_as_a_recovery
+    jid = SecureRandom.hex(12)
+    job = Wurk.dump_json('class' => 'X', 'args' => [], 'queue' => @queue_name, 'jid' => jid)
+    strand(job)
+    reconcile = build_reconcile
+    2.times { reconcile.sweep }
+
+    assert_equal [job], in_public
+    assert_equal 1, Wurk::Middleware::PoisonPill.recovery_count(jid)
   end
 
   private

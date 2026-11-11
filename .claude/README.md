@@ -2,7 +2,7 @@
 
 | Path | What it is |
 |---|---|
-| `commands/feature.md`, `commands/planx.md` | `/feature` takes a change to merged; `/planx` writes a plan for another agent |
+| `commands/feature.md`, `commands/planx.md`, `commands/plan-exec.md` | `/feature` takes a change to merged; `/planx` writes a plan for another agent; `/plan-exec` runs a plan wave by wave |
 | `skills/run-dashboard/` | Boot the dashboard and drive it in a browser |
 | `settings.json` | Permissions and hooks. Personal overrides go in `settings.local.json` |
 | `hooks/` | Stdlib Ruby, no Bundler, pinned by `test/unit/ai_config_test.rb` |

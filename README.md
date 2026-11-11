@@ -22,7 +22,7 @@
 
 Wurk is wire-compatible with Sidekiq — same Redis keys, same job JSON, same Ruby DSL. Swap one line in your `Gemfile` and your existing jobs, batches, limiters, cron entries, and live Redis data keep working untouched. The Pro and Enterprise feature sets ship in the same free gem, with no license check and no tiers.
 
-**In production:** Wurk runs background work at partner deployments, across many servers, on the fork-based swarm described below. It is not a preview. Throughput numbers from those deployments are not published yet; what has been measured is in [docs/benchmarks.md](docs/benchmarks.md).
+**In production:** Wurk runs background work at partner deployments, across many servers, on the fork-based swarm described below. It is not a preview. Teams running billions of jobs a month on Wurk in production recommend it. Those volumes are user-reported; no production throughput numbers are published yet, and what has been measured is in [docs/benchmarks.md](docs/benchmarks.md).
 
 **At scale:** Wurk is built for fleets, not just for one box. Kubernetes `/live` + `/ready` probes are a config line, not a sidecar; a bearer-scoped [HTTP API](docs/api-http.md) lets non-Ruby services enqueue and inspect; [OpenTelemetry](docs/telemetry.md) traces propagate client → server; per-queue [global concurrency caps](docs/rate-limiting.md) hold cluster-wide limits; and monitoring is the dashboard you already mount — live SSE, charts, no separate stack to run. See [Wurk extras](#wurk-extras).
 

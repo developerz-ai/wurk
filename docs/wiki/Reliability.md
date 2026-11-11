@@ -23,11 +23,12 @@ A process that dies **mid-`perform`** has its job re-run **from the top**. Every
 
 The window is slightly wider than Pro's, deliberately: the ACK is pipelined with the **next** fetch to spend one round trip per job instead of two. It is flushed before blocking, idling, quiet, stop and shutdown, so no graceful path is affected, and nothing can be *lost* — the payload leaves the private list later, never earlier.
 
-## The three things that can still lose a job
+## The two things that can still lose a job
 
 - **Redis itself.** The guarantee starts at "the payload is in Redis". No AOF, or a failover to a replica that missed the write, and the job is gone. Persistence policy is yours.
-- **The default scheduler.** `Wurk::Scheduled::Enq` pops due jobs from `retry`/`schedule` and then pushes them — between the two, the job exists only in the poller's memory. `config.reliable_scheduler!` closes that with a single atomic Lua promote (push before remove). **Reliable fetch is the default; the reliable scheduler is not.**
 - **The client outage buffer.** `Wurk::Client.reliable_push!` turns an enqueue during a Redis outage into an in-process ring buffer instead of a raise — but it is in-memory and per-process, so a process death loses every buffered job, and `:drop_oldest` (the default) silently evicts once full. It is a bounded window over a short blip in a surviving process, not a durable outbox. If losing an enqueue is unacceptable, write the intent into your own DB inside the business transaction.
+
+The default scheduler is not on that list: `Wurk::Scheduled::Enq` leases due `retry`/`schedule` members, pushes, and only then removes them, so a crash costs a duplicate and up to a lease of delay, not a job. `config.reliable_scheduler!` is optional: an atomic Lua promoter with more throughput on a large backlog that skips client middleware.
 
 Batch payloads are never buffered — their Lua has atomic counter side effects that cannot be safely replayed — so they re-raise even in a mixed `push_bulk`.
 

@@ -559,7 +559,24 @@ class CLITest < Wurk::Test::UnitCase
     cap.define_singleton_method(:redis_pool) { fake_pool }
     err = assert_raises(ArgumentError) { @cli.run(boot_app: false, warmup: false) }
 
-    assert_match(/Pool size too small/, err.message)
+    # G4: both sizes and the setting that fixes it, not just "too small".
+    assert_match(/Redis pool for capsule default holds 1 connections, fewer than its concurrency of 999/, err.message)
+    assert_match(/config\.redis = \{ size: 999 \}/, err.message)
+  end
+
+  # G3: the worker says what it is and how big, once, at boot.
+  def test_run_logs_its_role_and_sizes
+    with_require_set { @cli.parse(['-q', 'default', '-c', '7']) }
+    io = StringIO.new
+    @cli.config.logger = ::Logger.new(io)
+    @cli.define_singleton_method(:redis_info) { { 'redis_version' => '7.2.0', 'maxmemory_policy' => 'noeviction' } }
+    @cli.define_singleton_method(:trap_signals) { |_| nil }
+    @cli.define_singleton_method(:launch) { |_self_read| nil }
+    @cli.run(boot_app: false, warmup: false)
+
+    assert_match(/wurk: wurk; 1 process × 7 threads \(redis pool 12, fetch 7\)/, io.string)
+  ensure
+    @cli.config.reset_redis_pools!
   end
 
   # line 96 then + line 105 then — boot_app:true runs boot_application and
@@ -851,6 +868,19 @@ class CLITest < Wurk::Test::UnitCase
     end
   end
 
+  def test_run_swarm_logs_the_parent_role
+    stub_swarm_preamble
+    io = StringIO.new
+    @cli.config.logger = ::Logger.new(io)
+    @cli.config.topology = Wurk::Topology.flat(count: 3, queues: %w[default], concurrency: 4)
+    fake_swarm = swarm_double(boot: ->(**) {}, supervise: -> {}, shutdown: -> {})
+    @cli.define_singleton_method(:redis_info) { { 'redis_version' => '7.4.0' } }
+
+    with_stub_swarm(fake_swarm) { @cli.run_swarm(boot_app: false, warmup: false) }
+
+    assert_match(/wurk: wurkswarm parent; 3 processes × 4 threads \(redis pool 10, fetch 4\)/, io.string)
+  end
+
   def test_run_swarm_preloads_then_boots_then_eager_loads
     order = []
     stub_swarm_preamble
@@ -956,7 +986,8 @@ class CLITest < Wurk::Test::UnitCase
   # which a subprocess's coverage cannot see.
   def test_the_retry_restores_the_environment_from_before_the_attempt
     captured = nil
-    state = { env: { 'KEPT' => '1', 'BUNDLE_GEMFILE' => '/app/Gemfile' }, argv: ['-r', '.'], dir: '/app' }
+    state = { env: { 'KEPT' => '1', 'BUNDLE_GEMFILE' => '/app/Gemfile' }, dir: '/app',
+              argv: [Wurk::CLI::SWARM_EXECUTABLE, '-r', '.'] }
     original = ::Process.method(:exec)
     ::Process.define_singleton_method(:exec) { |*args, **opts| captured = [args, opts] }
     begin
@@ -973,6 +1004,7 @@ class CLITest < Wurk::Test::UnitCase
     assert_equal expected_env, args.first
     assert_equal [RbConfig.ruby, '-rbundler/setup', Wurk::CLI::SWARM_EXECUTABLE, '-r', '.'], args.drop(1)
     assert_path_exists Wurk::CLI::SWARM_EXECUTABLE
+    assert_equal Wurk::CLI::SWARM_EXECUTABLE, @cli.send(:restart_state)[:argv].first
     assert_equal({ unsetenv_others: true, chdir: '/app' }, opts)
   end
 

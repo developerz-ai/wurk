@@ -115,7 +115,7 @@
     Wurk.configuration.server_middleware.add(Wurk::Metrics::History)
 
 - entry: '`timeout:`/`deadline:` add `timeout`, `deadline`, and `deadline_at` as top-level job-JSON keys, opt-in only'
-  anchor: lib/wurk/job_util.rb#L240-L245
+  anchor: lib/wurk/job_util.rb#L255-L260
   fragment: |-
     return unless JobUtil.positive_seconds?(d)
 

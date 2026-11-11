@@ -4,6 +4,7 @@ require_relative '../test_helper'
 require 'digest'
 require 'json'
 require 'securerandom'
+require 'active_support/core_ext/integer/time'
 
 # Parity oracle for Sidekiq Enterprise unique jobs, written from
 # docs/target/sidekiq-ent.md §3, not from Wurk's unique code. Jobs run through
@@ -16,6 +17,8 @@ require 'securerandom'
 #   `unique_until: :success` keeps the lock through a failure (the retry
 #   still runs) and drops it on success; `:start` drops it before perform.
 # - §3.3 `set(unique_for: false)` bypasses, `set(unique_for: n)` overrides.
+# - §3.3 `unique_for: 5.minutes` (the documented Duration form) locks for its
+#   seconds and is released like an Integer TTL.
 # - §3.4 a scheduled job's lock lives `delay + unique_for`.
 # - §3.5 `sidekiq_unique_context` replaces the digest context.
 # - §3.6 `Unique.locked?` returns the holding JID.
@@ -59,6 +62,14 @@ class UniqueParityTest < Wurk::Test::UnitCase
       Log.record([token, :lock_during_perform, Sidekiq.redis { |c| c.call('GET', key) }])
       raise 'fail' if mode == 'fail'
     end
+  end
+
+  class DurationJob
+    include Sidekiq::Job
+
+    sidekiq_options unique_for: 5.minutes
+
+    def perform(token, _mode) = Log.record([token, :performed])
   end
 
   class ContextJob
@@ -220,6 +231,19 @@ class UniqueParityTest < Wurk::Test::UnitCase
     run_one
 
     assert_equal 2, Log.entries.count([@token, :performed])
+  end
+
+  def test_duration_unique_for_locks_for_its_seconds_and_releases_on_success
+    args = [@token, 'ok']
+    jid = push(DurationJob, args)
+    key = lock_key(DurationJob.name, @queue, args)
+
+    assert_equal jid, redis('GET', key)
+    assert_in_delta 300, redis('TTL', key), 5
+    run_one
+
+    assert_includes Log.entries, [@token, :performed]
+    assert_nil redis('GET', key)
   end
 
   # --- §3.7 :start --------------------------------------------------------

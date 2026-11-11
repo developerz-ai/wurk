@@ -15,3 +15,4 @@
 | U9 | Same-origin guard: fall back to `Origin`/`Host` match when `Sec-Fetch-Site` is absent (plain-HTTP dashboards) | Security review first; default stays deny | [`09`](09-dashboard.md) W3 |
 | U10 | Carry-over from the 2026-10-04 audit (`docs/plans/2026/10/04/101-squeaky-clean-audit/11-human-actions.md` U8): real Pro/Ent Redis dump from the customer | Still wanted; validates reaper key shapes + batch/limiter formats | [`12`](12-proof-harness.md) |
 | U11 | Treasury cutover timing (read-only today) | After slices 02–05 + a 24h soak | — |
+| U12 | Public production-volume line ("billions of jobs a month", recommended by production users) | **Decided 2026-11-10 by owner:** allowed, labelled user-reported; throughput figures still need [`12`](12-proof-harness.md) T1 numbers | README / site / llms.txt; `forbidden_claims_test.rb` |

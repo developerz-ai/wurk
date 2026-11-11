@@ -93,12 +93,16 @@ class BenchVsSidekiqEnvTest < Wurk::Test::UnitCase
   end
 
   # What `bundle exec` actually puts in a child's environment, asked of the
-  # installed bundler rather than assumed.
+  # installed bundler rather than assumed. Launched from the unbundled shell, and
+  # whatever that shell already exported (a developer's BUNDLE_JOBS, say) is
+  # subtracted: inherited settings are not injected, and do not steer resolution.
   def bundler_injected_vars
     script = 'puts ENV.keys'
-    out = IO.popen({}, ['bundle', 'exec', RbConfig.ruby, '-e', script], chdir: ROOT, err: %i[child out], &:read)
+    shell, out = Bundler.with_unbundled_env do
+      [ENV.keys, IO.popen(['bundle', 'exec', RbConfig.ruby, '-e', script], chdir: ROOT, err: %i[child out], &:read)]
+    end
 
     assert_equal 0, $CHILD_STATUS.exitstatus, "`bundle exec` failed:\n#{out}"
-    out.lines.map(&:strip).grep(RESOLUTION_VARS).grep_v(ORIGINALS)
+    (out.lines.map(&:strip) - shell).grep(RESOLUTION_VARS).grep_v(ORIGINALS)
   end
 end

@@ -374,6 +374,19 @@ class UniqueTest < Wurk::Test::UnitCase
     assert_equal 60, Wurk::Unique.coerce_ttl(60.9)
   end
 
+  # A Duration reaches every post-push reader as the string JSON.generate
+  # wrote for it: "300" for 5.minutes, "90.0" for 1.5.minutes.
+  def test_coerce_ttl_accepts_numeric_strings
+    assert_equal 300, Wurk::Unique.coerce_ttl('300')
+    assert_equal 90, Wurk::Unique.coerce_ttl('90.0')
+  end
+
+  def test_coerce_ttl_rejects_non_numeric_strings
+    ['', 'abc', '5 minutes', '-300', '1e3', ' 300'].each do |raw|
+      assert_nil Wurk::Unique.coerce_ttl(raw), raw.inspect
+    end
+  end
+
   def test_coerce_ttl_rejects_non_numeric_non_duration
     # An object that does not respond to to_i: duration_like? short-circuits
     # to false (line 110 then) and coerce_ttl falls through to nil (line 104 else).
@@ -617,6 +630,20 @@ class UniqueTest < Wurk::Test::UnitCase
     end
   end
 
+  def test_automatic_death_releases_lock_with_string_ttl
+    ENABLE_MUTEX.synchronize do
+      Wurk::Unique.enable!
+      job = build_job(jid: 'dead-str', ttl: '300')
+      track_key(job)
+
+      assert invoke_client(job)
+      assert_equal 'dead-str', redis_call('GET', Wurk::Unique.lock_key_for(job))
+      die_unretryable(job)
+
+      assert_nil redis_call('GET', Wurk::Unique.lock_key_for(job))
+    end
+  end
+
   def test_death_handler_retains_foreign_lock
     ENABLE_MUTEX.synchronize do
       Wurk::Unique.enable!
@@ -708,6 +735,18 @@ class UniqueTest < Wurk::Test::UnitCase
       Wurk::Unique.enable!
       job = build_job(jid: 'sj-ok', ttl: 30, until_mode: :success)
       Wurk.redis { |c| c.call('SET', Wurk::Unique.lock_key_for(job), 'sj-ok', 'EX', 30) }
+      track_key(job)
+
+      assert_equal :done, invoke_server(job) { :done }
+      assert_nil(Wurk.redis { |c| c.call('GET', Wurk::Unique.lock_key_for(job)) })
+    end
+  end
+
+  def test_server_middleware_releases_with_string_ttl
+    ENABLE_MUTEX.synchronize do
+      Wurk::Unique.enable!
+      job = build_job(jid: 'sj-str', ttl: '300', until_mode: 'success')
+      Wurk.redis { |c| c.call('SET', Wurk::Unique.lock_key_for(job), 'sj-str', 'EX', 300) }
       track_key(job)
 
       assert_equal :done, invoke_server(job) { :done }

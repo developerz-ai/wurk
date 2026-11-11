@@ -43,6 +43,7 @@ Make Wurk better where real use says it hurts: fix what the 5 adopter apps had t
 13. [`13-human-decisions.md`](13-human-decisions.md) — U1–U11: breaking/default/security calls only a human makes.
 14. [`14-adopter-tesote-com.md`](14-adopter-tesote-com.md) · 15. [`15-adopter-sales.md`](15-adopter-sales.md) · 16. [`16-adopter-gringotts.md`](16-adopter-gringotts.md) · 17. [`17-adopter-hiscore.md`](17-adopter-hiscore.md) · 18. [`18-adopter-legald.md`](18-adopter-legald.md) — per-repo follow-ups, each edited from its own repo.
 19. [`19-infra-tesote.md`](19-infra-tesote.md) · 20. [`20-infra-developerz.md`](20-infra-developerz.md) — probes, scrape + alerts.
+21. [`21-counters-and-read-caching.md`](21-counters-and-read-caching.md) — dashboard/API round-trip collapsing (added 2026-11-10; wave 4 B).
 
 ## Waves (≤4 agents per wave, disjoint file sets; PRs land one at a time)
 | Wave | Slices / rows | Parallel split (file sets) |

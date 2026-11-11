@@ -90,21 +90,18 @@ class LimiterStressTest < Wurk::Test::UnitCase
       assert_match(/\A[0-9a-f]{40}\z/, Wurk::Lua::SHAS[name], "no precomputed SHA for #{name}")
     end
 
-    # EVALSHA path resolves even after a SCRIPT FLUSH (NOSCRIPT → reload).
-    @pool.with { |c| c.call('SCRIPT', 'FLUSH') }
-    l = Wurk::Limiter.concurrent("flush-#{@suffix}", 1)
+    # EVALSHA path resolves against a cold script cache (NOSCRIPT → reload).
+    l = Wurk::Limiter.concurrent("noscript-#{@suffix}", 1)
     ran = false
-    l.within_limit { ran = true }
+    Wurk::Test::NoscriptFault.stage(@pool) do |fault|
+      l.within_limit { ran = true }
 
-    assert ran, 'acquire should recover from a flushed script cache'
+      assert_predicate fault, :fired?, 'the acquire never met a cold script cache'
+    end
+
+    assert ran, 'acquire should recover from a cold script cache'
   ensure
-    # The EVALSHA cache is SERVER-wide, not per-DB, so this flush is visible to
-    # every parallel_fork worker. Reload the moment the assertion below is done
-    # so the window a sibling suite can be caught in is a handful of commands
-    # rather than the rest of this test. (ClientBatchPipelineTest, which counts
-    # pipelines, detects the interference and skips rather than failing.)
-    @pool.with { |c| Wurk::Lua::Loader.script_load_all(c) }
-    Wurk::Limiter.concurrent("flush-#{@suffix}", 1).delete
+    Wurk::Limiter.concurrent("noscript-#{@suffix}", 1).delete
   end
 
   private

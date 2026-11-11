@@ -22,10 +22,10 @@ Each entry above has a full write-up — what the spec says, why the divergence 
 
 ## Third-party gems
 
-Ecosystem gems are the strongest drop-in proof available, and the honest status is that **one** of them is enforced in CI today:
+Ecosystem gems are the strongest drop-in proof available. Four of them run their own upstream suite against Wurk in CI, through the git-only `sidekiq` shim gem (`bin/rake test:ecosystem`; the `ecosystem` workflow runs on PRs that touch a filtered path):
 
-- **Green and required on every PR:** `sidekiq-cron` (v2.4.0), running its own upstream suite against Wurk (`bin/rake test:ecosystem`).
-- **Pinned with a known blocker, not yet enforced:** `sidekiq-status`, `sidekiq-unique-jobs`, and others. A harness lands only once it is green, because a permanently red required check trains everyone to ignore CI.
+- **Green in CI:** `sidekiq-cron`, `sidekiq-unique-jobs` (less the one spec file that needs Toxiproxy), `sidekiq-failures` (less upstream's ERB home-page test) and `sentry-sidekiq`. Each also boots in the real `sidekiq` and `wurkswarm` executables. Pins and exclusions: `test/ecosystem/README.md`.
+- **Pinned with a known blocker, not yet in CI:** `sidekiq-status`. The rest of the target matrix (`sidekiq-scheduler`, `sidekiq-throttled`, …) is untested. A harness lands only once it is green, because a permanently red check trains everyone to ignore CI.
 
 The pins and the exact blocker for each are in [docs/idea/14-ecosystem-compat.md](https://github.com/developerz-ai/wurk/blob/main/docs/idea/14-ecosystem-compat.md). Treat any gem not in that green list as "expected to work, not yet proven by its own suite" — test it against your setup before cutting over.
 

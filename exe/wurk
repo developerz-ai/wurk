@@ -5,6 +5,7 @@
 # Usage: `exe/wurk -C config/wurk.yml`     — worker: one process, thread pool
 #        `exe/wurk api --port 7433`        — machine HTTP API, runs no jobs
 #        `exe/wurk preflight` / `verify`   — read-only cutover checks, run no jobs
+#        `exe/wurk boot-check -r .`        — boot the app as wurkswarm would, then exit (CI)
 
 $stdout.sync = true
 $LOAD_PATH.unshift(File.expand_path('../lib', __dir__))
@@ -20,8 +21,9 @@ begin
   cli = Wurk::CLI.instance
   cli.parse
   case cli.command
-  when 'api' then cli.run_api
-  else            cli.run
+  when 'api'        then cli.run_api
+  when 'boot-check' then exit(cli.run_boot_check)
+  else                   cli.run
   end
 rescue StandardError => e
   raise e if $DEBUG

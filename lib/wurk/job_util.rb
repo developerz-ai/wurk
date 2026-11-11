@@ -117,6 +117,17 @@ module Wurk
       finalize(normalized)
     end
 
+    # An ActiveSupport::Duration (`48.hours`) unwrapped to the plain number it
+    # stands for; anything else comes back as given. The Duration claims
+    # `is_a?(Numeric)` through its own override, but `case`/`when` (Module#===)
+    # does not ask it, and JSON.generate writes it as a String ("172800"), which
+    # no reader after the push can use as seconds.
+    def self.plain_seconds(value)
+      return value if !value.is_a?(::Numeric) || value.class <= ::Numeric
+
+      value.is_a?(::Integer) ? value.to_i : value.to_f
+    end
+
     def now_in_millis
       ::Process.clock_gettime(::Process::CLOCK_REALTIME, :millisecond)
     end
@@ -166,7 +177,7 @@ module Wurk
     end
 
     def numeric_retry_for(value)
-      case value
+      case (value = JobUtil.plain_seconds(value))
       when Integer then value
       when Numeric then (value.to_i if value.finite? && value.real?)
       when String then (Integer(value, 10) if value.match?(/\A-?\d+\z/))
@@ -206,11 +217,16 @@ module Wurk
     def finalize(normalized)
       TRANSIENT_ATTRIBUTES.each { |k| normalized.delete(k) }
       normalized['jid'] ||= SecureRandom.hex(12)
-      normalized['retry_for'] = numeric_retry_for(normalized['retry_for']) if normalized.key?('retry_for')
+      coerce_seconds!(normalized)
       normalized['created_at'] ||= now_in_millis
       stamp_expiry(normalized)
       stamp_deadline(normalized)
       normalized
+    end
+
+    def coerce_seconds!(item)
+      item['retry_for'] = numeric_retry_for(item['retry_for']) if item.key?('retry_for')
+      BOUND_OPTIONS.each { |k| item[k] = JobUtil.plain_seconds(item[k]) if item.key?(k) }
     end
 
     # Pro `expires_in:` → absolute epoch-float `expiry` resolved once at push,

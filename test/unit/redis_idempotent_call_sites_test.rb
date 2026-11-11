@@ -184,13 +184,16 @@ class RedisIdempotentCallSitesTest < Wurk::Test::UnitCase
     assert_equal [true], @main.claims_for('SCAN').uniq
   end
 
-  # Drain moves a job then poison-checks it. A replay would move the next job
-  # and leave the moved one unchecked, so it stays unclaimed on purpose.
-  def test_reaper_drain_does_not_claim_apply_safety
+  # Drain peeks the tail, then moves it and takes the poison verdict in one
+  # script. The peek is a read. The move is guarded, but a replay after a lost
+  # reply would skip the death handlers of a job it had killed, and move a
+  # second identical copy, so it stays unclaimed on purpose.
+  def test_reaper_drain_claims_only_its_peek
     seed_private_list([%({"jid":"#{@ns}-d"}), %({"jid":"#{@ns}-e"})])
 
     assert_equal 2, reaper.reclaim!
 
+    assert_equal [true], @main.claims_for('LINDEX').uniq
     assert_equal [false], @main.claims_for('EVALSHA').uniq
     assert_empty @main.claims_for('LMOVE'), 'a bare LMOVE between shards loses the job on a full Dragonfly'
   end
@@ -321,13 +324,6 @@ class RedisIdempotentCallSitesTest < Wurk::Test::UnitCase
 
     assert_equal [true], @main.claims_for('HSET')
     assert_equal [false], @main.claims_for('RPOP')
-  end
-
-  # Poison-pill recovery counter: an over-count kills a healthy job.
-  def test_poison_pill_counter_does_not_claim_apply_safety
-    on_default_pool { Wurk::Middleware::PoisonPill.track!({ 'jid' => @ns, 'class' => 'HardJob' }, queue: @queue_name) }
-
-    assert_equal [false], @main.claims_for('INCR')
   end
 
   private

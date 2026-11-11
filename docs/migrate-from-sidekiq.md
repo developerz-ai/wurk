@@ -441,10 +441,10 @@ so a large app may want to cut over first and replace later:
 was verified for each gem.
 
 Keeping an add-on gem needs the `sidekiq` shim gem (see the warning under
-[TL;DR](#tldr--flip-the-switch)). Only **`sidekiq-cron`** has its upstream suite and a real
-worker boot run against Wurk in the
-[`ecosystem` CI job](../.github/workflows/ecosystem.yml) (harness in
-[`test/ecosystem/`](../test/ecosystem/README.md)). The state of the rest is in
+[TL;DR](#tldr--flip-the-switch)). Four gems, **`sidekiq-cron`**, **`sidekiq-unique-jobs`**,
+**`sidekiq-failures`** and **`sentry-sidekiq`**, have their upstream suite and a real worker
+boot run against Wurk in the [`ecosystem` CI job](../.github/workflows/ecosystem.yml) (harness
+and exclusions in [`test/ecosystem/`](../test/ecosystem/README.md)). The state of the rest is in
 [`docs/idea/14-ecosystem-compat.md`](idea/14-ecosystem-compat.md).
 
 ### `sidekiq-cron` → native periodic jobs
@@ -743,7 +743,8 @@ migrations are what this guide is checked against.
 5. **Re-point the dashboard route** — `mount Wurk::Engine => "/wurk"` (gate it behind
    your app auth — see [`docs/authentication.md`](authentication.md)).
 6. **Split web from workers** — run a dedicated `bundle exec wurkswarm` process and set
-   `WURK_DISABLED=1` on the web role so clustered Puma doesn't fork duplicate swarms.
+   `WURK_DISABLED=1` on the web role: single-mode Puma would otherwise fork a swarm too, and
+   clustered Puma refuses to and logs a warning.
    See [§3](#3-running-a-worker-process). Deploying under systemd/Capistrano? See
    [`docs/deployment.md`](deployment.md).
 7. **Decide each add-on gem** — keep it through the shim
@@ -830,6 +831,20 @@ with `lock:` and no gem, and add-ons known not to work. **That part runs your in
 the read-only promise covers only preflight's own commands.** An initializer that enqueues writes
 to the app's Redis whatever `-u` says. A banner and an `app_code_ran` finding say so; point it at
 staging if an initializer writes.
+
+**In CI, boot the worker the way a deploy would.** Add one step to the release that swaps the
+gem:
+
+```yaml
+- name: wurk boot-check
+  run: bundle exec wurk boot-check -r . -e production
+  env:
+    SECRET_KEY_BASE_DUMMY: "1"
+```
+
+It exits non-zero, naming the constant, when the worker boot would crash-loop, and it forks
+nothing and opens no fetch. Add `--redis` for a read-only check of the server too (version,
+eviction policy, live peers).
 
 **Redis**
 
@@ -1122,7 +1137,7 @@ production. Each one links to its full rationale in
 | A job Wurk cannot decrypt goes straight to the dead set: a missing or wrong key, or `encrypt` set with a last argument that is no Wurk envelope | **Dead**, no retries, `error_class` `Wurk::Encryption::DecryptionError`. The second case includes jobs pushed by a producer without crypto enabled, which used to run in the clear. These kills skip the `dead_max_jobs` trim and log an ERROR, though a later ordinary death still applies the cap | Enable crypto on producers first. Retry a key failure once the key is back. Retry a plaintext job freely (the retry seals it). Never retry foreign ciphertext |
 | Periodic slots more than max(90s, 1.5× tick) late are skipped and logged; a Hash `args:` is passed as one argument (Ent splats it) | A long leader outage skips rather than fires late | Check loops registered with Hash `args` |
 | Wurk uses `b-<bid>-success`/`b-<bid>-complete` as Redis strings holding `"1"` meaning "already fired" (callbacks enqueued, not necessarily executed). Pro §2.8 types the same two keys as string/marker too, but there they mean "callbacks pending" where Wurk means "already fired", and Pro keeps its callback state in the `b-<bid>-notify`/`b-<bid>-cbsucc` sets Wurk never writes. The keys match on type and collide on meaning, so nothing errors | A Pro batch in flight at the swap may miss callbacks — the markers are per-event, so a Pro-shaped `b-<bid>-success` marker loses its `:success` callback **silently** (no Redis type error, no log line, no `success_at`) while `:complete` still fires | Let critical batches finish before the cutover, or prove it in the dry run |
-| A poison kill (3 crash-reclaims in 72h) fires death handlers, and the counter resets on ACK | The job lands in **Dead**; its batch sees a death | Nothing; see the [runbook](runbook.md#poison-job-storm) |
+| A poison kill (the 4th crash-reclaim in 72h) fires death handlers, and the counter resets on ACK | The job lands in **Dead**; its batch sees a death | Nothing; see the [runbook](runbook.md#poison-job-storm) |
 | `:leader` can fire again after a Redis error | A leader hook runs twice | Make `on(:leader)` hooks idempotent |
 | String intervals to `perform_in` / `set(wait:)` raise | `ArgumentError` at enqueue | Pass numbers or durations |
 | `SortedEntry#reschedule` returns nil for a job that is already gone | No resurrection of a promoted or deleted job | Nothing |
@@ -1189,7 +1204,7 @@ rely on in staging**.
 
 | Gem | Evidence | What was seen | Not verified |
 |---|---|---|---|
-| `sidekiq-cron` 2.3.1 | Upstream suite plus a real worker boot in CI (pinned by [`test/ecosystem/sidekiq-cron/PIN`](../test/ecosystem/sidekiq-cron/PIN)). Smoke | Entries tick in a real worker, and a stock poller beside it gave one tick a minute, no doubles | Its web tab: Wurk's dashboard does not render ERB extensions |
+| `sidekiq-cron` 2.3.1 | Upstream suite plus a real worker boot in CI (pinned by [`test/ecosystem/sidekiq-cron/PIN`](../test/ecosystem/sidekiq-cron/PIN)). Smoke | Entries tick in a real worker, and a stock poller beside it gave one tick a minute, no doubles | Its web tab's actions. Its index page renders through Wurk's ERB extension renderer ([`docs/dashboard.md`](dashboard.md#custom-tabs--web-extensions)), checked by hand on 2.4.0 |
 | `sidekiq-unique-jobs` 8.1.0 | Smoke, plus its suite and a real worker boot in CI ([what it leaves out](idea/14-ecosystem-compat.md#sidekiq-unique-jobs)) | `until_executed`, `until_executing`, `while_executing`, `until_and_while_executing` with `on_conflict: :reject`. Dedup works. A lock taken by either runtime is released when the other runs the job, so locks carry both ways. Its reaper saw no orphans for in-flight jobs on Wurk | `on_conflict: :reschedule`, `lock_args_method` and its web tab |
 | `sidekiq-failures` 1.1.0 | Smoke, plus its suite and a real worker boot in CI | Failures recorded in `failed`, read back from either runtime. `RetrySet`, `DeadSet` and `ScheduledSet` walk normally with it loaded; `retry_failure` and its web tab through its suite | Web tab against a live 7.x fleet |
 | `sentry-sidekiq` 6.7.0 | Smoke, against a dummy transport, not a real Sentry. CI runs 6.5.0's suite and a real worker boot | Boots. Each attempt raises one event with `queue`/`jid` tags and job context; with `report_after_job_retries`, one on the last attempt. Transactions are sent | Worker-process errors, which it does not see: [`Wurk::Sentry`](sentry.md) covers those and is what Wurk's own suite tests |

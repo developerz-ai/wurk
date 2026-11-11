@@ -47,6 +47,32 @@ class MigrationGuideClaimsTest < Minitest::Test
     assert_match(/58807/, section)
   end
 
+  # The wiki and docs/sentry.md repeat the guide's gotchas and drifted from it:
+  # clustered Puma refuses to fork (Wurk::RailsBoot#refuse_preforking_boot),
+  # sentry-sidekiq installs through the shim and its suite runs in CI, and the
+  # reliable scheduler is optional. A poison kill fires death handlers, and
+  # PoisonPill.track! was replaced by recovered! (Fetcher::OrphanReclaim).
+  RETIRED_CLAIMS = {
+    'clustered Puma forking a duplicate swarm' => /fork(?:s|ing)? (?:a )?duplicate swarms?/i,
+    'sentry-sidekiq being uninstallable' => /cannot be installed/i,
+    'reliable_scheduler! as a must-keep' => /reliable_scheduler!.{0,60}keep it/i,
+    'the dashboard not rendering ERB extensions' => /does not render ERB extensions/i,
+    'sidekiq-cron as the only gem with its suite in CI' => /only \W*sidekiq-cron\W* (?:is|has)/i,
+    'poison kills skipping death handlers' => /death_handlers`?\*{0,2} do\s+(?:\*\*)?not fire/i,
+    'the removed PoisonPill.track!' => /PoisonPill\.track!|`track!`/
+  }.freeze
+
+  def test_retired_claims_stay_out_of_the_guides_and_wiki
+    root = File.expand_path('../..', __dir__)
+    files = %w[docs/migrate-from-sidekiq.md docs/sentry.md docs/retries.md docs/middleware.md docs/reliability.md] +
+            Dir[File.join(root, 'docs/wiki/*.md')].map { |f| f.delete_prefix("#{root}/") }
+    offenders = files.product(RETIRED_CLAIMS.to_a).filter_map do |file, (claim, pattern)|
+      "#{file}: #{claim}" if File.read(File.join(root, file)).match?(pattern)
+    end
+
+    assert_empty offenders, "retired claims are back:\n#{offenders.join("\n")}"
+  end
+
   def test_each_kept_gem_is_marked_with_what_was_verified
     section = GUIDE[/^### What was verified.*?^### /m]
 

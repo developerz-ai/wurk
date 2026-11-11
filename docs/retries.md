@@ -159,7 +159,7 @@ end
   discarded (`discarded_at` stamped, death handlers fired) rather than written
   to the morgue.
 - **`retry_for:`** — retry by elapsed time instead of attempt count. Takes
-  seconds. When set, **the count-based limit is ignored entirely**: the job
+  seconds or a Duration (`48.hours`), stored in the job as Integer seconds. When set, **the count-based limit is ignored entirely**: the job
   keeps retrying until `failed_at + retry_for` is in the past, then exhausts.
   Values above 1,000,000,000 are rejected at enqueue time with an
   `ArgumentError`.
@@ -473,11 +473,12 @@ the dead process's private list, the reaper moves it back to the public queue,
 another worker picks it up, and it kills that one too.
 
 Wurk breaks that loop. Every job recovered from a dead process's private list
-is counted at `super_fetch:recovered:<jid>` (a 72-hour-TTL counter). Once a jid
-has been recovered **3** times, the next recovery is treated as a poison pill:
-the payload is moved to the dead set, a `jobs.poison` statsd counter fires, the
-copy on the public queue is `LREM`'d so it can't run again, and any registered
-poison callbacks are invoked.
+is counted at `super_fetch:recovered:<jid>` (a 72-hour-TTL counter, reset when
+an attempt acks). Once a jid has been recovered **3** times, the next recovery
+(its 4th orphaning) is treated as a poison pill: the reclaim script moves the
+payload from the private list straight into the dead set, so it never reaches
+its public queue, then a `jobs.poison` statsd counter fires, death handlers run,
+and any registered poison callbacks are invoked.
 
 ```ruby
 # config/initializers/wurk.rb
@@ -487,8 +488,10 @@ Wurk::Middleware::PoisonPill.on_poison do |pill|
 end
 ```
 
-Poison-pill kills pass `notify_failure: false`, so **`config.death_handlers` do
-not fire for them** — register `on_poison` if you want to be paged. The Pro
+Poison-pill kills **fire `config.death_handlers`** with a
+`Wurk::Middleware::PoisonPill::Poisoned` exception, so `:death` batch callbacks
+and error services see them like any other exhaustion; `on_poison` is the
+poison-only hook if you want to page on these specifically. The Pro
 `config.super_fetch! { |jobstr, pill| }` callback also fires on every recovery
 (with `pill` nil on a plain recovery, populated on the kill path).
 

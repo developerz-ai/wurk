@@ -275,13 +275,18 @@ class ProcessorTest < Wurk::Test::UnitCase
 
   # --- poison-pill counter (F6) -----------------------------------------
 
+  # What a reclaim leaves behind (Fetcher::OrphanReclaim), without the move.
+  def record_recovery(jid)
+    @pool.with { |c| c.call('INCR', Wurk::Middleware::PoisonPill.counter_key(jid)) }
+  end
+
   # A job that runs to completion must leave no recovery counter behind: the
   # ACK drops `super_fetch:recovered:<jid>` so the next reclaim of that jid
   # starts from one.
   def test_process_one_clears_the_poison_pill_recovery_counter
     klass = define_worker_recording
     payload = enqueue(class: klass.name, args: [])
-    Wurk::Middleware::PoisonPill.track!(Wurk.dump_json(payload), queue: @queue_name)
+    record_recovery(payload['jid'])
 
     assert_equal 1, Wurk::Middleware::PoisonPill.recovery_count(payload['jid'])
 
@@ -298,12 +303,15 @@ class ProcessorTest < Wurk::Test::UnitCase
     klass = define_worker_recording
     payload = enqueue(class: klass.name, args: [])
     json = Wurk.dump_json(payload)
-    3.times { Wurk::Middleware::PoisonPill.track!(json, queue: @queue_name) }
+    3.times { record_recovery(payload['jid']) }
 
     @processor.process_one
     settle_acks
 
-    assert_equal :recovered, Wurk::Middleware::PoisonPill.track!(json, queue: @queue_name)
+    orphan = "#{@public_queue}|other-host|999999|nonce|0"
+    @pool.with { |c| c.call('RPUSH', orphan, json) }
+    Wurk::Fetcher::OrphanReclaim.new(@config).call(orphan, @public_queue, json)
+
     assert_equal 1, Wurk::Middleware::PoisonPill.recovery_count(payload['jid'])
     assert_equal 0, dead_count_for(payload['jid']), 'a job that completed must not be killed as a poison pill'
   end
@@ -314,7 +322,7 @@ class ProcessorTest < Wurk::Test::UnitCase
   def test_failed_job_that_books_a_retry_also_clears_the_counter
     klass = define_worker_raising(RuntimeError, 'boom')
     payload = enqueue(class: klass.name, args: [], retry: true)
-    Wurk::Middleware::PoisonPill.track!(Wurk.dump_json(payload), queue: @queue_name)
+    record_recovery(payload['jid'])
 
     @processor.process_one
     settle_acks
@@ -328,7 +336,7 @@ class ProcessorTest < Wurk::Test::UnitCase
   def test_job_interrupted_mid_perform_keeps_its_poison_pill_counter
     klass = define_worker_blocking
     payload = enqueue(class: klass.name, args: [])
-    Wurk::Middleware::PoisonPill.track!(Wurk.dump_json(payload), queue: @queue_name)
+    record_recovery(payload['jid'])
     @processor.start
     klass.started_latch.pop
     @processor.kill(true)

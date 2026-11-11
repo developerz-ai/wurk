@@ -384,6 +384,10 @@ require_relative 'wurk/api'
 # behavior, so trailing the load order is safe.
 require_relative 'wurk/compat'
 
+# Before anything else of the app's runs: with the real sidekiq gem in the
+# bundle, `Sidekiq::*` is part theirs, part ours, in web and worker alike.
+Wurk::BootChecks.flag_real_sidekiq_gem(Wurk.logger)
+
 # Drop-in parity (#246): stock Sidekiq auto-loads its Rails integration when
 # Rails is present (`lib/sidekiq.rb`: `require "sidekiq/rails" if
 # defined?(Rails::Engine)`). Without the equivalent here, a host that follows

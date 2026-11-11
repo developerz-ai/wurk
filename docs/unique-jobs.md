@@ -421,7 +421,9 @@ for the surrounding gem-by-gem mapping.
 
 ## Gotchas
 
-- `unique!` not called → `unique_for:` is silently ignored. There is no warning.
+- `unique!` not called → `unique_for:` is ignored. Every job-running boot, and
+  `wurk boot-check`, logs a WARN listing the affected classes (only the classes
+  loaded by then).
 - `unique_for` missing on the worker → no lock, silently. Uniqueness is
   opt-in per worker, not global.
 - `perform_async` returning `nil` is the dedup signal. Code that does
