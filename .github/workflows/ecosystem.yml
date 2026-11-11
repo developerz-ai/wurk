@@ -153,6 +153,10 @@ jobs:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # DEVELOPERZ_API_KEY lives only in this environment, whose deployment
+    # branch policy admits main alone: a dispatch from any other ref is refused
+    # before a step runs, so no branch can read the token.
+    environment: sidekiq-release-watcher
     env:
       GH_TOKEN: ${{ github.token }}
       # The secret is read into env ONLY. Every `run:` block below consumes

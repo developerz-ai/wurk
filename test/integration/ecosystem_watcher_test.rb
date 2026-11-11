@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require 'yaml'
+
 require_relative '../test_helper'
 require 'fileutils'
 require 'open3'
@@ -322,6 +324,15 @@ class EcosystemWatcherTest < Wurk::Test::UnitCase
 
   # A scheduled run is the watcher's only real trigger: without the secret it
   # must go red, never pass green having watched nothing.
+  # The token is stored only in the `sidekiq-release-watcher` environment,
+  # whose branch policy admits main alone. Dropping the binding would leave
+  # the job reading an empty secret: every scheduled run fails.
+  def test_watcher_job_runs_in_the_main_only_secret_environment
+    job = YAML.load_file(WORKFLOW).fetch('jobs').fetch('watcher')
+
+    assert_equal 'sidekiq-release-watcher', job['environment']
+  end
+
   def test_missing_api_key_fails_a_scheduled_run
     out, _err, status, gh_called = run_api_key_check('', event: 'schedule')
 
