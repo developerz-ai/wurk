@@ -1,8 +1,10 @@
 import { Show, type JSX } from 'solid-js';
+import type { IconName } from '../icons';
+import Icon from './Icon';
 
 interface PageHeaderProps {
-  /** Font Awesome solid icon class, e.g. `fa-layer-group` (matches the nav). */
-  icon: string;
+  /** The page's icon, e.g. `layer-group` (matches the nav). */
+  icon: IconName;
   title: string;
   summary: string;
   /** Optional right-aligned slot — typically the count badge. */
@@ -15,7 +17,7 @@ export function PageHeader(props: PageHeaderProps) {
   return (
     <div class="page-header">
       <span class="page-header__icon">
-        <i class={`fa-solid ${props.icon}`} />
+        <Icon name={props.icon} />
       </span>
       <div class="page-header__text">
         <h1 class="page-header__title">{props.title}</h1>

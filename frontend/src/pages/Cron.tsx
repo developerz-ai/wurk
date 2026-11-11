@@ -82,7 +82,7 @@ export default function Cron() {
     <Switch>
       <Match when={q.isPending}>
         <div>
-          <PageHeader icon="fa-stopwatch" title={t('nav.cron')} summary={t('summaries.cron')} />
+          <PageHeader icon="stopwatch" title={t('nav.cron')} summary={t('summaries.cron')} />
           <SkeletonTable rows={8} cols={readOnly() ? 6 : 7} />
         </div>
       </Match>
@@ -92,7 +92,7 @@ export default function Cron() {
       <Match when={q.data}>
         {(data) => (
           <div>
-            <PageHeader icon="fa-stopwatch" title={t('nav.cron')} summary={t('summaries.cron')}>
+            <PageHeader icon="stopwatch" title={t('nav.cron')} summary={t('summaries.cron')}>
               <span class="badge badge-muted">{data().length}</span>
             </PageHeader>
 

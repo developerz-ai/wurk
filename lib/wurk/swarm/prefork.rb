@@ -4,7 +4,8 @@ module Wurk
   class Swarm
     # The parent's last memory step before its first fork, shared by every
     # swarm entry point (`wurkswarm` and the railtie's co-hosted swarm): load
-    # what each child would otherwise load for itself, then settle the heap, so
+    # what each child would otherwise load for itself (Wurk's autoloads
+    # included: Wurk.eager_load!), then settle the heap, so
     # the children start on pages they share copy-on-write instead of N private
     # copies. Opens no socket, so it may sit between steps 3 and 4. Its effect
     # is the t=0 shared ratio in bench/rss_soak.rb (`RSS_JOBS=0`).
@@ -19,6 +20,7 @@ module Wurk
       # be a live web process, where a full compaction is a pause its requests
       # would feel. RUBY_DISABLE_WARMUP=1 skips it, as it does `Process.warmup`.
       def run(env = ENV, periodic: nil)
+        Wurk.eager_load!
         require_child_features
         Wurk::Cron.prefork(periodic) if periodic
         warmup unless env['RUBY_DISABLE_WARMUP'] == '1'

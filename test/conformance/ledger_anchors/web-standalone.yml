@@ -8,7 +8,7 @@
   fragment: |-
     Wurk::Queue.include(Wurk::API::Fast::QueueExt)
 - entry: 'Fast Lua API ships free and loads by default'
-  anchor: 'lib/wurk.rb#L370'
+  anchor: 'lib/wurk.rb#L375'
   fragment: |-
     # Pro Fast API: Lua-backed Queue#delete_job / #delete_by_class, mixed into
 - entry: 'Search covers queue LISTs too, with explicit scan bounds'
@@ -100,11 +100,11 @@
     anchors << Wurk::Middleware::Expiry if defined?(Wurk::Middleware::Expiry)
     anchors << Wurk::Limiter::ServerMiddleware if defined?(Wurk::Limiter::ServerMiddleware)
 - entry: 'Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported'
-  anchor: 'lib/wurk/compat.rb#L203'
+  anchor: 'lib/wurk/compat/web.rb#L6'
   fragment: |-
-    Web              = Wurk::Web
+    Web        = Wurk::Web
 - entry: 'Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported'
-  anchor: 'lib/wurk/compat.rb#L57'
+  anchor: 'lib/wurk/compat/web.rb#L14'
   fragment: |-
     Web = Wurk::Web
 - entry: 'Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported'

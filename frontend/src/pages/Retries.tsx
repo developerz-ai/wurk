@@ -73,7 +73,7 @@ export default function Retries() {
 
   return (
     <div>
-      <PageHeader icon="fa-rotate-right" title={t('nav.retries')} summary={t('summaries.retries')}>
+      <PageHeader icon="rotate-right" title={t('nav.retries')} summary={t('summaries.retries')}>
         <Show when={query.data}>{(data) => <span class="badge badge-warning">{formatNumber(data().total)}</span>}</Show>
         <Show when={list.filtered() && list.matching() !== undefined}>
           <span class="badge">{t('common.matching', { n: list.matching()! })}</span>

@@ -1,5 +1,7 @@
 import { type JSX } from 'solid-js';
 import type { SortState } from '../hooks/useSort';
+import type { IconName } from '../icons';
+import Icon from './Icon';
 
 interface SortableThProps {
   label: JSX.Element;
@@ -18,8 +20,8 @@ interface SortableThProps {
 // arrow for the current direction.
 export function SortableTh(props: SortableThProps) {
   const active = () => props.sort.key === props.sortKey;
-  const icon = () =>
-    !active() ? 'fa-sort' : props.sort.dir === 'asc' ? 'fa-arrow-up-short-wide' : 'fa-arrow-down-wide-short';
+  const icon = (): IconName =>
+    !active() ? 'sort' : props.sort.dir === 'asc' ? 'arrow-up-short-wide' : 'arrow-down-wide-short';
 
   return (
     <th
@@ -29,7 +31,7 @@ export function SortableTh(props: SortableThProps) {
     >
       <button type="button" class="th-sortable__btn" onClick={() => props.onSort(props.sortKey)}>
         {props.label}
-        <i class={`fa-solid ${icon()} th-sortable__icon${active() ? ' is-active' : ''}`} aria-hidden="true" />
+        <Icon name={icon()} class={`th-sortable__icon${active() ? ' is-active' : ''}`} />
       </button>
     </th>
   );

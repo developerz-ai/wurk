@@ -1,0 +1,22 @@
+// Inline SVG icons (components/Icon.tsx). The `<i>` reproduces the box the
+// Font Awesome webfont glyph had: `line-height: 1`, a fixed 1.25em width, and
+// the glyph spanning -0.125em..0.875em around the baseline, so swapping the
+// font for SVG moved no pixel. Any rule that sizes the `<i>` (nav rail, page
+// header tile) keeps the glyph at 1em, centred, as the font did.
+.wurk-icon {
+  display: inline-block;
+  width: 1.25em;
+  height: 1em;
+  line-height: 1;
+  text-align: center;
+  vertical-align: -0.125em;
+
+  > svg {
+    display: block;
+    width: auto;
+    height: 1em;
+    margin-inline: auto;
+    overflow: visible;
+    fill: currentColor;
+  }
+}

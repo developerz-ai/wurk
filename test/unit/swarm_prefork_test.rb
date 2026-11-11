@@ -76,6 +76,17 @@ class SwarmPreforkTest < Wurk::Test::UnitCase
     assert(Wurk::Swarm::Prefork::CHILD_FEATURES.all? { |f| $LOADED_FEATURES.any? { |l| l.include?("/#{f}") } })
   end
 
+  # A lazy constant first touched in a child is a private copy in every child,
+  # so the parent loads them all, and before the heap is settled.
+  def test_eager_loads_wurk_before_the_warmup
+    order = []
+    with_singleton(Wurk, :eager_load!, -> { order << :eager_load! }) do
+      with_singleton(Wurk::Swarm::Prefork, :warmup, -> { order << :warmup }) { Wurk::Swarm::Prefork.run({}) }
+    end
+
+    assert_equal %i[eager_load! warmup], order
+  end
+
   def test_warms_up_by_default
     warmed = false
     with_singleton(Wurk::Swarm::Prefork, :warmup, -> { warmed = true }) { Wurk::Swarm::Prefork.run({}) }

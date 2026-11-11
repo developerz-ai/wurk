@@ -5,7 +5,6 @@ require_relative 'middleware/chain'
 require_relative 'capsule'
 require_relative 'pool_checkout'
 require_relative 'context'
-require_relative 'topology'
 require_relative 'cpu_count'
 require_relative 'redis_options'
 require_relative 'keys'
@@ -736,12 +735,12 @@ module Wurk
 
     # Web UI configuration: the authorization hook and read-only mode. Returns
     # the process-wide `Wurk::Web.config` singleton so `config.web.read_only =
-    # true` and the engine middleware share one source of truth. Lazy-requires
-    # the web layer to keep standalone boot lean.
+    # true` and the engine middleware share one source of truth. The web layer
+    # is an autoload (Wurk::LazyLoader), so standalone boot stays lean until this
+    # is called.
     #
     # Spec: docs/target/sidekiq-ent.md §9.2.
     def web
-      require_relative 'web/config'
       Wurk::Web.config
     end
 
@@ -1225,7 +1224,6 @@ module Wurk
     def truthy_setting?(value)
       return !!value unless value.is_a?(String)
 
-      require_relative 'web/config'
       !Wurk::Web::Config::FALSEY_STRINGS.include?(value.strip.downcase)
     end
 

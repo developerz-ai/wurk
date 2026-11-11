@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require_relative '../job_retry'
-require_relative '../encryption'
 
 module Wurk
   module Limiter

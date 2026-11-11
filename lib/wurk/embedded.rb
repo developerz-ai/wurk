@@ -2,7 +2,6 @@
 
 require_relative 'component'
 require_relative 'launcher'
-require_relative 'swarm/test_mode_guard'
 
 module Wurk
   # Embeds Wurk inside an arbitrary Ruby process (Puma, rake task, custom

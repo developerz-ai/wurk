@@ -61,7 +61,7 @@ export default function Scheduled() {
 
   return (
     <div>
-      <PageHeader icon="fa-clock" title={t('nav.scheduled')} summary={t('summaries.scheduled')}>
+      <PageHeader icon="clock" title={t('nav.scheduled')} summary={t('summaries.scheduled')}>
         <Show when={query.data}>{(data) => <span class="badge badge-accent">{formatNumber(data().total)}</span>}</Show>
         <Show when={list.filtered() && list.matching() !== undefined}>
           <span class="badge">{t('common.matching', { n: list.matching()! })}</span>

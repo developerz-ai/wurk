@@ -10,6 +10,7 @@ import { formatBucket, formatDuration, formatNumber, truncate } from '../utils';
 import { timeZone } from '../tz';
 import { basePath } from '../basePath';
 import { getJSON } from '../http';
+import Icon from '../components/Icon';
 
 // Matches Wurk::Api::Serializers.metric_row — processed (every execution,
 // failures included, as Sidekiq counts it), failed, and runtime ms of the
@@ -236,9 +237,9 @@ export default function Metrics() {
 
   return (
     <div class="obs">
-      <PageHeader icon="fa-chart-line" title={t('nav.metrics')} summary={t('summaries.metrics')} />
+      <PageHeader icon="chart-line" title={t('nav.metrics')} summary={t('summaries.metrics')} />
       <div class="obs-toolbar">
-        <span class="obs-toolbar__label"><i class="fa-regular fa-calendar" aria-hidden="true" /> {t('metrics.time_range')}</span>
+        <span class="obs-toolbar__label"><Icon name="calendar" /> {t('metrics.time_range')}</span>
         <div class="obs-seg" role="tablist" aria-label={t('metrics.time_range')}>
           <For each={RANGES}>
             {(r, i) => (
@@ -259,7 +260,7 @@ export default function Metrics() {
         <div class="obs-card obs-metric">
           <div class="obs-metric__head">
             <span class="obs-mono">{t('metrics.total_processed')}</span>
-            <i class="fa-solid fa-circle-check obs-metric__icon" aria-hidden="true" />
+            <Icon name="circle-check" class="obs-metric__icon" />
           </div>
           <span class="obs-metric__value">
             {formatNumber(statsQuery.data?.processed ?? 0)}
@@ -270,7 +271,7 @@ export default function Metrics() {
         <div class="obs-card obs-metric">
           <div class="obs-metric__head">
             <span class="obs-mono">{t('metrics.failed_jobs')}</span>
-            <i class="fa-solid fa-triangle-exclamation obs-metric__icon" aria-hidden="true" />
+            <Icon name="triangle-exclamation" class="obs-metric__icon" />
           </div>
           <span class="obs-metric__value">
             {formatNumber(statsQuery.data?.failed ?? 0)}
@@ -281,7 +282,7 @@ export default function Metrics() {
         <div class="obs-card obs-metric">
           <div class="obs-metric__head">
             <span class="obs-mono">{t('metrics.avg_latency')}</span>
-            <i class="fa-solid fa-stopwatch obs-metric__icon" aria-hidden="true" />
+            <Icon name="stopwatch" class="obs-metric__icon" />
           </div>
           <span class="obs-metric__value">{statsQuery.data ? formatDuration(statsQuery.data.latency) : '—'}</span>
           <span class="obs-metric__sub">{t('metrics.head_of_line')}</span>
@@ -289,7 +290,7 @@ export default function Metrics() {
         <div class="obs-card obs-metric">
           <div class="obs-metric__head">
             <span class="obs-mono">{t('metrics.active_workers')}</span>
-            <i class="fa-solid fa-gears obs-metric__icon" aria-hidden="true" />
+            <Icon name="gears" class="obs-metric__icon" />
           </div>
           <span class="obs-metric__value">{formatNumber(statsQuery.data?.processes ?? 0)}</span>
           <span class="obs-metric__sub">{(statsQuery.data?.processes ?? 0) > 0 ? t('metrics.stable') : t('metrics.no_workers')}</span>

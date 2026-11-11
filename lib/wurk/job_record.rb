@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require 'base64'
-require 'zlib'
 require_relative 'redact'
 
 module Wurk
@@ -90,6 +89,7 @@ module Wurk
       compressed = item['error_backtrace']
       return nil unless compressed
 
+      require 'zlib'
       Wurk.load_json(Zlib.inflate(Base64.decode64(compressed)))
     rescue Zlib::DataError, ArgumentError, ::JSON::ParserError
       nil

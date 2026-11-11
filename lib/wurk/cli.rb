@@ -496,6 +496,7 @@ module Wurk
 
     # What a worker loads only later: every constant, and the routes.
     def boot_check_reach
+      Wurk.eager_load!
       eager_load_rails
       draw_routes
     end

@@ -46,10 +46,10 @@ class CLIBootCheckCommandTest < Wurk::Test::UnitCase
     %i[load_rails_framework preload_bundler_groups boot_application eager_load_application eager_load_rails
        draw_routes].each { |m| @cli.define_singleton_method(m) { order << m } }
 
-    with_no_swarm_or_launcher { assert_equal 0, @cli.run_boot_check }
+    with_no_swarm_or_launcher { recording_eager_load(order) { assert_equal 0, @cli.run_boot_check } }
 
     assert_equal %i[load_rails_framework preload_bundler_groups boot_application eager_load_application
-                    eager_load_rails draw_routes], order
+                    eager_load! eager_load_rails draw_routes], order
     assert_match(/wurk: boot-check \(as wurkswarm parent\);/, @out.string)
     assert_match(/booted as wurkswarm would/, @out.string)
   end
@@ -60,9 +60,9 @@ class CLIBootCheckCommandTest < Wurk::Test::UnitCase
     %i[load_rails_framework preload_bundler_groups boot_application eager_load_application eager_load_rails
        draw_routes].each { |m| @cli.define_singleton_method(m) { order << m } }
 
-    with_no_swarm_or_launcher { assert_equal 0, @cli.run_boot_check }
+    with_no_swarm_or_launcher { recording_eager_load(order) { assert_equal 0, @cli.run_boot_check } }
 
-    assert_equal %i[boot_application eager_load_rails draw_routes], order
+    assert_equal %i[boot_application eager_load! eager_load_rails draw_routes], order
     assert_match(/wurk: boot-check \(as wurk\); 1 process/, @out.string)
     assert_match(/booted as wurk would/, @out.string)
   end
@@ -164,6 +164,15 @@ class CLIBootCheckCommandTest < Wurk::Test::UnitCase
     yield
   ensure
     Wurk::BootChecks.define_singleton_method(:run, original)
+  end
+
+  # Wurk's own lazy constants are part of what a worker reaches only later.
+  def recording_eager_load(order)
+    original = Wurk.method(:eager_load!)
+    Wurk.define_singleton_method(:eager_load!) { order << :eager_load! }
+    yield
+  ensure
+    Wurk.define_singleton_method(:eager_load!, original)
   end
 
   def with_no_swarm_or_launcher

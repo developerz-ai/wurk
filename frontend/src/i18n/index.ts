@@ -1,28 +1,25 @@
 import en from './en.json';
-import es from './es.json';
-import fr from './fr.json';
-import de from './de.json';
-import ptBR from './pt-BR.json';
-import ja from './ja.json';
-import zhCN from './zh-CN.json';
-import ar from './ar.json';
 
 type Translations = typeof en;
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
+type Bundle = DeepPartial<Translations>;
 
+// en is the fallback under every bundle, so it ships in the entry chunk; every
+// other bundle is its own chunk, fetched only by a visitor who renders it.
+//
 // Declaration order is load-bearing: a locale naming only a base subtag ("pt",
 // "zh") resolves to the first bundle declared for that base, so shipping a
 // second regional bundle for an existing base changes what the bare subtag
 // picks. Order deliberately, don't append blindly.
-const LOCALES: Record<string, DeepPartial<Translations>> = {
-  en,
-  es,
-  fr,
-  de,
-  'pt-BR': ptBR,
-  ja,
-  'zh-CN': zhCN,
-  ar,
+const LOCALES: Record<string, () => Promise<{ default: Bundle }>> = {
+  en: () => Promise.resolve({ default: en }),
+  es: () => import('./es.json'),
+  fr: () => import('./fr.json'),
+  de: () => import('./de.json'),
+  'pt-BR': () => import('./pt-BR.json'),
+  ja: () => import('./ja.json'),
+  'zh-CN': () => import('./zh-CN.json'),
+  ar: () => import('./ar.json'),
 };
 
 /** Locale codes with a bundle in this build, in declaration (menu) order. */
@@ -120,7 +117,7 @@ export function applyLocale(loc: string): void {
 
 /**
  * Record an explicit locale pick and reload into it. The reload is deliberate:
- * `merged` resolves once at module scope by design, so no consumer of `t()`
+ * the strings resolve once per page load by design, so no consumer of `t()`
  * has to become reactive to a language change.
  */
 export function setLocale(loc: string): void {
@@ -155,11 +152,11 @@ export function setLocale(loc: string): void {
  * be selected here, against the locale actually rendered, using the same match
  * that chose the bundle underneath it.
  */
-function loadHostOverrides(loc: string): DeepPartial<Translations> {
+function loadHostOverrides(loc: string): Bundle {
   try {
     const el = document.getElementById('wurk-i18n');
     if (!el) return {};
-    const byLocale = JSON.parse(el.textContent ?? '{}') as Record<string, DeepPartial<Translations>>;
+    const byLocale = JSON.parse(el.textContent ?? '{}') as Record<string, Bundle>;
     const key = matchTag(Object.keys(byLocale), loc);
     return key ? (byLocale[key] ?? {}) : {};
   } catch {
@@ -189,9 +186,27 @@ function deepMerge<T extends object>(base: T, override: DeepPartial<T>): T {
 
 export const locale = detectLocale();
 export const dir = directionFor(locale);
-const langKey = bundleFor(locale) ?? 'en';
-const base = deepMerge(en, (LOCALES[langKey] ?? {}) as DeepPartial<typeof en>);
-const merged = deepMerge(base, loadHostOverrides(locale));
+const overrides = loadHostOverrides(locale);
+let merged: Translations = deepMerge(en, overrides);
+
+async function loadBundle(): Promise<void> {
+  const key = bundleFor(locale) ?? 'en';
+  try {
+    const { default: bundle } = await LOCALES[key]();
+    merged = deepMerge(deepMerge(en, bundle), overrides);
+  } catch (err) {
+    // A failed chunk fetch (a deploy swapped the bundle mid-session, a proxy
+    // dropped it) must not blank the dashboard: render in English instead.
+    console.error(`wurk: could not load the "${key}" translations, falling back to English`, err);
+  }
+}
+
+/**
+ * Settles once the rendered locale's strings are in place. Never rejects.
+ * main.tsx renders after it, so no visitor sees a key path or an English
+ * string flash before their own language arrives.
+ */
+export const ready: Promise<void> = loadBundle();
 
 export function t(path: string, vars?: Record<string, string | number>): string {
   const parts = path.split('.');
@@ -208,4 +223,3 @@ export function t(path: string, vars?: Record<string, string | number>): string 
   return node.replace(/\{(\w+)\}/g, (_, k: string) => String(vars[k] ?? k));
 }
 
-export default merged;

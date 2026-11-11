@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require 'zlib'
 require_relative 'component'
 require_relative 'dead_set'
 require_relative 'fetcher/oom_drain'
@@ -337,6 +336,7 @@ module Wurk
     end
 
     def compress_backtrace(backtrace)
+      require 'zlib'
       serialized = Wurk.dump_json(backtrace)
       compressed = ::Zlib::Deflate.deflate(serialized)
       [compressed].pack('m0')

@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require 'zlib'
 require 'stringio'
 require_relative 'keys'
 require_relative 'pool_checkout'
@@ -65,6 +64,7 @@ module Wurk
       end
 
       def gzip(str)
+        require 'zlib'
         io = StringIO.new(+'', 'wb')
         gz = Zlib::GzipWriter.new(io)
         gz.write(str)
@@ -73,6 +73,7 @@ module Wurk
       end
 
       def gunzip(bytes)
+        require 'zlib'
         Zlib::GzipReader.new(StringIO.new(bytes)).read
       end
 

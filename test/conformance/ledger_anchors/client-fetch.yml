@@ -6,7 +6,7 @@
     # lose the connection in the batched phase above — and whatever Redis
 
 - entry: "Immediate plain multi-queue pushes register queues per group"
-  anchor: "lib/wurk/client.rb#L584-L586"
+  anchor: "lib/wurk/client.rb#L583-L585"
   fragment: |-
     def mark_delivered(payloads)
       Thread.current[DELIVERED_KEY]&.concat(payloads)
@@ -30,7 +30,7 @@
     def test_push_bulk_failure_before_second_group_leaves_only_first_queue_registered
 
 - entry: "Reliable fetch is the only mode; no BRPOP"
-  anchor: "lib/wurk/compat.rb#L121"
+  anchor: "lib/wurk/compat.rb#L111"
   fragment: |-
     BasicFetch       = Wurk::Fetcher::Reliable
 

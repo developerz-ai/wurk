@@ -10,6 +10,7 @@ import { SkeletonCards } from '../components/Skeleton';
 import { basePath } from '../basePath';
 import { getJSON, post } from '../http';
 import { notifyError } from '../toast';
+import Icon from '../components/Icon';
 
 interface Process {
   identity: string;
@@ -180,7 +181,7 @@ function HostHeader(props: { group: HostGroup }) {
   return (
     <div style={{ display: 'flex', 'flex-wrap': 'wrap', 'align-items': 'center', gap: '0.75rem', 'margin-bottom': '0.75rem' }}>
       <span style={{ 'font-weight': 600, 'font-size': '15px' }}>
-        <i class="fa-solid fa-server" style={{ color: 'var(--text-muted)', 'margin-right': '0.5rem' }} />
+        <Icon name="server" style={{ color: 'var(--text-muted)', 'margin-right': '0.5rem' }} />
         {props.group.hostname}
       </span>
       <span class="badge badge-muted">
@@ -188,7 +189,7 @@ function HostHeader(props: { group: HostGroup }) {
       </span>
       <Show when={props.group.cpuModel}>
         <span class="badge badge-muted" title={props.group.cpuModel ?? undefined}>
-          <i class="fa-solid fa-microchip" style={{ 'margin-right': '0.35rem' }} />
+          <Icon name="microchip" style={{ 'margin-right': '0.35rem' }} />
           {truncate(props.group.cpuModel, 40)}
         </span>
       </Show>
@@ -200,7 +201,7 @@ function HostHeader(props: { group: HostGroup }) {
           class="badge badge-muted"
           title={ramPct() != null ? `${ramPct()!.toFixed(1)}% ${t('busy.of_total_ram')}` : undefined}
         >
-          <i class="fa-solid fa-memory" style={{ 'margin-right': '0.35rem' }} />
+          <Icon name="memory" style={{ 'margin-right': '0.35rem' }} />
           {formatKb(props.group.rssKb)}
           {props.group.memoryTotalKb ? ` / ${formatKb(props.group.memoryTotalKb)}` : ''}
         </span>
@@ -251,7 +252,7 @@ export default function Busy() {
     <Switch>
       <Match when={query.isPending}>
         <div>
-          <PageHeader icon="fa-gears" title={t('nav.busy')} summary={t('summaries.busy')} />
+          <PageHeader icon="gears" title={t('nav.busy')} summary={t('summaries.busy')} />
           <SkeletonCards count={6} />
         </div>
       </Match>
@@ -261,7 +262,7 @@ export default function Busy() {
       <Match when={query.data}>
         {(data) => (
           <div>
-            <PageHeader icon="fa-gears" title={t('nav.busy')} summary={t('summaries.busy')}>
+            <PageHeader icon="gears" title={t('nav.busy')} summary={t('summaries.busy')}>
               <div style={{ display: 'flex', 'align-items': 'center', gap: '0.6rem' }}>
                 <span class="badge badge-muted">
                   {data().length} {t('dashboard.processes').toLowerCase()}
@@ -324,7 +325,7 @@ export default function Busy() {
                                   <Show when={isRecent}><span class="live-dot" title={t('busy.heartbeat_ok')} /></Show>
                                   <Show when={proc.leader}>
                                     <span class="badge badge-accent" title={t('busy.leader_title')}>
-                                      <i class="fa-solid fa-crown" style={{ 'margin-right': '0.3rem' }} />
+                                      <Icon name="crown" style={{ 'margin-right': '0.3rem' }} />
                                       {t('busy.leader')}
                                     </span>
                                   </Show>

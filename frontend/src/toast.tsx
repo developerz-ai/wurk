@@ -1,6 +1,8 @@
 import { createSignal, For } from 'solid-js';
 import { RequestError } from './http';
 import { t } from './i18n';
+import Icon from './components/Icon';
+import type { IconName } from './icons';
 
 export type ToastKind = 'error' | 'success';
 
@@ -65,9 +67,9 @@ export function notifyError(err: unknown): void {
   pushToast(t(key), 'error');
 }
 
-const ICON: Record<ToastKind, string> = {
-  error: 'fa-circle-exclamation',
-  success: 'fa-circle-check',
+const ICON: Record<ToastKind, IconName> = {
+  error: 'circle-exclamation',
+  success: 'circle-check',
 };
 
 // Fixed, bottom-anchored stack rendered once in the App shell. Each toast is a
@@ -78,7 +80,7 @@ export function Toasts() {
       <For each={toasts()}>
         {(toast) => (
           <div class={`toast toast--${toast.kind}`} role="alert">
-            <i class={`fa-solid ${ICON[toast.kind]} toast__icon`} aria-hidden="true" />
+            <Icon name={ICON[toast.kind]} class="toast__icon" />
             <span class="toast__msg">{toast.message}</span>
             <button
               type="button"
@@ -86,7 +88,7 @@ export function Toasts() {
               aria-label={t('toast.dismiss')}
               onClick={() => dismissToast(toast.id)}
             >
-              <i class="fa-solid fa-xmark" aria-hidden="true" />
+              <Icon name="xmark" />
             </button>
           </div>
         )}

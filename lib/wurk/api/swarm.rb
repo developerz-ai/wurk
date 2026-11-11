@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require_relative '../web/enterprise'
 require_relative 'page'
 require_relative 'problem'
 require_relative 'response'

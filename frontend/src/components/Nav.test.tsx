@@ -57,4 +57,50 @@ describe('nav rail', () => {
       NAV_PANES.map((pane) => paneLabel(pane)),
     );
   });
+
+  // Non-en strings arrive in a lazy chunk after the entry graph has run
+  // (main.tsx renders once `ready` settles), so a label resolved at import
+  // time would be stuck in English. The gate holds the German chunk until Nav
+  // and everything it imports have evaluated — the order a browser runs them.
+  it('labels the rail in a lazily loaded locale', async () => {
+    vi.stubGlobal('fetch', mockMeta());
+    localStorage.setItem('wurk.locale', 'de');
+    const de = (await import('../i18n/de.json')).default;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    vi.doMock('../i18n/de.json', async () => {
+      await gate;
+      return { default: de };
+    });
+    try {
+      vi.resetModules();
+      const { render: renderFresh } = await import('@solidjs/testing-library');
+      const router = await import('@solidjs/router');
+      const query = await import('@tanstack/solid-query');
+      const { default: FreshNav } = await import('./Nav');
+      const i18n = await import('../i18n');
+      release();
+      await i18n.ready;
+
+      const history = router.createMemoryHistory();
+      history.set({ value: '/', replace: true });
+      const { container } = renderFresh(() => (
+        <query.QueryClientProvider client={new query.QueryClient()}>
+          <router.MemoryRouter
+            history={history}
+            root={() => <FreshNav open={false} onClose={() => {}} collapsed={false} onToggleCollapse={() => {}} />}
+          >
+            <router.Route path="*" component={() => null} />
+          </router.MemoryRouter>
+        </query.QueryClientProvider>
+      ));
+
+      const labels = [...container.querySelectorAll('ul li a.wurk-navlink')].map((link) => link.textContent?.trim());
+      expect(labels).toContain(de.nav.queues);
+      expect(labels).not.toContain('Queues');
+    } finally {
+      vi.doUnmock('../i18n/de.json');
+      localStorage.removeItem('wurk.locale');
+    }
+  });
 });

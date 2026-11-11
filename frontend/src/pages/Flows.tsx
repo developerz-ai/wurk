@@ -72,7 +72,7 @@ export default function Flows() {
     <Switch>
       <Match when={q.isPending}>
         <div>
-          <PageHeader icon="fa-diagram-project" title={t('nav.flows')} summary={t('summaries.flows')} />
+          <PageHeader icon="diagram-project" title={t('nav.flows')} summary={t('summaries.flows')} />
           <SkeletonTable rows={8} cols={7} />
         </div>
       </Match>
@@ -82,7 +82,7 @@ export default function Flows() {
       <Match when={q.data}>
         {(data) => (
           <div>
-            <PageHeader icon="fa-diagram-project" title={t('nav.flows')} summary={t('summaries.flows')}>
+            <PageHeader icon="diagram-project" title={t('nav.flows')} summary={t('summaries.flows')}>
               <span class="badge badge-accent">{formatNumber(data().total)}</span>
             </PageHeader>
 

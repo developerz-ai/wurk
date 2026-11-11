@@ -131,7 +131,7 @@
   fragment: |-
     rescue_from(*::Wurk::Configuration::REDIS_ERROR_CLASSES) { |ex| render_redis_unavailable(ex) }
 - entry: "Queue job-delete takes `jid`, not the spec's `key_val`"
-  anchor: "lib/wurk/configuration.rb#L120"
+  anchor: "lib/wurk/configuration.rb#L119"
   fragment: |-
     REDIS_ERROR_CLASSES = [RedisClient::Error, ConnectionPool::TimeoutError].freeze
 - entry: "Queue job-delete takes `jid`, not the spec's `key_val`"

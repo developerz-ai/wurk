@@ -5,6 +5,9 @@
 # end of this file when Rails is present (drop-in parity, #246), and stay
 # unloaded otherwise so a no-Rails boot pulls in zero Rails code.
 
+# Client tier only; the server and on-demand tiers are autoloads (LazyLoader),
+# registered first so any file below may name them.
+require_relative 'wurk/lazy_loader'
 require_relative 'wurk/errors'
 require_relative 'wurk/version'
 require_relative 'wurk/keys'
@@ -31,8 +34,6 @@ require_relative 'wurk/job'
 require_relative 'wurk/job/options'
 require_relative 'wurk/queues'
 require_relative 'wurk/testing'
-require_relative 'wurk/iterable_job'
-require_relative 'wurk/iterable_job_query'
 require_relative 'wurk/job_retry'
 require_relative 'wurk/job_record'
 require_relative 'wurk/queue'
@@ -44,41 +45,43 @@ require_relative 'wurk/dead_set'
 require_relative 'wurk/stats'
 require_relative 'wurk/process_set'
 require_relative 'wurk/work_set'
-require_relative 'wurk/profiler'
-require_relative 'wurk/profile_set'
-require_relative 'wurk/heartbeat'
 require_relative 'wurk/fetcher'
 require_relative 'wurk/fetcher/reliable'
-require_relative 'wurk/processor'
-require_relative 'wurk/manager'
 require_relative 'wurk/lua'
-require_relative 'wurk/scheduled'
-require_relative 'wurk/launcher'
-require_relative 'wurk/cli'
-require_relative 'wurk/embedded'
-require_relative 'wurk/swarm'
-require_relative 'wurk/topology'
+require_relative 'wurk/processor'
+require_relative 'wurk/rails_reloader'
+require_relative 'wurk/boot_checks'
 require_relative 'wurk/batch'
 require_relative 'wurk/batch/status'
 require_relative 'wurk/batch_set'
-require_relative 'wurk/flow'
-require_relative 'wurk/flow_set'
 require_relative 'wurk/limiter'
-require_relative 'wurk/cron'
-require_relative 'wurk/leader'
-require_relative 'wurk/history'
 require_relative 'wurk/unique'
 require_relative 'wurk/debounce'
 require_relative 'wurk/throttle'
 require_relative 'wurk/queue_slot'
-require_relative 'wurk/encryption'
 require_relative 'wurk/status'
 require_relative 'wurk/metrics'
 require_relative 'wurk/metrics/statsd'
 require_relative 'wurk/metrics/history'
-require_relative 'wurk/metrics/query'
-require_relative 'wurk/web'
-require_relative 'wurk/deploy'
+
+# Lazy constants nested in client-tier namespaces, which exist only from here.
+Wurk::LazyLoader.register(Wurk::Job, Iterable: 'iterable_job')
+Wurk::LazyLoader.register(
+  Wurk::Metrics,
+  Query: 'metrics/query', DashboardSeries: 'metrics/dashboard_series', Rollup: 'metrics/rollup',
+  QueueRollup: 'metrics/queue_rollup', Flusher: 'metrics/flusher', Prometheus: 'metrics/prometheus'
+)
+Wurk::LazyLoader.register(
+  Wurk::Fetcher,
+  Reaper: 'fetcher/reaper', OrphanReclaim: 'fetcher/orphan_reclaim', SelfReconcile: 'fetcher/self_reconcile',
+  OrphanGrace: 'fetcher/orphan_grace', PrivateListKey: 'fetcher/private_list_key',
+  UnparseableKeys: 'fetcher/unparseable_keys'
+)
+Wurk::LazyLoader.register(
+  Wurk::Limiter,
+  Base: 'limiter/base', Concurrent: 'limiter/concurrent', Bucket: 'limiter/bucket', Window: 'limiter/window',
+  Leaky: 'limiter/leaky', Points: 'limiter/points', Unlimited: 'limiter/unlimited'
+)
 
 require 'json'
 
@@ -128,6 +131,13 @@ module Wurk
 
     def configuration
       @configuration ||= Configuration.new
+    end
+
+    # Loads every lazy constant (LazyLoader): the server tier, the on-demand
+    # tier and their Sidekiq aliases. Swarm::Prefork calls it before the first
+    # fork, so no child loads a file of its own. Idempotent.
+    def eager_load!
+      LazyLoader.eager_load!
     end
     alias default_configuration configuration
 
@@ -306,11 +316,6 @@ Wurk.configuration.client_middleware.prepend(Wurk::Collapse::ClientMiddleware)
 # batch's `yield` and gets counted as a batch success on the way out.
 # Spec: docs/target/sidekiq-pro.md §7.
 require_relative 'wurk/middleware/expiry'
-
-# Health probe HTTP server — opt-in via `config.health_check(port:)`. Loaded
-# at top level so the constants resolve in Launcher#build_health_server even
-# in standalone (no-Rails) boot.
-require_relative 'wurk/health'
 
 # Poison-pill detection — orphan recovery counter + dead set on threshold.
 # Spec: docs/target/sidekiq-pro.md §3.2.

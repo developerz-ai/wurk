@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require_relative 'iterable_job'
 require_relative 'job_util'
 require_relative 'lua'
 require_relative 'status'

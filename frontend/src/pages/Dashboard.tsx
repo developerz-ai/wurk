@@ -11,6 +11,7 @@ import { formatBucket, formatDuration } from '../utils';
 import { timeZone } from '../tz';
 import { basePath } from '../basePath';
 import { getJSON } from '../http';
+import Icon from '../components/Icon';
 
 interface StatsData {
   processed: number;
@@ -127,7 +128,7 @@ export default function Dashboard() {
   // lost its heading in the first place. A component rather than a shared element:
   // each branch mounts its own node instead of moving one between them.
   const Header = () => (
-    <PageHeader icon="fa-gauge-high" title={t('nav.dashboard')} summary={t('summaries.dashboard')} />
+    <PageHeader icon="gauge-high" title={t('nav.dashboard')} summary={t('summaries.dashboard')} />
   );
 
   return (
@@ -159,46 +160,46 @@ export default function Dashboard() {
               <A class="obs-card obs-metric obs-card--link" href="/metrics">
                 <div class="obs-metric__head">
                   <span class="obs-mono">{t('dashboard.processed')}</span>
-                  <i class="fa-solid fa-circle-check obs-metric__icon" aria-hidden="true" />
+                  <Icon name="circle-check" class="obs-metric__icon" />
                 </div>
                 <span class="obs-metric__value">
                   <AnimatedNumber value={s().processed} />
                 </span>
                 <DeltaSub pct={hourlyDeltaPct(fullSeries(), 'processed')} goodWhenUp />
-                <i class="fa-solid fa-arrow-right obs-card__go" aria-hidden="true" />
+                <Icon name="arrow-right" class="obs-card__go" />
               </A>
               <A class="obs-card obs-metric obs-card--link" href="/retries">
                 <div class="obs-metric__head">
                   <span class="obs-mono">{t('dashboard.failed')}</span>
-                  <i class="fa-solid fa-triangle-exclamation obs-metric__icon" aria-hidden="true" />
+                  <Icon name="triangle-exclamation" class="obs-metric__icon" />
                 </div>
                 <span class="obs-metric__value">
                   <AnimatedNumber value={s().failed} />
                 </span>
                 <DeltaSub pct={hourlyDeltaPct(fullSeries(), 'failed')} goodWhenUp={false} />
-                <i class="fa-solid fa-arrow-right obs-card__go" aria-hidden="true" />
+                <Icon name="arrow-right" class="obs-card__go" />
               </A>
               <A class="obs-card obs-metric obs-card--link" href="/dead">
                 <div class="obs-metric__head">
                   <span class="obs-mono">{t('dashboard.expired')}</span>
-                  <i class="fa-solid fa-ban obs-metric__icon" aria-hidden="true" />
+                  <Icon name="ban" class="obs-metric__icon" />
                 </div>
                 <span class="obs-metric__value">
                   <AnimatedNumber value={s().expired} />
                 </span>
                 <span class="obs-metric__sub">{s().expired === 0 ? t('dashboard.stable_threshold') : t('dashboard.above_threshold')}</span>
-                <i class="fa-solid fa-arrow-right obs-card__go" aria-hidden="true" />
+                <Icon name="arrow-right" class="obs-card__go" />
               </A>
               <A class="obs-card obs-metric obs-card--link" href="/busy">
                 <div class="obs-metric__head">
                   <span class="obs-mono">{t('dashboard.busy')}</span>
-                  <i class="fa-solid fa-spinner obs-metric__icon" aria-hidden="true" />
+                  <Icon name="spinner" class="obs-metric__icon" />
                 </div>
                 <span class="obs-metric__value">
                   <AnimatedNumber value={s().busy} />
                 </span>
                 <span class="obs-metric__sub">{s().busy === 0 ? t('dashboard.system_idle') : t('dashboard.processing')}</span>
-                <i class="fa-solid fa-arrow-right obs-card__go" aria-hidden="true" />
+                <Icon name="arrow-right" class="obs-card__go" />
               </A>
             </div>
 
@@ -259,28 +260,28 @@ export default function Dashboard() {
                 <span class="obs-stat__value">
                   <AnimatedNumber value={s().enqueued} />
                 </span>
-                <i class="fa-solid fa-arrow-right obs-card__go" aria-hidden="true" />
+                <Icon name="arrow-right" class="obs-card__go" />
               </A>
               <A class="obs-card obs-stat obs-card--link" href="/retries">
                 <span class="obs-mono">{t('dashboard.retries')}</span>
                 <span class="obs-stat__value">
                   <AnimatedNumber value={s().retries} />
                 </span>
-                <i class="fa-solid fa-arrow-right obs-card__go" aria-hidden="true" />
+                <Icon name="arrow-right" class="obs-card__go" />
               </A>
               <A class="obs-card obs-stat obs-card--link" href="/scheduled">
                 <span class="obs-mono">{t('dashboard.scheduled')}</span>
                 <span class="obs-stat__value">
                   <AnimatedNumber value={s().scheduled} />
                 </span>
-                <i class="fa-solid fa-arrow-right obs-card__go" aria-hidden="true" />
+                <Icon name="arrow-right" class="obs-card__go" />
               </A>
               <A class="obs-card obs-stat obs-card--link" href="/dead">
                 <span class="obs-mono">{t('dashboard.dead')}</span>
                 <span class="obs-stat__value">
                   <AnimatedNumber value={s().dead} />
                 </span>
-                <i class="fa-solid fa-arrow-right obs-card__go" aria-hidden="true" />
+                <Icon name="arrow-right" class="obs-card__go" />
               </A>
             </div>
 
@@ -288,7 +289,7 @@ export default function Dashboard() {
               <div class="obs-table__head">
                 <h2 class="obs-table__title">{t('table.queues')}</h2>
                 <A class="obs-table__link" href="/queues">
-                  View All <i class="fa-solid fa-arrow-right" aria-hidden="true" />
+                  View All <Icon name="arrow-right" />
                 </A>
               </div>
               <Show
@@ -330,15 +331,15 @@ export default function Dashboard() {
             </div>
 
             <div class="obs-card obs-cta">
-              <span class="obs-cta__icon"><i class="fa-solid fa-bolt" aria-hidden="true" /></span>
+              <span class="obs-cta__icon"><Icon name="bolt" /></span>
               <h2 class="obs-cta__title">{t('dashboard.strapline')}</h2>
               <p class="obs-cta__text">{t('dashboard.tagline')}</p>
               <div class="obs-cta__actions">
                 <a class="obs-btn obs-btn--primary" href="https://developerz-ai.github.io/wurk/" target="_blank" rel="noreferrer">
-                  <i class="fa-solid fa-download" aria-hidden="true" /> {t('dashboard.install')}
+                  <Icon name="download" /> {t('dashboard.install')}
                 </a>
                 <a class="obs-btn obs-btn--ghost" href="https://github.com/developerz-ai/wurk/wiki" target="_blank" rel="noreferrer">
-                  <i class="fa-solid fa-book" aria-hidden="true" /> {t('dashboard.docs')}
+                  <Icon name="book" /> {t('dashboard.docs')}
                 </a>
               </div>
             </div>

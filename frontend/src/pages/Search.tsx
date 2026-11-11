@@ -8,6 +8,7 @@ import { SkeletonTable } from '../components/Skeleton';
 import { relativeTime, truncate, hoverTime, formatArgs } from '../utils';
 import { basePath } from '../basePath';
 import { getJSON } from '../http';
+import Icon from '../components/Icon';
 
 type HitKind = 'queue' | 'retry' | 'scheduled' | 'dead';
 
@@ -55,7 +56,7 @@ function EmptyState(props: { suggestions: () => string[]; onPick: (v: string) =>
   return (
     <div class="search-empty">
       <div class="search-empty__icon">
-        <i class="fa-solid fa-magnifying-glass" />
+        <Icon name="magnifying-glass" />
       </div>
       <p class="search-empty__title">{t('search.emptyTitle')}</p>
       <p class="search-empty__hint">{t('search.emptyHint')}</p>
@@ -148,7 +149,7 @@ export default function Search() {
 
   return (
     <div>
-      <PageHeader icon="fa-magnifying-glass" title={t('nav.search')} summary={t('summaries.search')} />
+      <PageHeader icon="magnifying-glass" title={t('nav.search')} summary={t('summaries.search')} />
 
       <form
         onSubmit={(e) => {
@@ -181,7 +182,7 @@ export default function Search() {
               <>
                 <Show when={data().truncated}>
                   <div class="search-truncated" role="status">
-                    <i class="fa-solid fa-triangle-exclamation" aria-hidden="true" />
+                    <Icon name="triangle-exclamation" />
                     <span>{t('search.truncated')}</span>
                   </div>
                 </Show>

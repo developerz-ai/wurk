@@ -332,6 +332,7 @@ describe('resolved bundle', () => {
     mountRoot('pt');
     vi.resetModules();
     const mod = await import('./index');
+    await mod.ready;
     expect(mod.locale).toBe('pt');
     expect(mod.t('nav.dashboard')).toBe('Painel');
   });
@@ -340,6 +341,7 @@ describe('resolved bundle', () => {
     mountRoot('es-419');
     vi.resetModules();
     const mod = await import('./index');
+    await mod.ready;
     expect(mod.t('nav.dashboard')).toBe('Panel');
   });
 
@@ -349,9 +351,31 @@ describe('resolved bundle', () => {
     mountRoot('he');
     vi.resetModules();
     const mod = await import('./index');
+    await mod.ready;
     expect(mod.locale).toBe('he');
     expect(mod.dir).toBe('rtl');
     expect(mod.t('nav.dashboard')).toBe('Dashboard');
+  });
+
+  // Non-en bundles are lazy chunks. A failed fetch must still settle `ready`
+  // (main.tsx renders after it) and leave English, not key paths, on screen.
+  it('falls back to English when the bundle chunk fails to load', async () => {
+    mountRoot('de');
+    vi.doMock('./de.json', () => {
+      throw new Error('chunk fetch failed');
+    });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      vi.resetModules();
+      const mod = await import('./index');
+      await expect(mod.ready).resolves.toBeUndefined();
+      expect(mod.locale).toBe('de');
+      expect(mod.t('nav.dashboard')).toBe('Dashboard');
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('"de"'), expect.any(Error));
+    } finally {
+      vi.doUnmock('./de.json');
+      error.mockRestore();
+    }
   });
 });
 
@@ -383,6 +407,7 @@ describe('host overrides', () => {
     // the script tag present.
     vi.resetModules();
     const mod = await import('./index');
+    await mod.ready;
     expect(mod.t('nav.dashboard')).toBe('Kontrollzentrum');
     expect(mod.t('nav.queues')).toBe(de.nav.queues);
   });
@@ -393,6 +418,7 @@ describe('host overrides', () => {
 
     vi.resetModules();
     const mod = await import('./index');
+    await mod.ready;
     expect(mod.t('nav.dashboard')).toBe('Centro de Control');
   });
 
@@ -402,6 +428,7 @@ describe('host overrides', () => {
 
     vi.resetModules();
     const mod = await import('./index');
+    await mod.ready;
     expect(mod.t('nav.dashboard')).toBe(de.nav.dashboard);
   });
 
@@ -413,6 +440,7 @@ describe('host overrides', () => {
 
     vi.resetModules();
     const mod = await import('./index');
+    await mod.ready;
     expect(mod.dir).toBe('rtl');
     expect(mod.t('nav.dashboard')).toBe('לוח בקרה');
     expect(mod.t('nav.queues')).toBe('Queues'); // untranslated keys still fall back to en
@@ -424,6 +452,7 @@ describe('host overrides', () => {
 
     vi.resetModules();
     const mod = await import('./index');
+    await mod.ready;
     expect(mod.t('nav.dashboard')).toBe(de.nav.dashboard);
   });
 });

@@ -10,6 +10,7 @@ import Nav from './components/Nav';
 import { PageSkeleton } from './components/Skeleton';
 import ErrorBoundary from './components/ErrorBoundary';
 import { Toasts } from './toast';
+import Icon from './components/Icon';
 
 // Each page is a lazy chunk: the initial load ships only the shell + landing
 // page, and every other tab streams in on navigation behind the Suspense
@@ -127,7 +128,7 @@ function Layout(props: ParentProps) {
           onClick={() => setNavOpen((o) => !o)}
           aria-label={t('nav.toggle')}
         >
-          <i class="fa-solid fa-bars" />
+          <Icon name="bars" />
         </button>
 
         <main

@@ -3,6 +3,7 @@
 require_relative '../test_helper'
 require 'base64'
 require 'zlib'
+require 'open3'
 require 'securerandom'
 
 # Drives Wurk::JobRecord shape (parsing, ActiveJob unwrap, error backtrace
@@ -181,6 +182,21 @@ class JobRecordTest < Wurk::Test::UnitCase
     record = Wurk::JobRecord.new(base_item.merge('error_backtrace' => compressed), @qname)
 
     assert_equal bt, record.error_backtrace
+  end
+
+  # zlib is required on first decode, not by `require "wurk"`: an enqueue-only
+  # process never loads it. A fresh interpreter, since this one already has it.
+  def test_error_backtrace_loads_zlib_on_first_use
+    script = <<~RUBY
+      require 'wurk'
+      loaded_at_boot = defined?(::Zlib) ? 'yes' : 'no'
+      rec = Wurk::JobRecord.new({ 'class' => 'J', 'error_backtrace' => 'eJyLVkrLz1fSUUpKLFKKBQAbWAPm' })
+      print loaded_at_boot, ' ', rec.error_backtrace.inspect
+    RUBY
+    out, status = Open3.capture2e({ 'COVERAGE' => nil }, 'bundle', 'exec', 'ruby', '-Ilib', '-e', script)
+
+    assert_predicate status, :success?, out
+    assert_equal 'no ["foo", "bar"]', out
   end
 
   def test_error_backtrace_returns_nil_on_malformed
