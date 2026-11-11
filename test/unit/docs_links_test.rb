@@ -16,7 +16,7 @@ require 'tmpdir'
 # what gets fixed, and this is what keeps them fixed.
 #
 # The scan covers docs/*.md and the nested trees under docs/idea, docs/target,
-# docs/wiki and docs/site: a broken link in a nested doc breaks exactly as
+# docs/wiki, docs/site and docs/changelog: a broken link in a nested doc breaks exactly as
 # silently as one at the top level, and a tree nobody scans is a tree nobody
 # checks. A relative link resolves against the directory of the document that
 # holds it — `../benchmarks.md` under docs/idea/ is docs/benchmarks.md — and a
@@ -31,12 +31,12 @@ class DocsLinksTest < Minitest::Test
   DOCS = File.join(ROOT, 'docs')
 
   # The nested trees scanned alongside docs/*.md.
-  NESTED_TREES = %w[idea target wiki site].freeze
+  NESTED_TREES = %w[idea target wiki site changelog].freeze
 
   # The trees the scan must cover, spelled out here instead of read back from
   # NESTED_TREES: a test that iterates the constant it is checking cannot fail
   # when a name is dropped from it.
-  EXPECTED_TREES = %w[idea target wiki site].freeze
+  EXPECTED_TREES = %w[idea target wiki site changelog].freeze
 
   # Inline links only: [text](target). Reference-style links and bare URLs are
   # not used in these docs.

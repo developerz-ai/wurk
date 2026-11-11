@@ -177,7 +177,7 @@ therefore unchanged and still the number to quote.
   commands per job are. [`Wurk::CommandBuilder`](../lib/wurk/command_builder.rb)
   short-circuits that case and hands anything else (a Hash to splice, a Symbol
   or number to stringify, kwargs) straight to redis-client's own builder, so the
-  semantics have exactly one implementation. The [1.7.0 release notes](../CHANGELOG.md#170---2026-08-10)
+  semantics have exactly one implementation. The [1.7.0 release notes](changelog/1.7.0.md)
   report **~2.1µs → ~0.48µs per command**, a historical measurement, not a new
   timing run here. Reproduce with `bin/rake bench:command_builder`. The ACK's
   `LREM` count is a pre-stringified `'1'` for the same reason — one Integer

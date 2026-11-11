@@ -35,9 +35,9 @@ module ReleaseHelpers
 
   CI_ONLY_MESSAGE = <<~MSG
     ✗ Releases are not cut from a workstation.
-      A release IS merging a lib/wurk/version.rb bump (plus its CHANGELOG.md
-      section) to main: release.yml then gates, publishes the gem, and cuts the
-      tag + GitHub Release itself. The tag is an output, never an input.
+      A release IS merging a lib/wurk/version.rb bump (plus its
+      docs/changelog/<version>.md notes) to main: release.yml then gates,
+      publishes the gem, and cuts the tag + GitHub Release itself. The tag is an output, never an input.
       See RELEASE.md ("Cutting a release").
   MSG
 
@@ -92,10 +92,22 @@ module ReleaseHelpers
     abort "release:check ✗ releases publish only from refs/heads/main (running on #{ref})"
   end
 
-  def changelog_has_version!(changelog, version)
-    return if changelog.match?(/^## \[#{Regexp.escape(version)}\]/)
+  # The notes file is what release.yml lifts into the GitHub Release
+  # (bin/changelog-section) after the gem is already pushed, so a missing or
+  # empty one has to fail here, before anything publishes.
+  def changelog_has_version!(root, version)
+    notes = File.join('docs', 'changelog', "#{version}.md")
+    path = File.join(root, notes)
+    unless File.file?(path)
+      abort "release:check ✗ #{notes} is missing: `git mv docs/changelog/unreleased.md #{notes}`, " \
+            "title it `# #{version} — YYYY-MM-DD`, and start a new docs/changelog/unreleased.md"
+    end
+    if File.read(path).sub(/\A# [^\n]*\n/, '').strip.empty?
+      abort "release:check ✗ #{notes} has no notes under its title"
+    end
+    return if File.read(File.join(root, 'CHANGELOG.md')).match?(/^## \[#{Regexp.escape(version)}\] - /)
 
-    abort "release:check ✗ CHANGELOG.md has no `## [#{version}]` section matching Wurk::VERSION"
+    abort "release:check ✗ CHANGELOG.md has no `## [#{version}] - YYYY-MM-DD` index entry for Wurk::VERSION"
   end
 
   # Every release bump must also advance the [Unreleased] compare link; 1.7.4

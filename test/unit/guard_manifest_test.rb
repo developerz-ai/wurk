@@ -42,7 +42,12 @@ class GuardManifestTest < Minitest::Test
 
   # Reads a doc but boots the dummy app, which the guards job does not build. The full
   # run on main still covers it, so a docs-only PR could only break it there.
-  EXEMPT = { 'test/engine/api_mutations_test.rb' => 'needs the dummy app' }.freeze
+  # release_helpers_test.rb builds its CHANGELOG.md and docs/changelog/ in a tmpdir and
+  # reads no checked-in doc, so a docs-only PR cannot break it.
+  EXEMPT = {
+    'test/engine/api_mutations_test.rb' => 'needs the dummy app',
+    'test/unit/release_helpers_test.rb' => 'writes its docs in a tmpdir'
+  }.freeze
 
   def test_a_listed_file_that_does_not_exist_is_an_error_not_a_smaller_guard
     Dir.mktmpdir('guards') do |dir|

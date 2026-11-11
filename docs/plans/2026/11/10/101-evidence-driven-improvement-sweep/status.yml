@@ -4,18 +4,18 @@ status: in_progress        # not_started | in_progress | blocked | complete | su
 created_by: sebi
 worked_by: "sebi (Claude Code)"
 owner: sebi
-percent: 0
-current_focus: "queue after wave 1: (a) DX PR (bin/redis, hooks, /plan-exec, U12 claim), (b) CHANGELOG split: CHANGELOG.md index + docs/changelog/<version>.md + unreleased.md, release lane (bin/changelog-section, tasks/release_helpers.rb, release.yml, .dz briefs, RELEASE.md, feature.md) updated, owner request 2026-11-10. wave 1 PR: 02 R1/R2/R6, 03 G1-G4+G10, 01 C2-C9, 12 T3/T6, 102 10-S1 (plan of record; 102 unique rows folded in)"
+percent: 12
+current_focus: "in flight: CHANGELOG split: CHANGELOG.md index + docs/changelog/<version>.md + unreleased.md, release lane (bin/changelog-section, tasks/release_helpers.rb, release.yml, .dz briefs, RELEASE.md, feature.md) updated, owner request 2026-11-10. wave 1 PR: 02 R1/R2/R6, 03 G1-G4+G10, 01 C2-C9, 12 T3/T6, 102 10-S1 (plan of record; 102 unique rows folded in)"
 slices:
   - file: 01-ci-green-doc-truth.md
-    status: not_started
-    percent: 0
+    status: in_progress
+    percent: 80
   - file: 02-reclaim-correctness.md
-    status: not_started
-    percent: 0
+    status: in_progress
+    percent: 40
   - file: 03-boot-guards-preflight.md
-    status: not_started
-    percent: 0
+    status: in_progress
+    percent: 35
   - file: 04-drop-in-surface.md
     status: not_started
     percent: 0
@@ -41,8 +41,8 @@ slices:
     status: not_started
     percent: 0
   - file: 12-proof-harness.md
-    status: not_started
-    percent: 0
+    status: in_progress
+    percent: 15
   - file: 13-human-decisions.md
     status: not_started
     percent: 0
@@ -80,6 +80,7 @@ decisions:
     by: sebi (owner, in-session instruction)
     decision: "Public surfaces (README, docs/site/llms.txt, docs/site/index.html) may state that teams running billions of jobs a month on Wurk in production recommend it, labelled user-reported. Supersedes audit 2026-10-04 H8/R11 for user-reported volume only; published throughput still needs docs/benchmarks.md numbers (12 T1 soak). Guard: test/unit/forbidden_claims_test.rb SCALE_SOURCE."
 evidence:
+  - "wave 1: PR #907 merged (ba211f1) - 02 R1+R2, 03 G1-G4+G10, 01 C3-C8, 102-10 S1, 12 T3+T6, unique/retry_for/timeout Durations, bin/redis; follow-up #908 (death handlers on lost reclaim reply)."
   - "01 C9: closed invalid - `# rubocop:disable-next` is a valid directive at pinned rubocop 1.92.2; a disable/enable pair trips Style/DirectiveScope."
   - "03 G3 follow-ups: no per-child 'child i/N' role line (needs lib/wurk/swarm/child_boot.rb); BootChecks.redis_pool_size duplicates private Capsule#main_pool_size; boot-check still logs the topology 'forking N children' line from Configuration#default_topology."
   - "C1: PR #901 merged (python-client pinned to ubuntu-24.04)"

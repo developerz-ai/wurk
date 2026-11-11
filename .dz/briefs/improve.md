@@ -66,7 +66,7 @@ watcher or turn the check back into a green skip.
 One pull request per improvement, small and reviewable, titled with what it changes. `bin/check`
 passes locally first (it needs Redis). The body gives the evidence: the failing run or log, the
 before/after `bin/bench-compare` table, or the test that failed before the fix. User-visible changes
-get a CHANGELOG `## [Unreleased]` entry.
+get a line in `docs/changelog/unreleased.md`.
 
 Never bump `lib/wurk/version.rb` here: the `release-due` checkup decides releases. A breaking change
 (`escalate.ask_before_acting: [breaking_change]`) is never merged by this lane: open the PR or the

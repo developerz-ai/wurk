@@ -74,12 +74,40 @@ class ReleaseHelpersTest < Wurk::Test::UnitCase
   # --- changelog_has_version! ------------------------------------------
 
   def test_changelog_present
-    ReleaseHelpers.changelog_has_version!("## [1.2.3] - 2026-01-01\n- x\n", '1.2.3')
+    with_changelog(notes: "# 1.2.3 — 2026-01-01\n\n- x\n") do |root|
+      ReleaseHelpers.changelog_has_version!(root, '1.2.3')
+    end
   end
 
-  def test_changelog_missing_aborts
-    assert_raises(SystemExit) do
-      silence_stderr { ReleaseHelpers.changelog_has_version!("## [1.0.0]\n", '9.9.9') }
+  def test_changelog_prerelease_names_its_file_in_dot_form
+    with_changelog(version: '1.8.0.rc1', notes: "# 1.8.0.rc1 — 2026-01-01\n\n- x\n") do |root|
+      ReleaseHelpers.changelog_has_version!(root, '1.8.0.rc1')
+    end
+  end
+
+  # The usual slip: the bump lands with the notes still in unreleased.md.
+  def test_changelog_notes_file_missing_aborts_with_the_move
+    with_changelog(notes: nil) do |root|
+      err = capture_abort { ReleaseHelpers.changelog_has_version!(root, '1.2.3') }
+
+      assert_includes err, 'docs/changelog/1.2.3.md is missing'
+      assert_includes err, 'git mv docs/changelog/unreleased.md docs/changelog/1.2.3.md'
+    end
+  end
+
+  def test_changelog_notes_with_only_a_title_abort
+    with_changelog(notes: "# 1.2.3 — 2026-01-01\n\n") do |root|
+      assert_includes capture_abort { ReleaseHelpers.changelog_has_version!(root, '1.2.3') },
+                      'has no notes under its title'
+    end
+  end
+
+  def test_changelog_index_entry_missing_aborts
+    notes = "# 9.9.9 — 2026-01-01\n\n- x\n"
+
+    with_changelog(notes:, version: '9.9.9', index: "## [1.0.0] - 2026-01-01\n") do |root|
+      assert_includes capture_abort { ReleaseHelpers.changelog_has_version!(root, '9.9.9') },
+                      'CHANGELOG.md has no `## [9.9.9] - YYYY-MM-DD` index entry'
     end
   end
 
@@ -228,6 +256,27 @@ class ReleaseHelpersTest < Wurk::Test::UnitCase
       with_silent_gem_ui { Gem::Package.build(spec) }
       File.expand_path('fakegem-0.0.1.gem')
     end
+  end
+
+  # A repo root holding CHANGELOG.md (the index) and, unless notes is nil,
+  # docs/changelog/<version>.md.
+  def with_changelog(notes:, version: '1.2.3', index: "## [#{version}] - 2026-01-01\n")
+    Dir.mktmpdir('changelog') do |root|
+      File.write(File.join(root, 'CHANGELOG.md'), index)
+      FileUtils.mkdir_p(File.join(root, 'docs', 'changelog'))
+      File.write(File.join(root, 'docs', 'changelog', "#{version}.md"), notes) if notes
+      yield root
+    end
+  end
+
+  def capture_abort(&)
+    orig = $stderr
+    $stderr = StringIO.new
+
+    assert_raises(SystemExit, &)
+    $stderr.string
+  ensure
+    $stderr = orig
   end
 
   def silence_stderr

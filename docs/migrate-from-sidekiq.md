@@ -899,7 +899,7 @@ eviction policy, live peers).
       ([§3](#clustered-puma--the-embedded-swarm-important)), and the dashboard mount
       is behind your app's auth ([authentication](authentication.md)).
 
-**Rails apps: what changes inside a job** ([changelog](../CHANGELOG.md))
+**Rails apps: what changes inside a job** ([1.10.0 release notes](changelog/1.10.0.md))
 
 Every job runs inside `Rails.application.reloader`, in every boot mode. Set
 `config[:reloader] = nil` to opt out. Check these:

@@ -42,10 +42,19 @@ matters more than it sounds.
    build inside the release run — *after* the gem is already published — so
    `release:check` refuses it up front. Commit the lock with the bump.
 
-2. **Update `CHANGELOG.md`.** Add a dated section whose header matches the new
-   version exactly — `## [1.1.0] - YYYY-MM-DD` — with changes grouped under the
-   Keep a Changelog headings the file already uses: Added, Changed, Fixed. The
-   release workflow lifts this section verbatim into the GitHub Release notes
+2. **Move the notes.** Pull requests add their lines to
+   `docs/changelog/unreleased.md`, grouped under the Keep a Changelog headings
+   already in use (Added, Changed, Fixed). Cutting `1.1.0`:
+   ```bash
+   git mv docs/changelog/unreleased.md docs/changelog/1.1.0.md
+   printf '# Unreleased\n' > docs/changelog/unreleased.md
+   ```
+   Retitle the moved file `# 1.1.0 — YYYY-MM-DD` (the file name and title use
+   the RubyGems form, `1.0.0.rc1` for a prerelease). In `CHANGELOG.md`, the
+   index, add `## [1.1.0] - YYYY-MM-DD` on top with a one-line summary and a
+   link to the notes, add its `[1.1.0]: …/compare/v1.0.0...v1.1.0` line, and
+   move the `[Unreleased]:` link to `compare/v1.1.0...HEAD`. The release
+   workflow lifts the notes body verbatim into the GitHub Release
    (`bin/changelog-section`), so write it for readers.
 
 3. **Build the dashboard bundle and run the gate locally:**
@@ -55,7 +64,7 @@ matters more than it sounds.
    bundle exec rake release:package   # builds the .gem, asserts the SPA is inside it
    ```
 
-4. **Commit** the version + CHANGELOG + demo-lock bump on a branch, open a PR,
+4. **Commit** the version + changelog + demo-lock bump on a branch, open a PR,
    and merge to `main` once green.
 
 **That's it.** Merging step 4 is the release. The `release` workflow fires on
@@ -98,7 +107,7 @@ publishes and deploys exactly as one merged by a human.
 | 15 | **await RubyGems propagation** | A bounded curl of the version endpoint. Non-fatal: the gem is already accepted, and `release` waits for it again before relying on it. |
 | 16 | **install Ruby** | First step of **`release`**, the only job with `contents: write`. It runs after a successful push, or alone when preflight found the gem live and the tag or Release still owed. |
 | 17 | **fetch the published gem** | Downloads the `.gem` from RubyGems and checks it against the digest RubyGems publishes. It is what consumers get, and the only copy a finishing run has. This is the wait that keeps a tag from existing without a gem behind it, so it is fatal; a re-run finishes. |
-| 18 | **tag & create GitHub Release** | `gh release create <tag> --target <sha>` creates the tag *and* the Release in one call, with the CHANGELOG section as notes (`bin/changelog-section`) and the `.gem` attached (marked pre-release automatically for `Gem::Version#prerelease?`). When a release for the tag already exists, the reconcile branch finishes it via `gh release edit` + `upload --clobber` instead of abandoning — the one case that still aborts is a tag pointing at a different commit. **Last, deliberately** — see [the one rule](#the-one-rule-the-tag-is-an-output-not-an-input). |
+| 18 | **tag & create GitHub Release** | `gh release create <tag> --target <sha>` creates the tag *and* the Release in one call, with `docs/changelog/<version>.md` as notes (`bin/changelog-section`) and the `.gem` attached (marked pre-release automatically for `Gem::Version#prerelease?`). When a release for the tag already exists, the reconcile branch finishes it via `gh release edit` + `upload --clobber` instead of abandoning — the one case that still aborts is a tag pointing at a different commit. **Last, deliberately** — see [the one rule](#the-one-rule-the-tag-is-an-output-not-an-input). |
 | 19 | **`demo`** | Ships the released tag to `wurk.demo.developerz.ai` via the `demo` environment (a deployment record and URL; it carries no protection rules, so nothing pauses for a reviewer). It passes `trusted: true`, which waives deploy-demo's `DEMO_DEPLOYERS` actor allowlist — that allowlist guards the hand-dispatched door, and has nothing to add once this workflow has already published the commit's gem. Waiving it is also what lets a release merged by the developerz.ai bot deploy the demo, rather than stranding it after the irreversible publish. The waiver is honoured only from the `release` workflow running on `main`; anything else passing `trusted: true` is rejected. It waits for the demo to serve this commit or a confirmed descendant at `/demo/build`, so a frozen rollout goes red, and it pushes nothing if the demo is already past this commit. |
 | 20 | **`smoke`** | Calls the reusable `release-smoke.yml` workflow with the released version. It installs that version into a throwaway minimal Rails app, asserts the mounted engine serves `/wurk` with HTTP 200, boots `wurkswarm` and requires an enqueued job to land its Redis marker, and checks the demo's `/wurk/api/meta` reports the same version. This is bounded post-publish evidence, not a gate: it runs only after the irreversible `gem push`, so a failure changes nothing — no rollback or compensation is implemented. |
 
@@ -132,7 +141,7 @@ a no-op: use "Re-run failed jobs", or dispatch `deploy-demo` or `release-smoke`.
 A release is finished from its own commit. A dispatch from a later `main` is refused with
 the commit to use: open that commit's release run and use "Re-run all jobs". If that run is
 gone, a maintainer creates the tag and Release by hand from that commit (`gh release create
-vX.Y.Z --target <sha>` with the CHANGELOG section as notes and the `.gem` attached).
+vX.Y.Z --target <sha>` with the version's changelog notes and the `.gem` attached).
 
 A red `demo` job does not mean a failed publish. The gem and tag are live by then, and the
 job's error says so. It passes when the demo serves the released commit or a descendant
@@ -176,7 +185,7 @@ Actions run URL, run id or log excerpt.
 | **On `main`** | In CI (`GITHUB_REF` set), the ref must be `refs/heads/main` — backs up release.yml's own main-only guard so a hand-dispatched run from a branch can't publish it. No-ops locally. |
 | **Tag ↔ version** | The workflow passes its derived tag as `WURK_RELEASE_TAG`; it must match `Wurk::VERSION`. Git's hyphenated prerelease (`v1.0.0-rc1`) maps to RubyGems' dotted form (`1.0.0.rc1`). Falls back to `GITHUB_REF_NAME`, and no-ops for local runs. |
 | **Dashboard bundle present** | `vendor/assets/dashboard/` has `index.html`, a non-empty `wurk-manifest.json`, and a non-empty `assets/*.js`. Run `rake frontend:build` if missing. |
-| **Version ↔ CHANGELOG** | `CHANGELOG.md` contains a `## [<Wurk::VERSION>]` section header. |
+| **Version ↔ changelog** | `docs/changelog/<Wurk::VERSION>.md` exists with notes under its title, and `CHANGELOG.md` has its `## [<Wurk::VERSION>] - <date>` index entry. |
 | **Unreleased link** | `CHANGELOG.md`'s `[Unreleased]:` compare link starts at `v<Wurk::VERSION>` (the tag about to be cut). |
 | **Demo lock ↔ version** | `demo/Gemfile.lock` pins the path-sourced `wurk` at `Wurk::VERSION`. Run `rake release:relock_demo` if not. |
 | **Clean tree** | `git status --porcelain` is empty, ignoring `vendor/assets/` (built output). |
@@ -231,7 +240,7 @@ gh release delete vX.Y.Z --cleanup-tag --yes   # drops the Release and the remot
 git fetch --prune-tags                         # and the local one
 ```
 
-Then release normally: bump `lib/wurk/version.rb` + `CHANGELOG.md`, merge to
+Then release normally: bump `lib/wurk/version.rb` and cut the changelog, merge to
 `main`, and let CI cut the tag itself.
 
 Deleting and re-cutting is only safe because **no gem was ever published** for
