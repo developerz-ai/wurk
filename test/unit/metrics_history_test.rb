@@ -166,6 +166,19 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
     assert_equal 3 * 24 * 3600, config[:metrics_retention]
   end
 
+  # wurk.yml reaches the config through merge!, and Configuration.new takes
+  # options directly: neither may slip a sub-floor TTL past the setter.
+  def test_metrics_retention_floor_holds_on_every_write_path
+    assert_raises(ArgumentError) { Wurk::Configuration.new(metrics_retention: 60) }
+    assert_raises(ArgumentError) { Wurk::Configuration.new.merge!(metrics_retention: 60) }
+    assert_raises(ArgumentError) { Wurk::Configuration.new[:metrics_retention] = 60 }
+
+    config = Wurk::Configuration.new(metrics_retention: 4 * 24 * 3600)
+    config.merge!(metrics_retention: nil)
+
+    assert_nil config[:metrics_retention]
+  end
+
   # `h|<klass>-D-H:M` u16 counters, one per Histogram::BUCKET_INTERVALS slot;
   # successes only.
   def test_record_writes_the_runtime_histogram

@@ -87,9 +87,11 @@ class SwarmRespawnTest < Wurk::Test::UnitCase
     swarm.instance_variable_get(:@restart).enqueue([rolled], :rolling)
     swarm.send(:advance_restart)
 
-    restarts = swarm.instance_variable_get(:@restart_counters).read.restarts
+    swarm.send(:check_crash_loop)
+    snapshot = swarm.instance_variable_get(:@restart_counters).read
 
-    assert_equal({ crash: 1, recycle: 0, liveness: 1, rolling: 1 }, restarts)
+    assert_equal({ crash: 1, recycle: 0, liveness: 1, rolling: 1 }, snapshot.restarts)
+    assert_equal 1, snapshot.crash_streak, 'the young crash is the one streak the gauge reports'
   end
 
   def test_respawn_defers_until_backoff_window_elapses

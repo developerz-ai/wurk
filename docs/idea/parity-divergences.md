@@ -631,6 +631,16 @@ resetting it.
 
 **Anchor:** `lib/wurk/leader.rb`, `lib/wurk/lua/leader_campaign.lua`.
 
+## Statsd `queue.size` is sent by the leader only
+
+**Wurk:** only the elected leader sends the `sidekiq.queue.size` gauge on each beat; every process still sends `busy`. Both carry a `process:<identity>` tag next to `queue:<name>`.
+
+**Spec:** Ent §5.2 lists `sidekiq.queue.size` (`queue:<name>`) among the gauges every process reports ([Ent §5.2](../target/sidekiq-ent.md)).
+
+**Why:** queue depth is one number per queue for the whole cluster. Every process LLEN-ing every queue each beat costs processes × queues commands for a value one process can read. A dashboard that takes `max` (or `last`) over the `process` tag reads the same series.
+
+**Anchor:** `lib/wurk/heartbeat.rb` (`emit_statsd_gauges`, `emit_queue_sizes`).
+
 ## Quiet does not step the leader down; full shutdown does
 
 **Wurk:** quiet is cluster-global and one-way, signalled with `TSTP`
@@ -1351,7 +1361,7 @@ is not modeled separately — the spec itself names `on(:fork)` as its API
 ([Ent §7.2 Environment variables — `SIDEKIQ_FORK_PER_PROCESS_HOOK`](../target/sidekiq-ent.md#72-environment-variables)).
 
 **Anchor:** `lib/wurk/configuration.rb:114`,
-`lib/wurk/configuration.rb:799-803`; free `on()`
+`lib/wurk/configuration.rb:801-805`; free `on()`
 ([free §4.2 Public methods — `on(event)`](../target/sidekiq-free.md#42-public-methods)) and DEFAULTS
 ([free §4.1 DEFAULTS — lifecycle events](../target/sidekiq-free.md#41-defaults)); Ent §7.4
 ([Ent §7.4 Fork callback](../target/sidekiq-ent.md#74-fork-callback)) and §6.3
@@ -1362,8 +1372,8 @@ is not modeled separately — the spec itself names `on(:fork)` as its API
 **Wurk:** `DEFAULTS` carries `redis_error_handlers: []`
 (`lib/wurk/configuration.rb:51`, inside the "Wurk extras, appended after the
 mirrored keys" block), populated by `config.on_redis_error { |info| … }`
-(`lib/wurk/configuration.rb:371`) and dispatched from `dispatch_redis_error`
-(`lib/wurk/configuration.rb:371`), which logs and skips a raising handler.
+(`lib/wurk/configuration.rb:373`) and dispatched from `dispatch_redis_error`
+(`lib/wurk/configuration.rb:373`), which logs and skips a raising handler.
 Each handler gets one Hash: `{error:, attempt:, retried:, pool:}`.
 
 **Spec:** free's DEFAULTS ([free §4.1 DEFAULTS — handler keys](../target/sidekiq-free.md#41-defaults)) has no
@@ -1378,8 +1388,8 @@ raise re-enqueues a job. The extra key is additive by construction: the
 mirrored Sidekiq prefix of `@options` stays byte-for-byte intact, so gems
 introspecting the config hash see no change.
 
-**Anchor:** `lib/wurk/configuration.rb:51`, `lib/wurk/configuration.rb:371`,
-`lib/wurk/configuration.rb:1314-1315`; free DEFAULTS
+**Anchor:** `lib/wurk/configuration.rb:51`, `lib/wurk/configuration.rb:373`,
+`lib/wurk/configuration.rb:1317-1318`; free DEFAULTS
 ([free §4.1 DEFAULTS — handler keys](../target/sidekiq-free.md#41-defaults)).
 
 ## Pool sizing: three disjoint pools per process
@@ -1388,7 +1398,7 @@ introspecting the config hash see no change.
 pool at `max(concurrency + 5, 10)` (`lib/wurk/capsule.rb:166-171`, computed in
 `main_pool_size` at `lib/wurk/capsule.rb:328-330`), a dedicated fetch pool of
 exactly `concurrency` (`lib/wurk/capsule.rb:179-181`), and a dedicated web pool of
-`web_pool_size` (default 5; `lib/wurk/configuration.rb:309,319,336`).
+`web_pool_size` (default 5; `lib/wurk/configuration.rb:311,321,338`).
 `config.redis[:size]` still pins the main pool only.
 
 **Spec:** free [§26 `Sidekiq::RedisConnection`](../target/sidekiq-free.md#26-sidekiqredisconnection)
@@ -1413,7 +1423,7 @@ the +5 headroom names the background loops it covers. Sizes stay overridable
 §26's stated sizes, without eliminating the dedicated fetch/web topology.
 
 **Anchor:** `lib/wurk/capsule.rb:166-171`, `lib/wurk/capsule.rb:179-181`,
-`lib/wurk/capsule.rb:328-330`; `lib/wurk/configuration.rb:309,319,336`; free
+`lib/wurk/capsule.rb:328-330`; `lib/wurk/configuration.rb:311,321,338`; free
 [§26 RedisConnection pool defaults](../target/sidekiq-free.md#26-sidekiqredisconnection),
 [§5 Capsule main/fetch pools](../target/sidekiq-free.md#5-sidekiqcapsule), and
 [§21.4 Lifecycle pool-size validation](../target/sidekiq-free.md#214-lifecycle-clirun).
@@ -1421,7 +1431,7 @@ the +5 headroom names the background loops it covers. Sizes stay overridable
 ## `reap_idle_redis_connections` sweeps from a per-pool reaper thread, not the heartbeat
 
 **Wurk:** the setter stores `:redis_idle_timeout`
-(`lib/wurk/configuration.rb:270-271`), and every pool built from the
+(`lib/wurk/configuration.rb:272-273`), and every pool built from the
 configuration starts its own reaper thread on first checkout
 (`lib/wurk/redis_pool.rb:281-290`), sweeping every `min(timeout / 2, 10)`
 seconds through connection_pool's `#reap` (`lib/wurk/redis_pool.rb:322-327`).
@@ -1442,7 +1452,7 @@ runs. Sweeping at half the timeout closes a connection within 1.5x of it going
 idle; the 10s floor keeps a short timeout from becoming a hot loop. Requires
 connection_pool >= 3.0 for `#reap` (`wurk.gemspec:52`), as Sidekiq 8.1 does.
 
-**Anchor:** `lib/wurk/configuration.rb:270-271`; `lib/wurk/redis_pool.rb:112-115`,
+**Anchor:** `lib/wurk/configuration.rb:272-273`; `lib/wurk/redis_pool.rb:112-115`,
 `lib/wurk/redis_pool.rb:281-290`, `lib/wurk/redis_pool.rb:322-327`; free Config
 surface ([free §4.2 Public methods — `reap_idle_redis_connections`](../target/sidekiq-free.md#42-public-methods)) and DEFAULTS
 ([free §4.1 DEFAULTS — `redis_idle_timeout`](../target/sidekiq-free.md#41-defaults)).
@@ -1658,10 +1668,10 @@ class-level surface is the config/extension surface
 an instance method on a duck-type handle that returns
 `Wurk.configuration.web_redis_pool` — not the class-level accessor. The
 dashboard pool is the configuration-owned `config.web_redis_pool` reader
-(`lib/wurk/configuration.rb:334-336`): read-only, with no `web_redis_pool=`
+(`lib/wurk/configuration.rb:336-338`): read-only, with no `web_redis_pool=`
 setter, so Wurk builds the pool itself from the same `config.redis` options the
-worker pools use (`lib/wurk/configuration.rb:1302-1306`) and sizes it with
-`config.web_pool_size` (`lib/wurk/configuration.rb:312-319`, default 5). Every
+worker pools use (`lib/wurk/configuration.rb:1305-1309`) and sizes it with
+`config.web_pool_size` (`lib/wurk/configuration.rb:314-321`, default 5). Every
 dashboard request runs on that pool.
 
 **Spec:** free §25.1 lists `Sidekiq::Web.redis_pool = my_pool` in the entrypoint
@@ -1696,9 +1706,9 @@ shard-per-mount deployment has no Wurk equivalent.
 [class-level Web surface](../../lib/wurk/web/config.rb#L390-L456) and the
 [empty `Wurk::Web` class body](../../lib/wurk/web.rb#L27-L28);
 [`PoolScope::Handle#redis_pool`](../../lib/wurk/web/pool_scope.rb#L39-L43);
-[`config.web_pool_size`](../../lib/wurk/configuration.rb#L312-L319),
-[`config.web_redis_pool`](../../lib/wurk/configuration.rb#L334-L336) and
-[`build_redis_pool`](../../lib/wurk/configuration.rb#L1302-L1306);
+[`config.web_pool_size`](../../lib/wurk/configuration.rb#L314-L321),
+[`config.web_redis_pool`](../../lib/wurk/configuration.rb#L336-L338) and
+[`build_redis_pool`](../../lib/wurk/configuration.rb#L1305-L1309);
 [parent sockets closed before fork](../../lib/wurk/swarm.rb#L401-L405) and
 [child pools rebuilt after fork](../../lib/wurk/swarm/child_boot.rb#L160-L161);
 free §25.1 ([free §25.1 Entrypoint](../target/sidekiq-free.md#251-entrypoint))

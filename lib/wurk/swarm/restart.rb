@@ -204,6 +204,7 @@ module Wurk
         cur = @current
         @backoff.clear(cur[:index])
         delay = @respawn.call(cur[:index])
+        @restarted&.call(:crash)
         @logger.warn do
           "swarm: replacement #{cur[:replacement]} and old #{cur[:old_pid]} for slot #{cur[:index]} both died; " \
             "respawning slot in #{delay}s"

@@ -189,6 +189,7 @@ module Wurk
     def []=(key, val)
       guard_frozen!
       RedisPool.validate_idle_timeout(val) if key == :redis_idle_timeout
+      val = parse_metrics_retention(val) if key == :metrics_retention && !val.nil?
       @options[key] = val
     end
 
@@ -198,6 +199,7 @@ module Wurk
     def merge!(other)
       guard_frozen!
       RedisPool.validate_idle_timeout(other[:redis_idle_timeout]) if other.key?(:redis_idle_timeout)
+      parse_metrics_retention(other[:metrics_retention]) unless other[:metrics_retention].nil?
       @options.merge!(other)
     end
 
@@ -1126,6 +1128,7 @@ module Wurk
     def validate_constructor_options!
       @options[:global_concurrency] = normalize_global_concurrency(@options[:global_concurrency])
       RedisPool.validate_idle_timeout(@options[:redis_idle_timeout])
+      parse_metrics_retention(@options[:metrics_retention]) unless @options[:metrics_retention].nil?
     end
 
     # One flat fork running the default capsule's queues + concurrency. The

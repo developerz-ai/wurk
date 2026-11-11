@@ -12,8 +12,10 @@ module Wurk
     # included, inherits the descriptor and reads the parent's latest write
     # with one pread. No Redis key, no socket.
     #
-    # One writer (the supervise thread) and a fixed 40-byte record at offset 0;
-    # a reader gets either the old or the new record.
+    # One writer (the supervise thread) and a fixed 40-byte record at offset 0.
+    # A pread racing the pwrite can mix fields from the two records; each field
+    # is still a value it held (counters only grow), so a scrape never exports
+    # one that never existed, and the next scrape reads the settled record.
     class RestartCounters
       REASONS = %i[crash recycle liveness rolling].freeze
       FORMAT = 'Q<5'

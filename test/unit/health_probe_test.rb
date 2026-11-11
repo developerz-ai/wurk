@@ -88,6 +88,7 @@ class HealthProbeTest < Wurk::Test::UnitCase
     beat("#{HOST}:1:n", ::Time.now.to_f)
 
     assert_equal 0, probe(max_job_age: 1).call
+    assert_equal 0, probe(max_job_age: 0).call, 'no running job is never too old'
   end
 
   def test_cli_passes_max_job_age

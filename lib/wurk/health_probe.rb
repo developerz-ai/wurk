@@ -58,10 +58,10 @@ module Wurk
     end
 
     def jobs_within_age?(run_ats)
-      return true unless @max_job_age
-
       oldest = run_ats.min
-      age = oldest ? (::Time.now.to_f - oldest).round : 0
+      return true unless @max_job_age && oldest
+
+      age = (::Time.now.to_f - oldest).round
       return true if age < @max_job_age
 
       @out.puts "wurk health: a job on this host has been running for #{age}s (limit #{@max_job_age}s)"

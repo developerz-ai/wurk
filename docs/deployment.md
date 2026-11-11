@@ -917,8 +917,9 @@ One row per number you set; each is per process unless it says host. `C` is
 | `memory_limit_mb` | Above a booted child's footprint ([Memory](#memory)) | off | Below a booted child: the child is marked and never recycled, and an ERROR says so |
 
 A worker container's memory limit is roughly `N ×` per-child PSS plus the parent;
-`wurk_process_pss_bytes` reports each child's PSS, which, unlike RSS, does not count
-the copy-on-write pages the children share.
+`wurk_process_pss_bytes` reports each child's PSS, which, unlike RSS, splits the
+copy-on-write pages the children share among them instead of counting them in full
+for every child.
 
 ---
 

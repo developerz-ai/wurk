@@ -123,6 +123,21 @@ class SwarmRestartTest < Wurk::Test::UnitCase
     assert_equal 1, @spawns.size, 'the restart machine must not retry a slot it handed off'
   end
 
+  # The handed-off slot refills through the swarm's due-respawn path, which
+  # books no restart of its own: the machine counts it as the crash it is.
+  def test_both_dying_counts_the_handed_off_respawn_as_a_crash
+    reasons = []
+    @restart = Wurk::Swarm::Restart.new(config.tap { |c| c.restarted = ->(reason) { reasons << reason } })
+    @restart.enqueue([100], :recycle)
+    @restart.advance
+
+    reap(100)
+    reap(@spawns.first[:pid])
+    @restart.advance
+
+    assert_equal %i[recycle crash], reasons
+  end
+
   def test_replacement_death_alone_never_hands_the_slot_to_respawn
     @restart.enqueue([100])
     @restart.advance

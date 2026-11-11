@@ -30,7 +30,7 @@
     LIFECYCLE_EVENTS = %i[startup fork quiet shutdown exit heartbeat beat leader].freeze
 
 - entry: "`:fork` and `:leader` extend the free spec's lifecycle events"
-  anchor: lib/wurk/configuration.rb#L799-L803
+  anchor: lib/wurk/configuration.rb#L801-L805
   fragment: |-
     unless LIFECYCLE_EVENTS.include?(event)
     raise ArgumentError, "invalid event #{event.inspect}, must be one of #{LIFECYCLE_EVENTS.inspect}"
@@ -42,12 +42,12 @@
     redis_error_handlers: [],
 
 - entry: 'DEFAULTS adds `:redis_error_handlers`'
-  anchor: lib/wurk/configuration.rb#L371
+  anchor: lib/wurk/configuration.rb#L373
   fragment: |-
     @options[:redis_error_handlers] << block
 
 - entry: 'DEFAULTS adds `:redis_error_handlers`'
-  anchor: lib/wurk/configuration.rb#L1314-L1315
+  anchor: lib/wurk/configuration.rb#L1317-L1318
   fragment: |-
     def dispatch_redis_error(info)
     redis_error_handlers.each do |handler|
@@ -73,22 +73,22 @@
     end
 
 - entry: 'Pool sizing: three disjoint pools per process'
-  anchor: lib/wurk/configuration.rb#L309
+  anchor: lib/wurk/configuration.rb#L311
   fragment: |-
     WEB_POOL_DEFAULT_SIZE = 5
 
 - entry: 'Pool sizing: three disjoint pools per process'
-  anchor: lib/wurk/configuration.rb#L319
+  anchor: lib/wurk/configuration.rb#L321
   fragment: |-
     @options[:web_pool_size] || WEB_POOL_DEFAULT_SIZE
 
 - entry: 'Pool sizing: three disjoint pools per process'
-  anchor: lib/wurk/configuration.rb#L336
+  anchor: lib/wurk/configuration.rb#L338
   fragment: |-
     @web_redis_pool ||= build_redis_pool(size: web_pool_size, name: 'web', pool_timeout: WEB_POOL_TIMEOUT)
 
 - entry: '`reap_idle_redis_connections` sweeps from a per-pool reaper thread, not the heartbeat'
-  anchor: lib/wurk/configuration.rb#L270-L271
+  anchor: lib/wurk/configuration.rb#L272-L273
   fragment: |-
     def reap_idle_redis_connections(timeout = 60)
     self[:redis_idle_timeout] = timeout

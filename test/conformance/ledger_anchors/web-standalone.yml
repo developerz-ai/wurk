@@ -125,17 +125,17 @@
       def redis_pool
         Wurk.configuration.web_redis_pool
 - entry: 'Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported'
-  anchor: 'lib/wurk/configuration.rb#L312-L319'
+  anchor: 'lib/wurk/configuration.rb#L314-L321'
   fragment: |-
     def web_pool_size
       @options[:web_pool_size] || WEB_POOL_DEFAULT_SIZE
 - entry: 'Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported'
-  anchor: 'lib/wurk/configuration.rb#L334-L336'
+  anchor: 'lib/wurk/configuration.rb#L336-L338'
   fragment: |-
     def web_redis_pool
       @web_redis_pool ||= build_redis_pool(size: web_pool_size, name: 'web', pool_timeout: WEB_POOL_TIMEOUT)
 - entry: 'Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported'
-  anchor: 'lib/wurk/configuration.rb#L1302-L1306'
+  anchor: 'lib/wurk/configuration.rb#L1305-L1309'
   fragment: |-
     def build_redis_pool(size:, name:, **overrides)
       RedisPool.new(size: size, name: name, on_error: method(:dispatch_redis_error),

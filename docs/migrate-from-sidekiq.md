@@ -970,8 +970,9 @@ Every job runs inside `Rails.application.reloader`, in every boot mode. Set
 - [ ] Probes that grep `ps` are replaced with `wurk health`. A Wurk worker's process title differs,
       so a probe matching `sidekiq` restarts a healthy pod; one matching `wurk` passes for as long
       as the swarm parent lives, including while every child crash-loops and nothing runs.
-      `wurk health` boots no app and exits 0 only when this host has a recent heartbeat; add
-      `--max-job-age` above your longest job to also catch a wedged processor
+      `wurk health` boots no app and exits 0 on a recent heartbeat from this host. It also passes
+      while Redis cannot be read, unless `--strict`; add `--max-job-age` above your longest job
+      to also catch a wedged processor
       ([deployment](deployment.md#health-probes)).
 
 **Staging dry run against a copy of production Redis.** This is the step that
