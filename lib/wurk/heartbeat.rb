@@ -23,7 +23,7 @@ module Wurk
   #   EXPIRE <identity>:work     60                  (only if WORK_STATE non-empty)
   #   EVALSHA refresh_slots      <held slots>        (only if QueueSlot::HELD non-empty)
   # then the signal drain:
-  #   RPOP   <identity>-signals  × BEAT_PAUSE
+  #   RPOP   <identity>-signals  BEAT_PAUSE
   # Two rather than one because only the first is safe to replay — see
   # #pipelined_beat and #drain_signals.
   #
@@ -110,7 +110,7 @@ module Wurk
       end
       fire_event(:beat, oneshot: false)
       emit_statsd_gauges
-      sigs.compact
+      sigs
     rescue StandardError => e
       @first_heartbeat = true
       handle_exception(e, { context: 'heartbeat' })
@@ -236,17 +236,23 @@ module Wurk
     # that reports us alive has landed.
     #
     # RPOP because ProcessSet::Process#signal LPUSHes: signals run in the
-    # order they were sent (Sidekiq's launcher pops the same end). One entry
-    # per second of cadence so a flood of queued signals can't stall the beat;
-    # anything newer drains on the next beat.
+    # order they were sent (Sidekiq's launcher pops the same end), and a counted
+    # RPOP returns them in the order it pops them. One entry per second of
+    # cadence so a flood of queued signals can't stall the beat; anything newer
+    # drains on the next beat. One counted command, where it used to be
+    # BEAT_PAUSE single pops in a pipeline: the same round trip and the same
+    # entries, a tenth of the commands. Nil, not an empty Array, when the list
+    # is missing.
     def drain_signals
-      redis { |conn| conn.pipelined { |pipe| BEAT_PAUSE.times { pipe.call('RPOP', "#{@identity}-signals") } } }
+      redis { |conn| conn.call('RPOP', "#{@identity}-signals", BEAT_PAUSE) } || []
     end
 
+    # The hostname is read once per Heartbeat, like the identity it is paired
+    # with, rather than a gethostname syscall every beat.
     def info_hash
       caps = @config.capsules.each_value
       {
-        'hostname' => hostname,
+        'hostname' => (@hostname ||= hostname),
         'started_at' => @started_at,
         'pid' => ::Process.pid,
         'tag' => @config[:tag] || default_tag,

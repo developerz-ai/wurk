@@ -9,6 +9,22 @@ require 'active_job/queue_adapters/wurk_adapter'
 class CronTest < Wurk::Test::UnitCase
   parallelize_me!
 
+  # redis-client middleware, registered once for the process: records command
+  # names only on a thread that asked (#count_commands), so it costs everyone
+  # else one thread-local read.
+  module CommandTally
+    def call(command, config)
+      Thread.current[:cron_test_tally]&.push(command.first.to_s)
+      super
+    end
+
+    def call_pipelined(commands, config)
+      Thread.current[:cron_test_tally]&.concat(commands.map { |command| command.first.to_s })
+      super
+    end
+  end
+  RedisClient.register(CommandTally)
+
   # Workers used by ConfigTester resolution checks. Bodies stay empty —
   # the test only needs the constant to resolve, not actual perform logic.
   class FooWorker
@@ -1023,6 +1039,28 @@ class CronTest < Wurk::Test::UnitCase
     refute_includes lids, old.lid
   end
 
+  # 07-A8: a boot prunes every class it registers from one read of the
+  # registry, so a foreign loop is read once, not once per registered class.
+  # Loops of classes this process does not register are left alone.
+  def test_apply_prunes_many_classes_from_one_registry_read
+    a = "CronTest::PruneA#{@suffix}"
+    b = "CronTest::PruneB#{@suffix}"
+    foreign = "CronTest::PruneForeign#{@suffix}"
+    stale = [Wurk::Cron::Manager.new.register('0 1 * * *', a), Wurk::Cron::Manager.new.register('0 1 * * *', b)]
+    kept = Wurk::Cron::Manager.new(prune: false).register('0 1 * * *', foreign)
+    mgr = Wurk::Cron::Manager.new(nil, deferred: true)
+    fresh = [mgr.register('0 2 * * *', a), mgr.register('0 2 * * *', b), mgr.register('0 3 * * *', a)]
+    @lids.concat((stale + fresh + [kept]).map(&:lid))
+
+    hgets = count_commands('HGET') { mgr.apply! }
+    lids = Wurk::Cron::LoopSet.new.map(&:lid)
+
+    assert_empty stale.map(&:lid) & lids
+    assert_empty fresh.map(&:lid) - lids
+    assert_includes lids, kept.lid
+    assert_equal stale.size + 1, hgets, 'each candidate loop is read once, not once per class'
+  end
+
   def test_deferred_authoritative_runs_when_the_registration_is_applied
     stray = Wurk::Cron::Manager.new.register('* * * * *', 'CronTest::BarWorker')
     cfg = Wurk::Configuration.new
@@ -1408,6 +1446,60 @@ class CronTest < Wurk::Test::UnitCase
     assert_equal 222, next_fire
   end
 
+  # 07-A7: the tick reuses the marks its LoopSet read made and a shared parser
+  # per schedule, and a loop with no `nf` derives its next occurrence once,
+  # not by a minute-by-minute walk on every tick.
+  def test_never_fired_loop_derives_its_next_fire_once
+    lp = register_loop("CronTest::Yearly#{@suffix}", queue: "cron-yr-#{@suffix}", schedule: '0 0 1 1 *')
+    poller = Wurk::Cron::Poller.new(Wurk.configuration)
+    poller.define_singleton_method(:leader?) { true }
+    walks = 0
+    parser = Wurk::Cron::Parser.cached('0 0 1 1 *')
+    parser.define_singleton_method(:next_fire_at) { |*a| (walks += 1) && super(*a) }
+
+    3.times { poller.tick }
+
+    assert_equal 1, walks
+    assert_nil Wurk.redis { |c| c.call('HGET', "#{Wurk::Cron::LOOP_PREFIX}#{lp.lid}", 'nf') },
+               'nothing is written for a loop that has not fired'
+  ensure
+    parser&.singleton_class&.send(:remove_method, :next_fire_at)
+  end
+
+  def test_derived_next_fire_is_recomputed_once_the_origin_passes_it
+    lp = Wurk::Cron::Loop.new(schedule: '*/5 * * * *', klass: 'CronTest::FooWorker')
+    poller = Wurk::Cron::Poller.new(Wurk.configuration)
+    first = poller.send(:derived_next_fire, lp, 600)
+
+    assert_equal 900, first
+    assert_equal 900, poller.send(:derived_next_fire, lp, 899)
+    assert_equal 1200, poller.send(:derived_next_fire, lp, 900)
+    assert_equal 900, poller.send(:derived_next_fire, lp, 600), 'an earlier origin is not served from the memo'
+  end
+
+  def test_parser_cache_shares_one_parser_per_schedule_and_rejects_bad_ones
+    assert_same Wurk::Cron::Parser.cached('7 * * * *'), Wurk::Cron::Parser.cached('7 * * * *')
+    assert_raises(ArgumentError) { Wurk::Cron::Parser.cached('7 * *') }
+  end
+
+  def test_tick_reads_the_registry_in_two_round_trips
+    3.times { |i| register_loop("CronTest::Rt#{i}#{@suffix}", queue: "cron-rt-#{@suffix}", schedule: '0 0 1 1 *') }
+    poller = Wurk::Cron::Poller.new(Wurk.configuration)
+    poller.define_singleton_method(:leader?) { true }
+    poller.tick
+
+    assert_equal 0, count_commands('HMGET') { poller.tick }, 'the marks come from the HGETALL already made'
+  end
+
+  def test_prefork_resolves_registered_zones
+    mgr = Wurk::Cron::Manager.new(nil, deferred: true)
+    mgr.register('0 4 * * *', 'CronTest::FooWorker', tz: 'Asia/Tokyo')
+
+    assert_nil Wurk::Cron.prefork(mgr)
+    assert_nil Wurk::Cron.prefork(nil)
+    assert Wurk::Cron::Parser.instance_variable_get(:@tz_cache)['Asia/Tokyo']
+  end
+
   # ---- Module-level register / lid branch coverage ---------------------
 
   # 572 else: options is not a Hash → lid coerces to {} before hashing.
@@ -1521,6 +1613,16 @@ class CronTest < Wurk::Test::UnitCase
       c.call('DEL', "queue:#{queue}")
       c.call('SREM', 'queues', queue)
     end
+  end
+
+  # Commands named `name` this thread sends while the block runs, pipelined
+  # ones included.
+  def count_commands(name)
+    Thread.current[:cron_test_tally] = tally = []
+    yield
+    tally.count { |command| command.casecmp?(name) }
+  ensure
+    Thread.current[:cron_test_tally] = nil
   end
 
   def register_loop(klass, queue:, schedule: '* * * * *', **)

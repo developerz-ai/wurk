@@ -25,14 +25,15 @@ require_relative 'algo/support'
 JOBS = Integer(ENV.fetch('WURK_BENCH_FEATURE_JOBS', '200'))
 
 # Per job, [round trips, commands], enqueue + execute, OVER the plain job.
-# Recorded on this tree — the "before" of 07-A5 (target: concurrent limiter
-# <= 2 limiter round trips). Exact: an added round trip or command fails the
-# run, and a fix lowers its row in the same change.
+# Exact: an added round trip or command fails the run, and a fix lowers its row
+# in the same change. 07-A5 took the concurrent limiter from 6 (constant) and 7
+# (built per job) to 2 and 3: acquire and release with the counters folded into
+# their scripts, plus the per-job construction's registration.
 BUDGETS = {
   'unique' => [2, 2],
   'batch' => [1.1, 1.18],
-  'concurrent limiter (constant)' => [6, 6],
-  'concurrent limiter (built per job)' => [7, 7],
+  'concurrent limiter (constant)' => [2, 2],
+  'concurrent limiter (built per job)' => [3, 3],
   'status' => [2, 4]
 }.freeze
 
@@ -100,11 +101,23 @@ def drain(jobs)
   abort format('✗ ran %d of %d jobs — the count is meaningless', done, jobs) unless done == jobs
 end
 
+# The fetcher re-reads the `paused` SET once per PAUSED_TTL (2s), a round trip
+# per interval, not per job: it lands in whichever row is running when the
+# cache expires and read as 2.01 round trips per job on a slow run. No job path
+# here sends SMEMBERS, so the execute window drops it.
+def without_paused_refresh(count)
+  refreshes = count.by_command.fetch('smembers', 0)
+  # A refresh per 2s cannot reach 10 in one window; more is a job sending it.
+  abort format('✗ %d SMEMBERS in one execute window: a job path sends it', refreshes) if refreshes >= 10
+  AlgoBench::Count.new(count.round_trips - refreshes, count.commands - refreshes,
+                       count.by_command.except('smembers'))
+end
+
 # [enqueue, execute] Counts for `jobs` jobs enqueued by `push`.
 def measure(jobs, push)
   POOL.with { |c| c.call('FLUSHDB') }
   enqueue = AlgoBench.count { push.call(jobs) }
-  execute = AlgoBench.count { drain(jobs) }
+  execute = without_paused_refresh(AlgoBench.count { drain(jobs) })
   [enqueue, execute]
 end
 

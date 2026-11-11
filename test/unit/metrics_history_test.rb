@@ -262,9 +262,9 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
     end
   end
 
-  # 8 commands per (class, minute) per flush: HINCRBY p + ms + EXPIRE on each
-  # `j|` bucket, BITFIELD + EXPIRE on the histogram. 100 executions must not
-  # cost 800.
+  # 8 commands for one class in one minute: HINCRBY p + ms on each `j|`
+  # bucket, BITFIELD + EXPIRE on the histogram, and one EXPIRE per `j|` bucket.
+  # 100 executions must not cost 800.
   def test_a_flush_costs_eight_commands_regardless_of_execution_count
     spy = Wurk::Test::CommandSpy.new(Wurk.redis_pool)
     acc = Wurk::Metrics::Accumulator.new
@@ -273,6 +273,24 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
     Wurk::Metrics::History.flush(acc)
 
     assert_equal 8, spy.count
+  end
+
+  # 21-K4: the `j|` buckets are shared by every class, so a flush EXPIREs each
+  # once, after its HINCRBYs — Sidekiq 8.1's ExecutionTracker#flush shape — not
+  # once per class: 50 classes are 6 commands each plus 2, not 8 each.
+  def test_a_flush_expires_each_shared_bucket_once
+    spy = Wurk::Test::CommandSpy.new(Wurk.redis_pool)
+    acc = Wurk::Metrics::Accumulator.new
+    klasses = Array.new(50) { |i| "#{@klass}-#{i}" }
+    klasses.each { |klass| acc.add(spy, klass, bucket, 5, true) }
+
+    Wurk::Metrics::History.flush(acc)
+
+    assert_equal (50 * 6) + 2, spy.count
+    Wurk.redis do |c|
+      assert_in_delta Wurk::Metrics::History::SHORT_TERM, c.call('TTL', Wurk::Metrics::History.minute_key(@at)), 60
+      assert_in_delta Wurk::Metrics::History::MID_TERM, c.call('TTL', Wurk::Metrics::History.ten_minute_key(@at)), 60
+    end
   end
 
   # An idle worker must not spend a round trip every FLUSH_INTERVAL just to say

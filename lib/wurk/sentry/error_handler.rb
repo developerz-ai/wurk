@@ -42,6 +42,11 @@ module Wurk
         Thread.current[REPORTED_ON_THREAD].equal?(exception)
       end
 
+      def self.forget_thread!
+        Thread.current[SEEN_BY_MIDDLEWARE] = nil
+        Thread.current[REPORTED_ON_THREAD] = nil
+      end
+
       # Transport blips the pool already retried before re-raising. Wurk's
       # default handler logs these at WARN precisely because they are
       # self-healing, and the fetch loop runs them in a tight `sleep(1)` cycle:

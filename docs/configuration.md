@@ -58,7 +58,8 @@ Env vars that have no Ruby/CLI/YAML equivalent (`WURK_COUNT`, `WURK_DISABLED`,
 `WURK_PRELOAD*`, `WURK_LEADER`) are read directly at the point of use and are
 not part of this chain. Some env vars *are* overridable from Ruby, and there the
 explicit Ruby value wins: `SIDEKIQ_MAXMEM_MB`/`WURK_MAXMEM_MB` (beaten by
-`config.memory_limit_mb =`), `WURK_WEB_READ_ONLY` (beaten by a later
+`config.memory_limit_mb =`), `WURK_MAXMEM_METRIC` (beaten by
+`config.memory_limit_metric =`), `WURK_WEB_READ_ONLY` (beaten by a later
 `config.web.read_only =`), and `WURK_WEB_DEFAULT_THEME` (beaten by a later
 `config.web.default_theme =`, including `nil`, after a valid seed).
 
@@ -98,9 +99,10 @@ Sidekiq.configure_client { |config| config.redis = { url: ENV["REDIS_URL"] } }
   process that goes on to run workers; in a process that never does, it never
   runs. The skip logs one line naming the gate and the condition that failed,
   once per gate per configuration instance; further skips of the same gate stay
-  quiet, and a block the gate allows logs nothing. A skipped `configure_server`
-  block logs a WARN. A skipped `configure_client` block logs at DEBUG: a server
-  skipping it is the Sidekiq contract and the usual case. The boot checks WARN
+  quiet, and a block the gate allows logs nothing. Both skips log at DEBUG, as
+  stock Sidekiq skips them silently: a test run, `rails runner` or a web process
+  skipping `configure_server` is meant to, and a server skipping
+  `configure_client` is the Sidekiq contract and the usual case. The boot checks WARN
   instead when a server process skipped client blocks and ran no
   `configure_server` block at all, since none of the app's settings reached it.
 - Server mode is entered **before** initializers load — by the
@@ -231,7 +233,8 @@ Not in `DEFAULTS` — unset unless you assign them.
 | `config.thread_priority` / `= n` | Default `-1`; applied to every component thread `safe_thread` spawns (an explicit `priority:` argument wins) |
 | `config.register(name, obj)` / `config.lookup(name, default_class = nil)` | Extension service locator |
 | `config.topology` / `= Wurk::Topology…` | Swarm layout |
-| `config.memory_limit_mb` / `= n` | RSS recycle threshold; `nil`/`0` disables |
+| `config.memory_limit_mb` / `= n` | Child recycle threshold; `nil`/`0` disables |
+| `config.memory_limit_metric` / `= :rss` | What the threshold is compared against: `:rss` (default), `:pss`, `:uss`. Wurk-only |
 | `config.periodic { |mgr| … }` | Cron registration (`mgr.register(cron, JobClass, **opts)`) |
 | `config.retain_history(seconds = 30) { |s| … }` | Ent historical-metrics snapshotter |
 | `config.dogstatsd = -> { … }` | Statsd/Dogstatsd client factory, invoked once per process after fork |
@@ -262,7 +265,8 @@ is the drop-in alias and is checked second (native wins).
 |---|---|---|
 | `REDIS_URL` | `Configuration#initialize`, `RedisPool::DEFAULT_URL` | Redis URL. Default `redis://localhost:6379/0` |
 | `WURK_COUNT` / `SIDEKIQ_COUNT` | `Configuration#default_child_count` | Swarm child processes. Whole number = absolute count; fractional = CPU multiplier (`0.5` → half the cores, rounded). Floored at 1. Unparseable → CPU count. Default: detected CPU count (cgroup CPU limit, else `Etc.nprocessors`) |
-| `WURK_MAXMEM_MB` / `SIDEKIQ_MAXMEM_MB` | `Configuration#memory_limit_mb` | Parent TERMs + respawns any child whose RSS exceeds this. Unset/unparseable → recycling off |
+| `WURK_MAXMEM_MB` / `SIDEKIQ_MAXMEM_MB` | `Configuration#memory_limit_mb` | Parent replaces any child whose memory exceeds this. Unset/unparseable → recycling off |
+| `WURK_MAXMEM_METRIC` | `Configuration#memory_limit_metric` | `rss` (default), `pss` or `uss`. Anything else raises at boot |
 | `WURK_DISABLED` | `RailsBoot.skip_boot?` | `=1` skips both server mode and the swarm boot in a Rails host |
 | `APPLY` | `rake wurk:import:cron` (`lib/wurk/rake_tasks.rb`) | `=1` writes the imported sidekiq-cron loops to Redis; anything else is a dry run. Read only by that task |
 | `WURK_HEALTH_PORT` | `Launcher#build_health_server` | Turns on the [health listener](#health-checks) on this port. `config.health_check` wins when both are set. A non-numeric value raises at boot |
@@ -545,8 +549,12 @@ Wurk.configure_server { |config| config.memory_limit_mb = 1024 }
 # or: SIDEKIQ_MAXMEM_MB=1024 / WURK_MAXMEM_MB=1024
 ```
 
-The swarm parent checks child RSS every 10s and TERMs + respawns any child over
-the limit. `nil` or `0` disables it (the default).
+The swarm parent checks each child every 10s and replaces any child over the
+limit gracefully. `nil` or `0` disables it (the default). A child already over
+the limit in its first 60s is reported once and not recycled, since its
+replacement would be as large; see
+[deployment](deployment.md#memory-based-auto-restart) for the metric choice
+(`memory_limit_metric`) and sizing.
 
 ---
 

@@ -70,6 +70,19 @@ class FetcherReliableTest < Wurk::Test::UnitCase
     assert_equal 1, llen(private_queue)
   end
 
+  # The fetch path's positional constructor builds the unit the keyword one
+  # does, member for member.
+  def test_claimed_unit_equals_the_keyword_built_one
+    claimed = Wurk::Fetcher::Reliable::UnitOfWork.claimed(@public_queue, @queue_name, private_queue, 'p', @capsule,
+                                                          @fetcher)
+    keyword = Wurk::Fetcher::Reliable::UnitOfWork.new(queue: @public_queue, queue_name: @queue_name,
+                                                      private_queue: private_queue, job: 'p', config: @capsule,
+                                                      fetcher: @fetcher)
+
+    assert_equal keyword, claimed
+    assert_equal keyword.to_h, claimed.to_h
+  end
+
   def test_unit_of_work_carries_public_queue_key_and_capsule
     enqueue('p1')
     uow = @fetcher.retrieve_work
@@ -692,6 +705,25 @@ class FetcherReliableTest < Wurk::Test::UnitCase
     @fetcher.queues_cmd.each { |q| assert_includes %w[queue:hot queue:cold], q }
   end
 
+  # The shuffled order is drawn exactly as `shuffle.uniq` drew it — the same
+  # random stream, the same first-occurrence trim — whether or not the list
+  # holds duplicates, so the fairness of random and weighted fetch is unchanged.
+  def test_queues_cmd_shuffled_order_matches_shuffle_uniq_draw_for_draw
+    [%w[a,1 b,1 c,1 d,1], %w[hot,3 warm,2 cold,1], %w[a,1 a,1 b,1]].each do |spec|
+      @capsule.queues = spec
+      prefixed = @capsule.queues.map { |q| "queue:#{q}" }
+      [1, 7, 42, 1234].each do |seed|
+        srand(seed)
+        expected = prefixed.shuffle.uniq
+        srand(seed)
+
+        assert_equal expected, @fetcher.queues_cmd, "#{spec} seed #{seed}"
+      end
+    end
+  ensure
+    srand
+  end
+
   # The strict path is the steady state for almost every install, and it runs
   # once per fetch attempt: with nothing paused it must hand back the array it
   # built at first use rather than re-prefixing every queue name.
@@ -745,12 +777,16 @@ class FetcherReliableTest < Wurk::Test::UnitCase
     assert_equal nonce, Wurk::Fetcher::Reliable.private_queue_name(@public_queue).split('|')[3]
   end
 
-  # Two strings per fetch (the private list key and the unprefixed queue name)
-  # are pure functions of the queue, and the private one costs a gethostname
-  # syscall to build — so they are built once per queue, not once per job.
+  # The private list key, the unprefixed queue name and the LMOVE between the
+  # queue and its list are pure functions of the queue, and the private one
+  # costs a gethostname syscall to build — so they are built once per queue,
+  # not once per job.
   def test_the_strings_derived_from_a_queue_are_built_once
-    assert_same @fetcher.send(:queue_keys, @public_queue), @fetcher.send(:queue_keys, @public_queue)
-    assert_equal [private_queue, @queue_name], @fetcher.send(:queue_keys, @public_queue)
+    keys = @fetcher.send(:queue_keys, @public_queue)
+
+    assert_same keys, @fetcher.send(:queue_keys, @public_queue)
+    assert_equal [private_queue, @queue_name, ['LMOVE', @public_queue, private_queue, 'RIGHT', 'LEFT']], keys
+    assert_predicate keys.last, :frozen?
   end
 
   # The pid is half the private list's identity. A fetcher materialized before a

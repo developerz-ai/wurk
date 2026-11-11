@@ -39,6 +39,10 @@ module Wurk
     class ServerMiddleware
       include Wurk::Middleware::ServerMiddleware
 
+      # One instance per chain entry, shared by every job (Middleware::Chain::Entry):
+      # #call keeps its state in locals and writes no ivar.
+      def self.shared_instance? = true
+
       CALLBACK_JOB = 'Wurk::Batch::CallbackJob'
 
       # The middleware this one must stay OUTSIDE of — the ordering anchor

@@ -151,8 +151,8 @@ code, changing `WURK_COUNT`/topology, or changing anything read at parent boot.
 
 ## Memory-based auto-restart
 
-Ruby worker processes leak. The swarm parent can recycle a child that grows past an
-RSS ceiling.
+Ruby worker processes leak. The swarm parent can recycle a child that grows past a
+memory ceiling.
 
 | Knob | Value |
 |---|---|
@@ -160,6 +160,7 @@ RSS ceiling.
 | `WURK_MAXMEM_MB` | Native alias. Takes precedence over `SIDEKIQ_MAXMEM_MB`. |
 | `config.memory_limit_mb = 1024` | Ruby setter. An explicit value wins over both env vars. |
 | Default | **Disabled.** `nil`, `0`, empty, or unparseable input disables recycling (it never raises at boot). |
+| `WURK_MAXMEM_METRIC` / `config.memory_limit_metric =` | What the limit is compared against: `rss` (default, Enterprise's meaning), `pss` or `uss`. Wurk-only. An unknown value raises at boot. |
 
 ```bash
 SIDEKIQ_MAXMEM_MB=1500 bundle exec wurkswarm -e production
@@ -172,11 +173,22 @@ Wurk.configure_server do |config|
 end
 ```
 
-**How it's measured.** Every **10s** (`MEMORY_CHECK_INTERVAL`) the parent reads
-`/proc/<pid>/statm` for each child and converts the resident-pages field to KB
-(pages × 4KB). No gem, no `ps` fork. On a platform without `/proc` the read returns
-`nil` and the child is simply never recycled — **memory recycling is Linux-only in
-practice**.
+**How it's measured.** Every **10s** (`Swarm::MemoryWatch::CHECK_INTERVAL`) the parent
+reads each child's memory from `/proc`. No gem, no `ps` fork.
+
+| Metric | Source | Counts |
+|---|---|---|
+| `rss` | `/proc/<pid>/statm`, resident pages × the kernel's page size | Every resident page, including the ones still shared copy-on-write with the parent. Each child carries the whole preloaded app. |
+| `pss` | `/proc/<pid>/smaps_rollup` `Pss` | Shared pages split across the processes sharing them. Sums to the real footprint of the fleet. |
+| `uss` | `/proc/<pid>/smaps_rollup` `Private_Clean + Private_Dirty` | Only the child's own pages: what killing it would free. |
+
+`rss` keeps Enterprise's trigger, so a limit carried over from Sidekiq Enterprise fires
+at the same point. Its catch: RSS counts the preloaded app in every child, so it sits
+well above what each child really costs, and it rises as copy-on-write pages get
+written. `pss` or `uss` tracks the growth you actually want to cap. On a host without
+`/proc` (macOS) or without `smaps_rollup` (Linux < 4.14), nothing is read and no child
+is recycled; the parent logs a WARN at boot when a limit is set and it cannot read
+the metric.
 
 **What happens on breach.** The child is handed to the *same* rolling-restart state
 machine described above: replacement forked → heartbeat awaited → old child `TERM`ed
@@ -185,15 +197,126 @@ restart already in flight on that slot (the queue de-duplicates by pid). The par
 logs:
 
 ```text
-swarm: child 4242 RSS 1574912KB >= 1536000KB; recycling
+swarm: child 4242 (slot 0) RSS 1574912KB >= 1536000KB 3605s after boot; recycling
 ```
+
+**A limit below a fresh child is reported, not looped.** A child already over the limit
+within its first 60s (`Swarm::MemoryWatch::FRESH`) is never recycled: its replacement
+would boot just as large and be recycled in turn, forking a new child every few
+seconds. That child is left running for its life, and the parent logs one ERROR per
+slot:
+
+```text
+swarm: child 4242 (slot 0) is 812000KB RSS 1s after boot, already over memory_limit_mb (500 MB). ...
+```
+
+Raise the limit above what a booted child uses (or switch to `pss`). A child that
+crosses the limit only after its first 60s is recycled as usual; if its replacement is
+over within its own first 60s, the replacement is the one spared, so a slot recycles at
+most once for that cause.
+
+**Sizing the limit.** Read a booted child's memory after it has run real work (the
+`pss` and `rss` columns of `bench/rss_soak.rb` show the shape; your app's numbers are
+your own), then set the limit above that plus the growth you will tolerate. While a
+recycle or rolling restart is in flight the slot runs **two** children, old and
+replacement, so budget the pod for `WURK_COUNT + 1` children, plus the parent.
 
 > **Divergence from Sidekiq Enterprise.** The Ent spec
 > ([`docs/target/sidekiq-ent.md`](target/sidekiq-ent.md) §7.5) describes signalling
 > the bloated child with `USR2` first. Wurk does not — `USR2` is reserved for log
 > reopening, and the graceful replacement-then-`TERM` path already gives a cleaner
 > hand-off. The observable contract (child exceeding the threshold is gracefully
-> replaced) is the same.
+> replaced) is the same. The fresh-child guard and the `pss`/`uss` metrics are
+> Wurk-only.
+
+## Memory
+
+### Copy-on-write and the pre-fork warmup
+
+A swarm child starts as a copy-on-write image of the parent: the app the parent loaded
+costs memory once, until a child writes to a page and gets its own copy. Before its
+first fork the swarm parent (both `wurkswarm` and the Rails auto-boot swarm) loads
+what every child would otherwise load for itself and settles the heap:
+`Process.warmup` on Ruby 3.3+, a full GC then `GC.compact` on Ruby 3.2.
+`RUBY_DISABLE_WARMUP=1` skips the heap step. Respawns and recycles fork from the
+running parent without it, because in a web process a full compaction is a pause its
+requests would feel.
+
+What it buys is the child's **shared ratio** right after boot,
+`(Shared_Clean + Shared_Dirty) / Rss` from `smaps_rollup`. `bench/rss_soak.rb` prints it
+at `jobs = 0`:
+
+```bash
+RSS_JOBS=0 ruby -Ilib bench/rss_soak.rb                         # with the warmup
+RUBY_DISABLE_WARMUP=1 RSS_JOBS=0 ruby -Ilib bench/rss_soak.rb   # without
+```
+
+Measured 2026-11-11 on the `test/dummy` app (Ruby 3.4, 4 children, three runs each):
+0.72 shared and 35 MB Pss per child with `Process.warmup`, 0.65 and 40 MB with the
+Ruby 3.2 fallback (the same Ruby with `Process.warmup` removed), 0.57 and 46 MB with
+no warmup. Measure your own app the same way; the ratio falls as jobs run and write to
+inherited pages, which is the rest of the table in
+[`benchmarks.md`](benchmarks.md#memory-per-process).
+
+`WURK_PRELOAD_APP=1` / `SIDEKIQ_PRELOAD_APP=1` eager-loads the whole app in the parent
+before the fork, so classes a child would autoload are shared instead of loaded N
+times.
+
+### Allocator
+
+Each child runs `concurrency` threads, and glibc's malloc gives threads their own
+arenas, which fragment: a multi-threaded Ruby process can hold far more RSS than its
+live heap. Two common fixes, both set in the environment the parent starts in (the
+children inherit it):
+
+```dockerfile
+# Option A: jemalloc
+RUN apt-get update && apt-get install -y --no-install-recommends libjemalloc2
+ENV LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2
+
+# Option B: cap glibc's arenas
+ENV MALLOC_ARENA_MAX=2
+```
+
+Which one wins depends on the app; measure before and after with the same bench, on
+the same host:
+
+```bash
+RSS_JOBS=100000 ruby -Ilib bench/rss_soak.rb
+MALLOC_ARENA_MAX=2 RSS_JOBS=100000 ruby -Ilib bench/rss_soak.rb
+LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 RSS_JOBS=100000 ruby -Ilib bench/rss_soak.rb
+```
+
+Compare the `steady` Pss slope per 10k jobs and the Pss at the last checkpoint. The
+allocator changes where `MAXMEM` trips: re-size the limit after switching.
+
+### Redis memory: Wurk-only keys
+
+Beyond Sidekiq's own keys (queues, `schedule`, `retry`, `dead`, `processes`, stats),
+these are the key families Wurk writes, when each goes away, and how to stop writing
+it. None is written unless its feature is in use.
+
+| Keys | Written by | Expires | Turn off |
+|---|---|---|---|
+| `status:<jid>` | Status tracking, per opted-in job | 30 min after the last write; `status_retention` changes what is kept after the job ends | Don't opt the class into status |
+| `it-<jid>` | Iterable jobs (Sidekiq's schema) | Deleted on completion; 30 days otherwise | — |
+| `unique:<digest>` | `unique!` + `unique_for:` | `unique_for` (+ the delay when scheduled); released on success or start | `unique_for: false` |
+| `debounce:<digest>` | Debounce | When the pending job is due, plus a grace | Drop the debounce option |
+| `throttle:<digest>:<slot>` | Throttle | End of its slot | Drop the throttle option |
+| `lmtr-*` | Limiters | 90 days idle by default (`ttl:`, floored at 1 day); the `lmtr-list` index has no TTL | Don't build the limiter |
+| `queue_slot:<queue>` | Global per-queue concurrency | No TTL; holders expire inside the ZSET and the next claim prunes them | Remove the queue cap |
+| `b-<bid>*`, `batches` | Batches | 30 days; 24 h after `:success` | — |
+| `flow:<fid>*`, `flows` | Flows | Batch clock (30 days) | — |
+| `j\|*` | Per-class execution metrics | Minute buckets 8 h, 10-minute buckets 30 days; histograms 8 h | Metrics history off |
+| `qm\|*` | Per-queue gauges (leader only) | 1-minute 24 h, 5-minute 7 days, 1-hour 30 days | Metrics history off |
+| `history:metrics` | Cluster snapshots (leader only) | Capped stream | History off |
+| `idempotency:<digest>` | HTTP API `Idempotency-Key` | `api_idempotency_ttl` (1 h) | Don't send the header |
+| `profiles`, `<token>-<jid>` | Profiler | 1 day | Don't profile |
+
+A Redis or Dragonfly store holding jobs must stay below `maxmemory`; see
+[Dragonfly](#dragonfly). To see what a feature mix costs per job on your workload, run
+`bench/rss_soak.rb` with `RSS_FEATURES` (`plain,status,unique,limiter`): every
+checkpoint prints Redis `used_memory` and `DBSIZE`.
 
 ---
 

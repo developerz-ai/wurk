@@ -263,6 +263,20 @@ class SentryMiddlewareTest < Wurk::Test::UnitCase
   # Never reported
   # =====================================================================
 
+  # M6: a failed job's exception is not pinned to the processor thread for the
+  # rest of its life; the next job on the thread lets it go.
+  def test_the_next_job_releases_the_previous_jobs_exception
+    assert_raises_boom(terminal_job)
+
+    refute_nil Thread.current[Wurk::Sentry::ErrorHandler::REPORTED_ON_THREAD]
+    refute_nil Thread.current[Wurk::Sentry::ErrorHandler::SEEN_BY_MIDDLEWARE]
+
+    run_job(job) { :ok }
+
+    assert_nil Thread.current[Wurk::Sentry::ErrorHandler::REPORTED_ON_THREAD]
+    assert_nil Thread.current[Wurk::Sentry::ErrorHandler::SEEN_BY_MIDDLEWARE]
+  end
+
   def test_does_not_capture_wurk_shutdown
     assert_raises(Wurk::Shutdown) { run_job(terminal_job) { raise Wurk::Shutdown } }
 

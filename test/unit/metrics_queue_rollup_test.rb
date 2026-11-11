@@ -99,8 +99,25 @@ class MetricsQueueRollupTest < Wurk::Test::UnitCase
     h = bucket_hash('1m')
     fields = ["#{@q1}|sz", "#{@q1}|lt", "#{@q2}|sz", "#{@q2}|lt"]
 
-    assert_equal({ "#{@q1}|sz" => '1', "#{@q1}|lt" => '0.0', "#{@q2}|sz" => '1', "#{@q2}|lt" => '0.0' },
-                 h.slice(*fields))
+    assert_equal({ "#{@q1}|sz" => '1', "#{@q2}|sz" => '1' }, h.slice(*fields), 'a 0.0 latency is not stored')
+  end
+
+  # 07-A15: zero gauges are not stored (readers default to 0), and a queue that
+  # drains inside a coarse bucket reads 0 there, not its earlier sample.
+  def test_zero_gauges_are_not_stored_and_clear_an_earlier_sample
+    seed_queue(@q1, depth: 2, head_age_s: 30)
+    Wurk.redis { |c| c.call('SADD', 'queues', @q2) }
+    @qr.sample(@at)
+
+    assert_equal ["#{@q1}|lt", "#{@q1}|sz"], bucket_hash('5m').keys.select { |f| f.start_with?('qmq-') }.sort
+
+    Wurk.redis { |c| c.call('DEL', "queue:#{@q1}") }
+    @qr.sample(@at)
+
+    assert_empty(bucket_hash('5m').keys.select { |f| f.start_with?('qmq-') })
+    points = Wurk::Metrics::Query.queue_history('5m', 300, queues: [@q1], now: @at).first[:points]
+
+    assert_equal [{ at: (@at.to_i / 300) * 300, size: 0, latency: 0.0 }], points
   end
 
   def test_tick_samples_when_leader

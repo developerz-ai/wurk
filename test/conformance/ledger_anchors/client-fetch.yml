@@ -1,5 +1,5 @@
 - entry: "Immediate plain multi-queue pushes register queues per group"
-  anchor: "lib/wurk/client.rb#L426-L439"
+  anchor: "lib/wurk/client.rb#L437-L450"
   fragment: |-
     # One pipeline per queue, marked delivered the moment its reply is in.
     # A push can die between groups — or land its whole plain phase and then
@@ -13,7 +13,7 @@
       Thread.current[WRITE_STATE_KEY] &&= :applied
 
 - entry: "Immediate plain multi-queue pushes register queues per group"
-  anchor: "lib/wurk/client.rb#L452-L477"
+  anchor: "lib/wurk/client.rb#L473-L498"
   fragment: |-
     conn.pipelined do |pipe|
       pipe.call('SADD', 'queues', queue)
@@ -35,7 +35,7 @@
     BasicFetch       = Wurk::Fetcher::Reliable
 
 - entry: "Private-list names include a process-image nonce"
-  anchor: "lib/wurk/fetcher/reliable.rb#L78-L86"
+  anchor: "lib/wurk/fetcher/reliable.rb#L87-L95"
   fragment: |-
     def self.private_queue_name(public_queue, index = 0, pid: ::Process.pid)
       "#{public_queue}|#{Component.hostname}|#{pid}|#{Component::PROCESS_NONCE}|#{index}"
@@ -61,14 +61,14 @@
     end
 
 - entry: "Rolling restart drives itself from the supervise loop; no einhorn"
-  anchor: "lib/wurk/swarm.rb#L272-L274"
+  anchor: "lib/wurk/swarm.rb#L275-L277"
   fragment: |-
     def rolling_restart
       @lock.synchronize { @restart.enqueue(@children.keys) }
     end
 
 - entry: "Rolling restart drives itself from the supervise loop; no einhorn"
-  anchor: "lib/wurk/swarm.rb#L502-L516"
+  anchor: "lib/wurk/swarm.rb#L525-L539"
   fragment: |-
     when :usr1 then rolling_restart
 
@@ -84,34 +84,38 @@
     when :usr2 then reopen_logs
 
 - entry: "USR2 reopens logs; RSS recycling uses the rolling-restart machine"
-  anchor: "lib/wurk/swarm.rb#L502-L516"
+  anchor: "lib/wurk/swarm.rb#L525-L539"
   fragment: |-
     when :usr2
       reopen_logs
       relay_signal('USR2')
 
 - entry: "USR2 reopens logs; RSS recycling uses the rolling-restart machine"
-  anchor: "lib/wurk/swarm.rb#L531-L535"
+  anchor: "lib/wurk/swarm.rb#L554-L558"
   fragment: |-
     def reopen_logs
       log = @config.logger
       log.reopen if log.respond_to?(:reopen)
 
 - entry: "USR2 reopens logs; RSS recycling uses the rolling-restart machine"
-  anchor: "lib/wurk/swarm.rb#L714-L716"
+  anchor: "lib/wurk/swarm.rb#L708-L710"
   fragment: |-
     def relay_signal(sig)
       child_pids.each { |pid| safe_kill(pid, sig) }
     end
 
 - entry: "USR2 reopens logs; RSS recycling uses the rolling-restart machine"
-  anchor: "lib/wurk/swarm.rb#L684-L703"
+  anchor: "lib/wurk/swarm.rb#L357-L362"
   fragment: |-
-    logger.warn { "swarm: child #{pid} RSS #{rss}KB >= #{@memory_limit}KB; recycling" }
-    @lock.synchronize { @restart.enqueue([pid]) }
+    recycle: ->(pid) { @lock.synchronize { @restart.enqueue([pid]) } })
 
 - entry: "USR2 reopens logs; RSS recycling uses the rolling-restart machine"
-  anchor: "lib/wurk/swarm.rb#L272-L274"
+  anchor: "lib/wurk/swarm/memory_watch.rb#L66-L78"
+  fragment: |-
+    return mark(pid, size_kb, age, slot) if age < @fresh
+
+- entry: "USR2 reopens logs; RSS recycling uses the rolling-restart machine"
+  anchor: "lib/wurk/swarm.rb#L275-L277"
   fragment: |-
     @lock.synchronize { @restart.enqueue(@children.keys) }
 

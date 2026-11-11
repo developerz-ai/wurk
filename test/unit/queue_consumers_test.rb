@@ -81,6 +81,46 @@ class QueueConsumersTest < Wurk::Test::UnitCase
     assert_equal %w[ghost], @watch.check
   end
 
+  # M6: queue names come from data. A warned queue that drains is forgotten
+  # once its throttle window has passed, not kept for the life of the leader.
+  def test_a_drained_queue_is_forgotten_after_its_throttle_window
+    live('a:1:n', %w[default])
+    100.times { |i| job("ghost-#{i}") }
+    @watch.check
+    @now = 300
+
+    assert_equal 100, @watch.check.size
+    100.times { |i| @redis.call('DEL', "queue:ghost-#{i}") }
+    @now = 3899
+    @watch.check
+
+    assert_equal 100, @watch.instance_variable_get(:@warned_at).size, 'still inside the throttle window'
+
+    @now = 3900
+    @watch.check
+
+    assert_empty @watch.instance_variable_get(:@warned_at)
+    assert_empty @watch.instance_variable_get(:@unconsumed_since)
+  end
+
+  # Draining inside the window does not reset the throttle: a refilled queue
+  # stays quiet until the window it was warned in has passed.
+  def test_a_queue_that_drains_and_refills_stays_throttled
+    live('a:1:n', %w[default])
+    job('ghost')
+    @watch.check
+    @now = 300
+
+    assert_equal %w[ghost], @watch.check
+    @redis.call('DEL', 'queue:ghost')
+    @now = 400
+    @watch.check
+    job('ghost')
+    @now = 1000
+
+    assert_empty @watch.check
+  end
+
   def test_empty_and_subscribed_queues_are_never_reported
     live('a:1:n', %w[default])
     @redis.call('SADD', Wurk::Keys::QUEUES_SET, 'drained')

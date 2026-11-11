@@ -79,23 +79,23 @@ class ActiveJobAdapterTest < Wurk::Test::UnitCase
   # The adapter registers its :quiet hook on the configuration directly. The
   # file is loaded eagerly by lib/wurk/engine.rb — before the railtie enters
   # server mode — so a gated registration (Wurk.configure_client /
-  # Wurk.configure_server) would log the skip WARN and spend the one-time
-  # warning the host's own skipped initializer needs.
+  # Wurk.configure_server) would log the skip line and spend the one-time
+  # notice the host's own skipped initializer needs.
   #
   # Probed in cold subprocesses: the load-time side effect is process-global
   # and one-way, so asserting it in-process would leak into sibling suites.
   # Both process roles are covered — a web process skips the host's
   # configure_server block, a worker skips its configure_client block.
-  def test_the_adapter_registers_the_quiet_hook_without_consuming_a_skip_warning
+  def test_the_adapter_registers_the_quiet_hook_without_consuming_the_skip_notice
     web, web_status = load_time_probe
     worker, worker_status = load_time_probe('server')
 
     assert_equal 0, web_status, "the web-role probe failed:\n#{web}"
     assert_equal 0, worker_status, "the worker-role probe failed:\n#{worker}"
     [['web', web, 'configure_server'], ['worker', worker, 'configure_client']].each do |role, out, gate|
-      assert_includes out, 'AT_LOAD_LOG=""', "skip WARN logged at load time (#{role}):\n#{out}"
+      assert_includes out, 'AT_LOAD_LOG=""', "skip line logged at load time (#{role}):\n#{out}"
       assert_includes out, 'QUIET_HOOKS=1', "no :quiet hook registered (#{role}):\n#{out}"
-      assert_includes out, "#{gate} block skipped", "the host's initializer lost its WARN (#{role}):\n#{out}"
+      assert_includes out, "#{gate} block skipped", "the host's initializer lost its skip line (#{role}):\n#{out}"
     end
   end
 

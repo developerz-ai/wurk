@@ -32,6 +32,10 @@ module Wurk
     class Status
       include Wurk::Middleware::ServerMiddleware
 
+      # One instance per chain entry, shared by every job (Middleware::Chain::Entry):
+      # #call and its helpers keep their state in locals and write no ivar.
+      def self.shared_instance? = true
+
       # Hard cap on a stored result, in bytes. A job that returns an
       # ActiveRecord relation must cost Redis 8 KB, not a table dump — past the
       # cap the head is kept and `result_truncated` says the rest was dropped.

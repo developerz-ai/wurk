@@ -19,7 +19,7 @@
     release
 
 - entry: '`WURK_PRELOAD_APP` toggles eager-load only; the parent always loads the app'
-  anchor: lib/wurk/cli.rb#L756-L780
+  anchor: lib/wurk/cli.rb#L757-L781
   fragment: |-
     def eager_load_application
     return unless preload_app?
@@ -30,7 +30,7 @@
     LIFECYCLE_EVENTS = %i[startup fork quiet shutdown exit heartbeat beat leader].freeze
 
 - entry: "`:fork` and `:leader` extend the free spec's lifecycle events"
-  anchor: lib/wurk/configuration.rb#L794-L798
+  anchor: lib/wurk/configuration.rb#L798-L802
   fragment: |-
     unless LIFECYCLE_EVENTS.include?(event)
     raise ArgumentError, "invalid event #{event.inspect}, must be one of #{LIFECYCLE_EVENTS.inspect}"
@@ -47,7 +47,7 @@
     @options[:redis_error_handlers] << block
 
 - entry: 'DEFAULTS adds `:redis_error_handlers`'
-  anchor: lib/wurk/configuration.rb#L1252-L1253
+  anchor: lib/wurk/configuration.rb#L1292-L1293
   fragment: |-
     def dispatch_redis_error(info)
     redis_error_handlers.each do |handler|

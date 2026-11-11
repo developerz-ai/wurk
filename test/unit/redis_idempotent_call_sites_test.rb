@@ -70,6 +70,11 @@ class RedisIdempotentCallSitesTest < Wurk::Test::UnitCase
       @conn.call(*args, **, &)
     end
 
+    def call_v(command, &)
+      @log << command.first.to_s
+      @conn.call_v(command, &)
+    end
+
     def call_once(*args, **, &)
       @log << args.first.to_s
       @conn.call_once(*args, **, &)
@@ -317,8 +322,8 @@ class RedisIdempotentCallSitesTest < Wurk::Test::UnitCase
   end
 
   # The beat is the one split call site: its writes converge on the same
-  # identity hash and keep the backoff, while the signal RPOPs — a dashboard
-  # TERM/TSTP each — get their own checkout that must never replay.
+  # identity hash and keep the backoff, while the signal drain — the dashboard
+  # TERM/TSTP entries — gets its own checkout that must never replay.
   def test_heartbeat_write_claims_apply_safety_but_the_signal_drain_does_not
     Wurk::Heartbeat.new(identity: "#{@ns}:1:x", config: @config).beat!
 

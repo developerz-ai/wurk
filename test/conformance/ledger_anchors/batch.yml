@@ -10,13 +10,13 @@
     conn.call('HMGET', "b-#{bid}", 'callbacks', 'callback_queue', 'parent_bid')
     end
 - entry: 'Batch `b-<bid>-failinfo` is not written or imported'
-  anchor: 'lib/wurk/batch/status.rb#L55-L66'
+  anchor: 'lib/wurk/batch/status.rb#L63-L74'
   fragment: |-
     def failure_info
     []
     end
 - entry: 'Batch `b-<bid>-failinfo` is not written or imported'
-  anchor: 'lib/wurk/batch/server_middleware.rb#L120-L129'
+  anchor: 'lib/wurk/batch/server_middleware.rb#L121-L130'
   fragment: |-
     keys: ["b-#{bid}", "b-#{bid}-failed"],
     argv: [jid, Batch::DEFAULT_EXPIRY_SECONDS]
@@ -52,7 +52,7 @@
     raw = @data['tags']
     return [] if raw.nil? || raw.empty?
 - entry: 'Batch tags use a JSON field and reverse indexes, not `b-<bid>-tags`'
-  anchor: 'lib/wurk/batch_set.rb#L41-L53'
+  anchor: 'lib/wurk/batch_set.rb#L48-L60'
   fragment: |-
     Wurk.redis do |conn|
     loop do
@@ -64,7 +64,7 @@
     # from Sidekiq Pro on the gem swap gets swept too; EXPIRE/UNLINK of a
     # missing key is a no-op for batches Wurk created itself.
 - entry: 'Batch tags use a JSON field and reverse indexes, not `b-<bid>-tags`'
-  anchor: 'lib/wurk/batch/status.rb#L129-L135'
+  anchor: 'lib/wurk/batch/status.rb#L130-L136'
   fragment: |-
     own    = Batch.keys_for(@bid)
     pending, live, kids = Wurk.redis do |conn|

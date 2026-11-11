@@ -6,10 +6,12 @@ require 'wurk'
 require_relative 'algo/support'
 
 # The Pro Fast API deletes on a big queue — row 07-A3 of docs/plans/2026/11/10/
-# 101-evidence-driven-improvement-sweep/07-algorithms.md. Both scripts
-# (Lua::FAST_DELETE_JOB, FAST_DELETE_BY_CLASS) copy the whole list into the
-# Lua heap (`lrange 0 -1`), then LREM each match from the head; Redis serves
-# no other client meanwhile. The dashboard's "delete job" button is
+# 101-evidence-driven-improvement-sweep/07-algorithms.md. Lua::FastDelete walks
+# the list a window (Lua::FastDelete::WINDOW entries) per EVALSHA, so Redis is
+# held for one window at a time. Before A3 one script copied the whole list
+# into the Lua heap (`lrange 0 -1`) and LREMed each match: 306,671 usec per
+# delete_by_class call and 95,292 per delete_job at the defaults, every one of
+# them a stall for every other client. The dashboard's "delete job" button is
 # Queue#delete_job.
 #
 #   delete_by_class — removes VICTIMS jobs of one class from a queue of SIZE.
@@ -18,12 +20,12 @@ require_relative 'algo/support'
 # Victims sit at the tail, the oldest end, so each LREM walks the whole list
 # first: the worst case, and where a backed-up queue's stuck jobs are.
 #
-# Two numbers per row, both advisory, both i/s-shaped: the client-side rate,
-# and `INFO commandstats` evalsha usec_per_call turned into calls/s — the time
-# Redis spent blocked inside the script. commandstats is server-wide, so run on
-# a private server. Nothing here is a count, so WURK_BENCH_COUNTS_ONLY=1 runs
-# no rows. The removed count is checked, so a delete that silently
-# finds nothing fails the run.
+# Round trips per delete are deterministic (one per window) and checked against
+# BUDGETS at the defaults. Two more numbers per row, both advisory, both
+# i/s-shaped: the client-side rate, and `INFO commandstats` evalsha
+# usec_per_call turned into calls/s — the longest Redis is held by one call.
+# commandstats is server-wide, so run on a private server. The removed count is
+# checked, so a delete that silently finds nothing fails the run.
 #
 #   eval "$(bin/redis env algobench)"
 #   bundle exec ruby -Ilib bench/fast_delete.rb
@@ -34,6 +36,10 @@ SIZE    = Integer(ENV.fetch('WURK_BENCH_FAST_DELETE_SIZE', '100000'))
 VICTIMS = Integer(ENV.fetch('WURK_BENCH_FAST_DELETE_VICTIMS', '100'))
 QUEUE   = 'fastdel'
 
+# [round trips, commands] per delete at the defaults: one EVALSHA per window.
+# Before A3 both were 1, holding Redis for the whole queue.
+BUDGET = [101, 101].freeze
+GATED = SIZE == 100_000
 config = Wurk.configuration
 config.logger = Logger.new(IO::NULL)
 config.redis = AlgoBench.redis_options('5')
@@ -56,6 +62,10 @@ end
 
 # Client rate, then the server's own time inside the script over those runs.
 def run(label, setup:, &)
+  setup.call
+  cost = AlgoBench.count(&)
+  AlgoBench.print_count(label, cost)
+  AlgoBench.budget_count!(label, cost, BUDGET) if GATED
   return if AlgoBench.counts_only?
 
   calls0, usec0 = evalsha_stats
@@ -87,3 +97,4 @@ begin
 ensure
   POOL.with { |c| c.call('FLUSHDB') }
 end
+AlgoBench.finish!

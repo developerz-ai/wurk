@@ -7,7 +7,7 @@ require 'wurk/middleware/i18n'
 class ConfigurationTest < Wurk::Test::UnitCase
   parallelize_me!
 
-  ENV_KNOBS = %w[WURK_COUNT SIDEKIQ_COUNT WURK_MAXMEM_MB SIDEKIQ_MAXMEM_MB].freeze
+  ENV_KNOBS = %w[WURK_COUNT SIDEKIQ_COUNT WURK_MAXMEM_MB SIDEKIQ_MAXMEM_MB WURK_MAXMEM_METRIC].freeze
 
   def setup
     @config = Wurk::Configuration.new
@@ -166,6 +166,27 @@ class ConfigurationTest < Wurk::Test::UnitCase
     ENV['SIDEKIQ_MAXMEM_MB'] = 'not-a-number'
 
     assert_nil @config.memory_limit_mb
+  end
+
+  def test_memory_limit_metric_defaults_to_rss
+    assert_equal :rss, @config.memory_limit_metric
+  end
+
+  def test_memory_limit_metric_reads_the_env_and_the_setter_wins
+    ENV['WURK_MAXMEM_METRIC'] = ' PSS '
+
+    assert_equal :pss, @config.memory_limit_metric
+
+    @config.memory_limit_metric = 'uss'
+
+    assert_equal :uss, @config.memory_limit_metric
+  end
+
+  # A typo would otherwise compare against RSS without a word.
+  def test_memory_limit_metric_rejects_unknown_values
+    assert_raises(ArgumentError) { @config.memory_limit_metric = :vsz }
+    ENV['WURK_MAXMEM_METRIC'] = 'vsz'
+    assert_raises(ArgumentError) { @config.memory_limit_metric }
   end
 
   # --- default capsule shortcuts ----------------------------------------
@@ -1023,7 +1044,7 @@ class ConfigurationTest < Wurk::Test::UnitCase
     assert_same @config, yielded
   end
 
-  def test_skipped_configure_blocks_warn_once_per_gate_and_instance
+  def test_skipped_configure_blocks_log_once_per_gate_and_instance
     2.times do
       config = Wurk::Configuration.new
       log = StringIO.new
@@ -1032,7 +1053,7 @@ class ConfigurationTest < Wurk::Test::UnitCase
       2.times { assert_nil(config.configure_server { flunk 'skipped server block ran' }) }
 
       assert_equal 1, log.string.lines.size
-      assert_includes log.string, 'WARN'
+      assert_includes log.string, 'DEBUG'
       assert_includes log.string, 'configure_server'
       assert_includes log.string, 'server? is false'
       config[:server] = true
@@ -1049,6 +1070,18 @@ class ConfigurationTest < Wurk::Test::UnitCase
       assert_includes log.string.lines.last, 'server? is true'
       assert_includes log.string.lines.last, 'client_in_server is false or nil'
     end
+  end
+
+  # hiscore, legald on 1.13.0: test runs and `rails runner` are not servers and
+  # are meant to skip configure_server, as stock Sidekiq does silently.
+  def test_a_non_server_process_with_a_configure_server_block_logs_nothing_at_warn
+    config = Wurk::Configuration.new
+    log = StringIO.new
+    config.logger = ::Logger.new(log, level: ::Logger::WARN)
+
+    config.configure_server { flunk 'skipped server block ran' }
+
+    assert_empty log.string
   end
 
   def test_blockless_configure_calls_are_silent_and_do_not_consume_warnings
@@ -1129,7 +1162,7 @@ class ConfigurationTest < Wurk::Test::UnitCase
       2.times { assert_nil(config.public_send(gate) { flunk 'skipped block ran' }) }
 
       assert_equal 1, log.string.lines.size
-      assert_includes log.string, gate == :configure_client ? 'DEBUG' : 'WARN'
+      assert_includes log.string, 'DEBUG'
       assert_includes log.string, "#{gate} block skipped"
     end
   end
@@ -1146,7 +1179,7 @@ class ConfigurationTest < Wurk::Test::UnitCase
 
       assert_nil(config.public_send(gate) { flunk 'skipped block ran' })
       assert_equal 1, log.string.lines.size
-      assert_includes log.string, gate == :configure_client ? 'DEBUG' : 'WARN'
+      assert_includes log.string, 'DEBUG'
       assert_includes log.string, "#{gate} block skipped"
     end
   end
@@ -1196,7 +1229,7 @@ class ConfigurationTest < Wurk::Test::UnitCase
     refute_predicate config, :server?
     assert_nil(config.configure_server { flunk 'non-server block ran' })
     assert_equal 1, log.string.lines.size
-    assert_includes log.string, 'WARN'
+    assert_includes log.string, 'DEBUG'
     assert_includes log.string, 'configure_server block skipped: server? is false'
     log.truncate(0)
     log.rewind
@@ -1245,7 +1278,7 @@ class ConfigurationTest < Wurk::Test::UnitCase
       2.times { assert_nil(config.public_send(gate) { flunk 'skipped frozen block ran' }) }
 
       assert_equal 1, log.string.lines.size
-      assert_includes log.string, gate == :configure_client ? 'DEBUG' : 'WARN'
+      assert_includes log.string, 'DEBUG'
       assert_includes log.string, gate.to_s
     end
   end

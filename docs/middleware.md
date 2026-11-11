@@ -172,7 +172,7 @@ def configure_server(&block)
   return if @configure_server_skip_warned
 
   @configure_server_skip_warned = true
-  logger.warn { 'configure_server block skipped: server? is false' }
+  logger.debug { 'configure_server block skipped: server? is false' }
   nil
 end
 
@@ -190,9 +190,11 @@ end
 A skipped `configure_client` block is never yielded. A skipped `configure_server`
 block is kept and runs if the process later enters server mode: gems call it at
 load time, which under the railtie comes before the server-mode initializer. The
-skip logs one WARN naming the gate and the condition that failed (`server? is false`, or `server? is true and
+skip logs one DEBUG line naming the gate and the condition that failed (`server? is false`, or `server? is true and
 client_in_server is false or nil`), once per gate per `Wurk::Configuration`
-instance; further skips of the same gate stay quiet. A call the gate allows
+instance, as Sidekiq skips both silently. A worker that boots with a
+`configure_client` block but no `configure_server` block gets one boot WARN,
+since its server middleware is likely in the wrong block. A call the gate allows
 logs nothing and returns whatever the block returned.
 
 `client_in_server` covers a process that is both server and client: the railtie
@@ -229,8 +231,7 @@ Server mode is entered *before* `config/initializers` load — the railtie's
 `wurk.server_mode` initializer calls `Wurk.enter_server_mode`, and the
 standalone CLI does the same before booting the app. That ordering is
 load-bearing: if it were reversed, every `configure_server` block would be
-skipped — each skip logging one WARN naming the gate (`configure_server` /
-`server? is false`) — and your server middleware would never register.
+skipped (logged once at DEBUG) and your server middleware would never register.
 
 Both chain readers accept a block *or* return the chain, so
 `config.server_middleware.add(X)` and `config.server_middleware { |c| c.add X }`

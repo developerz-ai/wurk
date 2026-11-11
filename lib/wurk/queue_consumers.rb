@@ -88,7 +88,7 @@ module Wurk
       def check
         now = @clock.call
         unconsumed = read_unconsumed
-        @unconsumed_since.select! { |queue, _| unconsumed.key?(queue) }
+        forget_settled(unconsumed, now)
         unconsumed.filter_map do |queue, size|
           @unconsumed_since[queue] ||= now
           next unless warn_due?(queue, now)
@@ -100,6 +100,15 @@ module Wurk
       end
 
       private
+
+      # Queue names come from data, so neither map may outlive its queue. A
+      # warning is remembered for the throttle window even after the queue
+      # drains, or a queue that empties and refills would warn every grace
+      # period instead of once per throttle.
+      def forget_settled(unconsumed, now)
+        @unconsumed_since.select! { |queue, _| unconsumed.key?(queue) }
+        @warned_at.select! { |queue, at| unconsumed.key?(queue) || now - at < @throttle }
+      end
 
       def warn_due?(queue, now)
         return false if now - @unconsumed_since[queue] < @grace

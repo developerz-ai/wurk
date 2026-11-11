@@ -41,9 +41,9 @@ unmarked for replay under the at-least-once contract, so neither absence nor
 exactly-once delivery is guaranteed in that case. Existing queue membership is
 not removed when a group fails.
 
-**Anchor:** [delivery tracking and round-trip rationale](../../lib/wurk/client.rb#L426-L439),
+**Anchor:** [delivery tracking and round-trip rationale](../../lib/wurk/client.rb#L437-L450),
 [delivery marking](../../lib/wurk/client.rb#L563-L565),
-[plain grouping and per-group SADD/LPUSH](../../lib/wurk/client.rb#L452-L477),
+[plain grouping and per-group SADD/LPUSH](../../lib/wurk/client.rb#L473-L498),
 free [§7.1 `atomic_push` semantics](../target/sidekiq-free.md#71-atomic_push-semantics-critical-for-wire-compat),
 and the public `push_bulk`
 parity cases using routing middleware and real Redis:
@@ -102,19 +102,19 @@ sleep, not a guarantee of scheduling or acquisition latency. This does not
 claim identical wake latency, FIFO ordering, or fairness relative to Ent.
 
 **Anchor:** [poll interval](../../lib/wurk/limiter/concurrent.rb#L16),
-[retry loop and immediate ignore](../../lib/wurk/limiter/concurrent.rb#L94-L103),
-[acquire/release key scope](../../lib/wurk/limiter/concurrent.rb#L106-L114),
+[retry loop and immediate ignore](../../lib/wurk/limiter/concurrent.rb#L89-L98),
+[acquire/release key scope](../../lib/wurk/limiter/concurrent.rb#L101-L109),
 [atomic acquisition and TTLs](../../lib/wurk/lua/limiter_concurrent_acquire.lua#L15-L33),
-[ZREM-only release](../../lib/wurk/lua/limiter_concurrent_release.lua#L7),
-[concurrent lifecycle keys](../../lib/wurk/limiter/concurrent.rb#L55-L57), and
-[reset/delete scope](../../lib/wurk/limiter/base.rb#L42-L53).
+[ZREM-only release](../../lib/wurk/lua/limiter_concurrent_release.lua#L10),
+[concurrent lifecycle keys](../../lib/wurk/limiter/concurrent.rb#L53-L55), and
+[reset/delete scope](../../lib/wurk/limiter/base.rb#L50-L61).
 
 ## Limiter reschedule cap routes to the dead set, not re-raise
 
 **Wurk:** `Limiter::ServerMiddleware` reschedules an over-limit job up to
 `reschedule` times (default 20); once the cap is hit, the job goes straight
 to the dead set tagged `rate_limited` instead of re-raising into the normal
-retry pipeline (`lib/wurk/limiter/server_middleware.rb:56-59,81-89`).
+retry pipeline (`lib/wurk/limiter/server_middleware.rb:60-63,85-93`).
 
 **Spec:** Ent §1.4 says a job that exhausts its rate-limit reschedule budget
 re-raises the original error and falls through to the standard
@@ -130,7 +130,7 @@ dead set with its own reason and death handlers, and it bumps
 observably different (dead-set reason, handler firing) but never loses a job
 and never causes a queue pileup the spec's re-raise path would risk.
 
-**Anchor:** `lib/wurk/limiter/server_middleware.rb:56-59,81-89`.
+**Anchor:** `lib/wurk/limiter/server_middleware.rb:60-63,85-93`.
 
 ## Private-list names include a process-image nonce
 
@@ -160,7 +160,7 @@ same boot, which inherit the same nonce: the
 [residual same-boot pid-reuse blind spot](#reaper-liveness-has-a-residual-local-pid-reuse-blind-spot--shared-with-super_fetch-not-fixed)
 remains unchanged.
 
-**Anchor:** [key generation](../../lib/wurk/fetcher/reliable.rb#L78-L86),
+**Anchor:** [key generation](../../lib/wurk/fetcher/reliable.rb#L87-L95),
 [nonce lifetime](../../lib/wurk/component.rb#L20-L22),
 [current and legacy parsing](../../lib/wurk/fetcher/private_list_key.rb#L30-L52)
 and [tail shapes](../../lib/wurk/fetcher/private_list_key.rb#L56-L78),
@@ -234,8 +234,8 @@ a short `ttl` (legal in Sidekiq Ent) booting after the gem swap.
 **Wurk:** `SIGUSR1` on the swarm parent enqueues every live child into
 `Swarm#rolling_restart`, a state machine (`spawn_replacement → await
 heartbeat → SIGTERM old slot → await exit → next`) driven entirely by the
-existing non-blocking supervise loop (`lib/wurk/swarm.rb:272-274`, the
-`:usr1` case at `lib/wurk/swarm.rb:502-516`, and the state machine in
+existing non-blocking supervise loop (`lib/wurk/swarm.rb:275-277`, the
+`:usr1` case at `lib/wurk/swarm.rb:525-539`, and the state machine in
 `lib/wurk/swarm/restart.rb`).
 
 **Spec:** Ent §8 describes rolling restarts via integration with
@@ -255,7 +255,7 @@ cycling, which the in-process state machine does (verified by
 `test/integration/rolling_restart_test.rb` and
 `test/integration/swarm_supervision_test.rb`, PR3).
 
-**Anchor:** `lib/wurk/swarm.rb:272-274`, `lib/wurk/swarm.rb:502-516`,
+**Anchor:** `lib/wurk/swarm.rb:275-277`, `lib/wurk/swarm.rb:525-539`,
 `lib/wurk/swarm/restart.rb`, PR3 (`fix/swarm-supervision`), Ent §8.
 
 ## USR2 reopens logs; RSS recycling uses the rolling-restart machine
@@ -263,9 +263,11 @@ cycling, which the in-process state machine does (verified by
 **Wurk:** `USR2` in a swarm child dispatches to `reopen_logs`, calling the
 logger's `reopen` method if supported; it does not quiet, exit, or restart the
 child. On a signal-enabled swarm parent, `drain_signals` reopens the parent's
-own logger and relays `USR2` to every child. RSS checks instead call
-`recycle_if_bloated`, which enqueues the affected pid via
-`@restart.enqueue([pid])` — no `USR2` trigger.
+own logger and relays `USR2` to every child. Memory checks instead go through
+`Swarm::MemoryWatch#check`, whose recycle callback enqueues the affected pid via
+`@restart.enqueue([pid])` — no `USR2` trigger. A child already over the limit
+within its first 60s is reported once and never recycled, so a limit below a
+booted child's size cannot fork-loop (upstream recycles regardless of age).
 
 The shared `Swarm::Restart` machine forks a replacement before sending `TERM`
 to the old child. It waits for the replacement's heartbeat **or the heartbeat
@@ -298,11 +300,12 @@ changes the signal and hand-off ordering, not the purpose of RSS recycling.
 
 **Anchor:** [ChildBoot signal table](../../lib/wurk/swarm/child_boot.rb#L32),
 [child dispatch and reopen](../../lib/wurk/swarm/child_boot.rb#L226-L247),
-[parent drain_signals](../../lib/wurk/swarm.rb#L502-L516),
-[parent reopen](../../lib/wurk/swarm.rb#L531-L535),
-[parent relay](../../lib/wurk/swarm.rb#L714-L716),
-[RSS check and recycle enqueue](../../lib/wurk/swarm.rb#L684-L703),
-[manual rolling_restart enqueue](../../lib/wurk/swarm.rb#L272-L274),
+[parent drain_signals](../../lib/wurk/swarm.rb#L525-L539),
+[parent reopen](../../lib/wurk/swarm.rb#L554-L558),
+[parent relay](../../lib/wurk/swarm.rb#L708-L710),
+[recycle enqueue](../../lib/wurk/swarm.rb#L357-L362),
+[memory check and fresh-child guard](../../lib/wurk/swarm/memory_watch.rb#L66-L78),
+[manual rolling_restart enqueue](../../lib/wurk/swarm.rb#L275-L277),
 [Restart deduplication](../../lib/wurk/swarm/restart.rb#L48-L54),
 [replacement spawn](../../lib/wurk/swarm/restart.rb#L99-L109), and
 [heartbeat/TERM/drain phases](../../lib/wurk/swarm/restart.rb#L145-L170).
@@ -471,16 +474,16 @@ execution spanning an interruption produces two `p` increments and two summed
 again. That is intentional, matches upstream's own double-counting of a second
 `track` call, and is not to be "fixed" back toward single-counting. Full terms
 in `docs/plans/2026/08/07/101-beyond-sidekiq/00-semantics-signoff.md` §1.
-Implementation: `lib/wurk/metrics/history.rb:60-90` and
-`lib/wurk/metrics/statsd.rb:161-180` both rescue and re-raise `Job::Interrupted`.
+Implementation: `lib/wurk/metrics/history.rb:65-95` and
+`lib/wurk/metrics/statsd.rb:165-184` both rescue and re-raise `Job::Interrupted`.
 Chain order verified in `test/unit/metrics_history_test.rb` and
 `test/unit/metrics_statsd_test.rb` (the #394 real-chain tests).
 
-**Anchor:** `lib/wurk/metrics/history.rb:60-90`,
-`lib/wurk/metrics/statsd.rb:161-180`, `lib/wurk/metrics/statsd.rb:213-218`,
-`lib/wurk/middleware/interrupt_handler.rb:35-37,50`,
-`lib/wurk/middleware/expiry.rb:62-64,111`,
-`lib/wurk.rb:338`, `lib/wurk.rb:354`, `lib/wurk.rb:361`,
+**Anchor:** `lib/wurk/metrics/history.rb:65-95`,
+`lib/wurk/metrics/statsd.rb:165-184`, `lib/wurk/metrics/statsd.rb:214-219`,
+`lib/wurk/middleware/interrupt_handler.rb:39-41,54`,
+`lib/wurk/middleware/expiry.rb:66-68,115`,
+`lib/wurk.rb:337`, `lib/wurk.rb:353`, `lib/wurk.rb:360`,
 `docs/plans/2026/08/07/101-beyond-sidekiq/00-semantics-signoff.md` §1.
 
 ## OpenTelemetry adds `traceparent`/`tracestate` as top-level job-JSON keys, opt-in only
@@ -736,7 +739,7 @@ particular content type.
 [job-set routes](../../config/routes.rb#L39-L50),
 [command whitelists](../../app/controllers/wurk/api_controller.rb#L40-L45),
 [single/all dispatch](../../app/controllers/wurk/api_controller.rb#L110-L148),
-[bulk parameter lookup and rejection](../../app/controllers/wurk/api_controller.rb#L395-L410),
+[bulk parameter lookup and rejection](../../app/controllers/wurk/api_controller.rb#L399-L414),
 [frontend key builder](../../frontend/src/hooks/useJobSetActions.ts#L11-L16),
 [single/bulk/all requests](../../frontend/src/hooks/useJobSetActions.ts#L40-L56),
 [JSON encoding](../../frontend/src/http.ts#L33-L41), and
@@ -903,8 +906,8 @@ and callback keys, `failinfo` is absent from `Batch::KEY_SUFFIXES` and
 include it. This is missing lifecycle sweeping, not a preservation guarantee;
 Wurk does not manage the old hash's retention or convert its contents.
 
-**Anchor:** [failure reader and empty compatibility method](../../lib/wurk/batch/status.rb#L55-L66),
-[current failure writer](../../lib/wurk/batch/server_middleware.rb#L120-L129),
+**Anchor:** [failure reader and empty compatibility method](../../lib/wurk/batch/status.rb#L63-L74),
+[current failure writer](../../lib/wurk/batch/server_middleware.rb#L121-L130),
 [JID-only Lua bookkeeping](../../lib/wurk/lua/batch_ack_failed.lua#L10-L17),
 [death writer](../../lib/wurk/batch/death_handler.rb#L31-L38), and
 [sweep key scope](../../lib/wurk/batch.rb#L70-L109).
@@ -940,9 +943,9 @@ JSON field and reverse indexes.
 **Anchor:** [JSON and reverse-index writers](../../lib/wurk/batch.rb#L469-L496),
 [reopen reader](../../lib/wurk/batch.rb#L557-L560),
 [status reader](../../lib/wurk/batch/status.rb#L76-L82),
-[reverse-index scan](../../lib/wurk/batch_set.rb#L41-L53),
+[reverse-index scan](../../lib/wurk/batch_set.rb#L48-L60),
 [carried-over cleanup suffixes](../../lib/wurk/batch.rb#L77-L84),
-[delete key selection](../../lib/wurk/batch/status.rb#L129-L135),
+[delete key selection](../../lib/wurk/batch/status.rb#L130-L136),
 [linger expiry](../../lib/wurk/batch/callbacks.rb#L191-L195), and
 [death NX expiry](../../lib/wurk/batch/death_handler.rb#L58-L61).
 `test/unit/batch_status_test.rb`, `test_tags_round_trips_json`, covers the
@@ -1101,7 +1104,7 @@ gem that reads `Sidekiq::Pro::VERSION` raises `NameError` and must gate on
 `identity`: absent or empty, or `"all"`, targets every live non-embedded
 process; a named identity targets that process. An unknown identity returns
 404, and a named embedded process is not signalled and returns count 0
-(`app/controllers/wurk/api_controller.rb:442-453`). It does not select the
+(`app/controllers/wurk/api_controller.rb:446-457`). It does not select the
 action using `quiet` or `stop` request parameters.
 
 **Spec:** free [§25.4](../target/sidekiq-free.md#254-routes) specifies
@@ -1118,8 +1121,8 @@ This entry records unsupported request equivalence, not a proven-safe gap
 or a compatibility handler; it does not infer unspecified flag semantics.
 
 **Anchor:** free §25.4 ([free §25.4 Routes — `POST /busy`](../target/sidekiq-free.md#254-routes));
-`config/routes.rb:15,61-66`;
-`app/controllers/wurk/api_controller.rb:170-171,442-453`
+`config/routes.rb:15,65-70`;
+`app/controllers/wurk/api_controller.rb:170-171,446-457`
 (`quiet_process`, `stop_process`, `signal_processes`).
 
 ## `Sidekiq.redis` retries a refused connect with backoff
@@ -1282,7 +1285,7 @@ to add `key_val` support.
 exception — Wurk performs no per-iteration time-boxing.
 
 **Wurk:** the key ships in `DEFAULTS` as `nil` (`lib/wurk/configuration.rb:33`)
-and is read nowhere in `lib/`; `docs/configuration.md:155` documents it as
+and is read nowhere in `lib/`; `docs/configuration.md:157` documents it as
 accepted for drop-in compatibility and not consumed. Assigning it succeeds and
 changes nothing.
 
@@ -1297,7 +1300,7 @@ legitimate iterations mid-run. An `IterableJob` that must be bounded today
 needs an explicit deadline check in `each_iteration` (or `:timeout`); the gap
 should close only when upstream pins what the key promises.
 
-**Anchor:** `lib/wurk/configuration.rb:33`; `docs/configuration.md:155`; free
+**Anchor:** `lib/wurk/configuration.rb:33`; `docs/configuration.md:157`; free
 DEFAULTS ([free §4.1 DEFAULTS — `max_iteration_runtime`](../target/sidekiq-free.md#41-defaults)) and §6.4
 ([free §6.4 `Sidekiq::IterableJob`](../target/sidekiq-free.md#64-sidekiqiterablejob)).
 
@@ -1305,9 +1308,9 @@ DEFAULTS ([free §4.1 DEFAULTS — `max_iteration_runtime`](../target/sidekiq-fr
 
 **Wurk:** the swarm parent always requires the `-r` entrypoint — children
 inherit the loaded app rather than re-requiring it — so the flag governs only
-the extra Rails `eager_load!` (`lib/wurk/cli.rb:756-780`, deliberate-divergence
-comment at `lib/wurk/cli.rb:756-780`); `preload_app?` reads
-`WURK_PRELOAD_APP`/`SIDEKIQ_PRELOAD_APP` at `lib/wurk/cli.rb:756-780`.
+the extra Rails `eager_load!` (`lib/wurk/cli.rb:757-781`, deliberate-divergence
+comment at `lib/wurk/cli.rb:757-781`); `preload_app?` reads
+`WURK_PRELOAD_APP`/`SIDEKIQ_PRELOAD_APP` at `lib/wurk/cli.rb:757-781`.
 
 **Spec:** Ent §7.2 — `SIDEKIQ_PRELOAD_APP=1` means "require whole app in parent
 before fork" ([Ent §7.2 Environment variables — `SIDEKIQ_PRELOAD_APP`](../target/sidekiq-ent.md#72-environment-variables)), and the process-model notes
@@ -1322,7 +1325,7 @@ and multiplying boot cost by the child count. The flag keeps its documented
 trade (more CoW sharing against slower parent boot); what changed is only that
 the floor is "entrypoint loaded", not "nothing loaded".
 
-**Anchor:** `lib/wurk/cli.rb:756-780`; Ent §7.2 env table
+**Anchor:** `lib/wurk/cli.rb:757-781`; Ent §7.2 env table
 ([Ent §7.2 Environment variables — `SIDEKIQ_PRELOAD_APP`](../target/sidekiq-ent.md#72-environment-variables)) and §7.3 process model
 ([Ent §7.3 Process model — conditional parent app load](../target/sidekiq-ent.md#73-process-model)).
 
@@ -1348,7 +1351,7 @@ is not modeled separately — the spec itself names `on(:fork)` as its API
 ([Ent §7.2 Environment variables — `SIDEKIQ_FORK_PER_PROCESS_HOOK`](../target/sidekiq-ent.md#72-environment-variables)).
 
 **Anchor:** `lib/wurk/configuration.rb:112`,
-`lib/wurk/configuration.rb:794-798`; free `on()`
+`lib/wurk/configuration.rb:798-802`; free `on()`
 ([free §4.2 Public methods — `on(event)`](../target/sidekiq-free.md#42-public-methods)) and DEFAULTS
 ([free §4.1 DEFAULTS — lifecycle events](../target/sidekiq-free.md#41-defaults)); Ent §7.4
 ([Ent §7.4 Fork callback](../target/sidekiq-ent.md#74-fork-callback)) and §6.3
@@ -1376,7 +1379,7 @@ mirrored Sidekiq prefix of `@options` stays byte-for-byte intact, so gems
 introspecting the config hash see no change.
 
 **Anchor:** `lib/wurk/configuration.rb:52`, `lib/wurk/configuration.rb:369`,
-`lib/wurk/configuration.rb:1252-1253`; free DEFAULTS
+`lib/wurk/configuration.rb:1292-1293`; free DEFAULTS
 ([free §4.1 DEFAULTS — handler keys](../target/sidekiq-free.md#41-defaults)).
 
 ## Pool sizing: three disjoint pools per process
@@ -1449,8 +1452,8 @@ surface ([free §4.2 Public methods — `reap_idle_redis_connections`](../target
 **Wurk:** `Queue#delete_job`, `Queue#delete_by_class`, and the
 `SortedSet#scan` block forms are mixed into the Data API at load time —
 `Wurk::API::Fast::QueueExt` is included into `Wurk::Queue`
-(`lib/wurk/api/fast.rb:53`) from the require in `lib/wurk.rb`
-(`lib/wurk.rb:371`) — with nothing to enable and nothing to buy. Scripts are
+(`lib/wurk/api/fast.rb:39`) from the require in `lib/wurk.rb`
+(`lib/wurk.rb:370`) — with nothing to enable and nothing to buy. Scripts are
 `SCRIPT LOAD`ed once per pool and invoked by `EVALSHA`; `delete_job` returns
 the deleted payload's JSON or nil and raises `ArgumentError` on a blank jid
 (`lib/wurk/api/fast.rb:21`).
@@ -1469,8 +1472,8 @@ is unchanged for everyone: one round trip per call, in exchange for the
 script's `LRANGE` blocking Redis for its duration, which is why it is an admin
 action, not a loop primitive.
 
-**Anchor:** `lib/wurk/api/fast.rb:21`, `lib/wurk/api/fast.rb:53`;
-`lib/wurk.rb:371`; Pro §11 ([Pro §11 Fast Lua API extensions](../target/sidekiq-pro.md#11-fast-lua-api-extensions)) and the
+**Anchor:** `lib/wurk/api/fast.rb:21`, `lib/wurk/api/fast.rb:39`;
+`lib/wurk.rb:370`; Pro §11 ([Pro §11 Fast Lua API extensions](../target/sidekiq-pro.md#11-fast-lua-api-extensions)) and the
 implementation map ([Pro §13 implementation mapping — Lua API](../target/sidekiq-pro.md#13-wurk-implementation-checklist-mapping)).
 
 ## Search covers queue LISTs too, with explicit scan bounds
@@ -1507,7 +1510,7 @@ processed/failed (`lib/wurk/stats.rb:190`), and `reset` with no arguments
 clears `failed`, `processed`, **and** `expired` (`lib/wurk/stats.rb:104-107`).
 The counter is fed by the expiry middleware, which bumps `stat:expired` and
 `stat:expired:YYYY-MM-DD` when a job past its `expires_in` is skipped
-(`lib/wurk/middleware/expiry.rb:102-105`).
+(`lib/wurk/middleware/expiry.rb:105-108`).
 
 **Spec:** free's `Stats` surface has no `expired` reader at all
 ([free §19.1 `Sidekiq::Stats` readers](../target/sidekiq-free.md#191-sidekiqstats)) and `reset` defaults to
@@ -1527,7 +1530,7 @@ arithmetic lie. Both changes are additive: `reset` with explicit arguments is
 unchanged, and the readers are new methods.
 
 **Anchor:** `lib/wurk/stats.rb:27`, `lib/wurk/stats.rb:104-107`,
-`lib/wurk/stats.rb:190`; `lib/wurk/middleware/expiry.rb:102-105`; free Stats
+`lib/wurk/stats.rb:190`; `lib/wurk/middleware/expiry.rb:105-108`; free Stats
 ([free §19.1 `Sidekiq::Stats` readers](../target/sidekiq-free.md#191-sidekiqstats), [free §19.1 `Stats#reset` defaults](../target/sidekiq-free.md#191-sidekiqstats)); Pro
 §7 ([Pro §7 Job expiration — skipped-job Statsd event](../target/sidekiq-pro.md#7-job-expiration--expires_in)).
 
@@ -1638,7 +1641,7 @@ no Redis key, job-JSON field or Lua script is touched.
 
 **Anchor:** [anchor-aware `add`](../../lib/wurk/middleware/chain.rb#L70-L94),
 [anchor resolution](../../lib/wurk/middleware/chain.rb#L173-L177),
-[batch middleware's `outer_of`](../../lib/wurk/batch/server_middleware.rb#L44-L65),
+[batch middleware's `outer_of`](../../lib/wurk/batch/server_middleware.rb#L46-L67),
 free [§10.1 `Sidekiq::Middleware::Chain` — `add`](../target/sidekiq-free.md#101-sidekiqmiddlewarechain).
 
 ## Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported
@@ -1657,7 +1660,7 @@ an instance method on a duck-type handle that returns
 dashboard pool is the configuration-owned `config.web_redis_pool` reader
 (`lib/wurk/configuration.rb:332-334`): read-only, with no `web_redis_pool=`
 setter, so Wurk builds the pool itself from the same `config.redis` options the
-worker pools use (`lib/wurk/configuration.rb:1240-1244`) and sizes it with
+worker pools use (`lib/wurk/configuration.rb:1280-1284`) and sizes it with
 `config.web_pool_size` (`lib/wurk/configuration.rb:310-317`, default 5). Every
 dashboard request runs on that pool.
 
@@ -1678,7 +1681,7 @@ long-lived SSE stream from draining the connections a co-located worker needs
 to fetch and heartbeat (#101). A class-level pool handle would let any gem swap
 that pool out from under every request path, and it is global mutable state
 set before boot: the parent closes its sockets before forking
-(`lib/wurk/swarm.rb:377-381`) and each child drops the inherited pools and
+(`lib/wurk/swarm.rb:400-404`) and each child drops the inherited pools and
 builds fresh ones (`lib/wurk/swarm/child_boot.rb:157-158`), so a
 caller-assigned pool could not survive the fork boundary — it would be an
 inherited socket, not a fresh pool.
@@ -1695,8 +1698,8 @@ shard-per-mount deployment has no Wurk equivalent.
 [`PoolScope::Handle#redis_pool`](../../lib/wurk/web/pool_scope.rb#L39-L43);
 [`config.web_pool_size`](../../lib/wurk/configuration.rb#L310-L317),
 [`config.web_redis_pool`](../../lib/wurk/configuration.rb#L332-L334) and
-[`build_redis_pool`](../../lib/wurk/configuration.rb#L1240-L1244);
-[parent sockets closed before fork](../../lib/wurk/swarm.rb#L377-L381) and
+[`build_redis_pool`](../../lib/wurk/configuration.rb#L1280-L1284);
+[parent sockets closed before fork](../../lib/wurk/swarm.rb#L400-L404) and
 [child pools rebuilt after fork](../../lib/wurk/swarm/child_boot.rb#L157-L158);
 free §25.1 ([free §25.1 Entrypoint](../target/sidekiq-free.md#251-entrypoint))
 and Pro §10.2 ([Pro §10.2 Multi-shard](../target/sidekiq-pro.md#102-multi-shard));

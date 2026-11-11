@@ -37,16 +37,14 @@ module Wurk
       def within_limit(&block)
         raise ArgumentError, 'block required' unless block
 
-        started = monotime
         slot = random_id
-        acquired_at = wait_for_slot(slot, started + @options[:wait_timeout])
+        acquired_at = wait_for_slot(slot, monotime + @options[:wait_timeout])
         return unless acquired_at
 
         begin
-          incr_immediate_or_waited(acquired_at - started)
           block.call
         ensure
-          record_release(slot, acquired_at)
+          release(slot, acquired_at)
         end
       end
 
@@ -80,53 +78,40 @@ module Wurk
         "lmtr-stats:#{@name}"
       end
 
-      # A ZREM that removes nothing means an acquirer already evicted our slot:
-      # we outran `lock_timeout`, which is what `overages` counts. Exhausting
-      # `wait_timeout` is a different event — it raises OverLimit and the server
-      # middleware counts it in the job's `overrated` field.
-      def record_release(slot, acquired_at)
-        bump_counter('overages') if release(slot).to_i.zero?
-        bump_counter('held_time', (monotime - acquired_at).to_i)
-      end
-
       # Spins until a slot frees up. Returns the monotonic acquire time, nil
       # when `policy: :ignore` gives up; raises OverLimit past `wait_timeout`.
+      # A slot taken on the first attempt counts as `immediate`, any later one
+      # as `waited` with its whole seconds in `wait_time`; the acquire script
+      # books both, so a job costs two round trips: acquire and release.
       def wait_for_slot(slot, deadline)
+        started = monotime
+        waited = ''
         loop do
-          return monotime if acquire(slot)[0].to_i == 1
+          return monotime if acquire(slot, waited)[0].to_i == 1
           return if @options[:policy] == :ignore
 
           remaining = deadline - monotime
           raise OverLimit, self if remaining <= 0
 
           sleep [remaining, WAIT_SLEEP].min
+          waited = (monotime - started).to_i
         end
       end
 
-      def acquire(slot)
+      def acquire(slot, waited)
         lua(:limiter_concurrent_acquire,
             keys: [state_key, stats_key],
-            argv: [@options[:limit], @options[:lock_timeout], slot, ttl])
+            argv: [@options[:limit], @options[:lock_timeout], slot, ttl, waited])
       end
 
-      def release(slot)
-        lua(:limiter_concurrent_release, keys: [state_key], argv: [slot])
-      end
-
-      def bump_counter(field, by = 1)
-        Wurk::Limiter.redis do |c|
-          c.call('HINCRBY', stats_key, field, by)
-          c.call('EXPIRE', stats_key, ttl)
-        end
-      end
-
-      def incr_immediate_or_waited(elapsed)
-        if elapsed < WAIT_SLEEP
-          bump_counter('immediate')
-        else
-          bump_counter('waited')
-          bump_counter('wait_time', elapsed.to_i)
-        end
+      # A ZREM that removes nothing means an acquirer already evicted our slot:
+      # we outran `lock_timeout`, which is what `overages` counts. Exhausting
+      # `wait_timeout` is a different event — it raises OverLimit and the server
+      # middleware counts it in the job's `overrated` field.
+      def release(slot, acquired_at)
+        lua(:limiter_concurrent_release,
+            keys: [state_key, stats_key],
+            argv: [slot, (monotime - acquired_at).to_i, ttl])
       end
 
       def monotime

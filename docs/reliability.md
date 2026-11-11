@@ -566,6 +566,7 @@ Wurk::Client.reliable_push! unless Rails.env.test?
 |---|---|---|
 | `Wurk::Client.reliable_push_buffer = 5_000` | `1_000` | Positive Integer, else `ArgumentError` |
 | `Wurk::Client.reliable_push_overflow = :raise` | `:drop_oldest` | `:drop_oldest` is the Pro ring-buffer behavior |
+| `Wurk::Client.reliable_push_buffer_bytes = 64 * 1024 * 1024` | `nil` (off) | nil or positive Integer, else `ArgumentError`. Wurk-only. Caps the buffer by payload JSON bytes as well as by count; past it the overflow mode applies, and a payload larger than the cap on its own is dropped (or raised under `:raise`) |
 | `Wurk::Client.reliable_push?` | — | Is it installed |
 | `Wurk::Client::Buffered.buffer_size` | — | Current depth |
 
@@ -586,7 +587,7 @@ do not block. A drainer thread, started on that first failure if none is running
 probes the server, replays the buffer and closes the circuit. A circuit closes by
 itself after 30s if nothing has renewed it.
 
-**The buffer is process memory.** A clean exit flushes it, bounded at 5s, and logs an ERROR for anything it could not deliver. A SIGKILL or an OOM kill loses whatever is still buffered, and a full buffer drops the oldest job by default. Producers no longer wait out the outage, so the default 1000 entries fill quickly: raise `reliable_push_buffer`, or set `reliable_push_overflow = :raise`, if an outage must not drop work.
+**The buffer is process memory.** A clean exit flushes it, bounded at 5s, and logs an ERROR for anything it could not deliver. A SIGKILL or an OOM kill loses whatever is still buffered, and a full buffer drops the oldest job by default. Producers no longer wait out the outage, so the default 1000 entries fill quickly: raise `reliable_push_buffer`, or set `reliable_push_overflow = :raise`, if an outage must not drop work. With large payloads, set `reliable_push_buffer_bytes` too: 1000 one-megabyte jobs are a gigabyte of web-process memory.
 
 **Flush behavior.** Every buffered payload remembers the Redis pool it was
 headed for, so a sharded `Client.via(pool)` backlog never replays into another

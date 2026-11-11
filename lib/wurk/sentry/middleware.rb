@@ -28,6 +28,10 @@ module Wurk
       def call(instance, job, queue, &block)
         return yield unless Wurk::Sentry.enabled?
 
+        # The previous job's exception (with its backtrace and anything it
+        # references) would otherwise stay pinned in this thread's slots until
+        # the next failure here replaced it. Both handshakes are within one job.
+        ErrorHandler.forget_thread!
         # Each Processor owns a thread, and Sentry's hub is thread-local.
         # Without this the worker thread starts from an empty hub and the
         # scope set below is invisible to the capture.

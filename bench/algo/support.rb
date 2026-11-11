@@ -22,15 +22,23 @@ require_relative '../support'
 # server-wide.
 module AlgoBench
   # redis-client middleware: one round trip per `call` / `call_pipelined`, and
-  # the commands each one carried. The connection prelude (HELLO, SELECT) goes
-  # through `call_pipelined` too, so measure after a warm-up request.
+  # the commands each one carried. Connection upkeep is not counted: the
+  # prelude a (re)connect pipelines (HELLO, AUTH, SELECT, CLIENT) and the PING
+  # redis-client sends before reusing a connection idle past `idle_timeout`.
+  # Whether one lands in a measured window is timing; one stray reconnect read
+  # as 2.01 round trips per job on a loaded box (bench/command_count.rb drops
+  # the same commands, #915).
   module Tally
     LOCK = Mutex.new
+    UPKEEP = %w[ping hello auth select client].freeze
     @round_trips = 0
     @commands = Hash.new(0)
 
     class << self
       def record(commands)
+        commands = commands.reject { |command| UPKEEP.include?(command.first.to_s.downcase) }
+        return if commands.empty?
+
         LOCK.synchronize do
           @round_trips += 1
           commands.each { |command| @commands[command.first.to_s.downcase] += 1 }
@@ -74,8 +82,8 @@ module AlgoBench
     db = URI.parse(pool.url).path.delete_prefix('/')
     raise "bench pool #{pool.url} is not on a numbered DB above 0" unless db.match?(/\A[1-9][0-9]*\z/)
 
-    pool.with { |c| c.call('PING') } # dials: the connection prelude is a round trip of its own
-    seen = count { pool.with { |c| c.call('PING') } }
+    pool.with { |c| c.call('ECHO', 'tally') } # dials first, so only the ECHO is in the window
+    seen = count { pool.with { |c| c.call('ECHO', 'tally') } }
     raise 'bench pool does not carry AlgoBench::Tally; set config.redis first' unless seen.round_trips == 1
 
     pool

@@ -34,6 +34,10 @@ module Wurk
     class Statsd
       include Wurk::Middleware::ServerMiddleware
 
+      # One instance per chain entry, shared by every job (Middleware::Chain::Entry):
+      # #call keeps its state in locals and writes no ivar.
+      def self.shared_instance? = true
+
       METRIC_PREFIX = 'sidekiq.'
       DEFAULT_SAMPLE_RATE = 1.0
 

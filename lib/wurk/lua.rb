@@ -172,45 +172,6 @@ module Wurk
       return 0
     LUA
 
-    # Pro Fast API (§11): server-side LRANGE+LREM to delete a single job by
-    # jid from a queue list. Pure-Ruby Queue#find_job + JobRecord#delete is
-    # O(N) round-trips; this is O(1) round-trip with O(N) Lua work.
-    # KEYS = [queue:<name>]
-    # ARGV = [jid]
-    # Returns the first payload removed, or nil (Lua false) when none matched —
-    # Pro's `delete_job` return value. Every match is removed, so a
-    # duplicate-jid corruption is cleaned up in the same pass.
-    FAST_DELETE_JOB = <<~LUA
-      local items = redis.call("lrange", KEYS[1], 0, -1)
-      local deleted = false
-      for i = 1, #items do
-        if string.find(items[i], '"jid":"' .. ARGV[1] .. '"', 1, true) then
-          if redis.call("lrem", KEYS[1], 1, items[i]) > 0 and not deleted then
-            deleted = items[i]
-          end
-        end
-      end
-      return deleted
-    LUA
-
-    # Pro Fast API (§11): server-side LRANGE+LREM removing every payload whose
-    # `"class":"<klass>"` field matches. Plain-text scan (no JSON parse) so
-    # it tolerates partial corruption — caller drops only well-formed matches.
-    # KEYS = [queue:<name>]
-    # ARGV = [klass]
-    # Returns the number of payloads removed.
-    FAST_DELETE_BY_CLASS = <<~LUA
-      local items = redis.call("lrange", KEYS[1], 0, -1)
-      local removed = 0
-      local needle = '"class":"' .. ARGV[1] .. '"'
-      for i = 1, #items do
-        if string.find(items[i], needle, 1, true) then
-          removed = removed + redis.call("lrem", KEYS[1], 1, items[i])
-        end
-      end
-      return removed
-    LUA
-
     # Ent Periodic (§2): compare-and-swap the fire marks of `loops:<lid>`.
     # The cron poller's leader gate is a cached read (`Component#leader?`,
     # LEADER_CACHE_TTL_MS), so for a few seconds after a handover two
@@ -262,8 +223,6 @@ module Wurk
       scheduled_claim: SCHEDULED_CLAIM,
       reliable_requeue: RELIABLE_REQUEUE,
       requeue_unit: REQUEUE_UNIT,
-      fast_delete_job: FAST_DELETE_JOB,
-      fast_delete_by_class: FAST_DELETE_BY_CLASS,
       release_if_owner: RELEASE_IF_OWNER,
       cron_claim_fire: CRON_CLAIM_FIRE
     }.merge(FILE_SCRIPTS).freeze
@@ -275,3 +234,4 @@ module Wurk
 end
 
 require_relative 'lua/loader'
+require_relative 'lua/fast_delete'

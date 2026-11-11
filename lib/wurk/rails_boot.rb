@@ -23,8 +23,8 @@ module Wurk
     # Invoked from the `wurk.server_mode` initializer, before config/initializers
     # load. This Rails process forks the workers, so it IS the server. Enter
     # server mode now — otherwise the app's `Sidekiq.configure_server` blocks
-    # gate on `config.server?` (still false) and are dropped, each skip logging
-    # one WARN naming the gate (`configure_server` / `server? is false`). A
+    # gate on `config.server?` (still false) and wait for server mode, logging
+    # the skip at DEBUG (`configure_server` / `server? is false`). A
     # process that won't run workers (skip_boot?, or one that refuses to boot
     # under a preforking web server) is not a server.
     #

@@ -119,7 +119,7 @@ module Wurk
       def clear_in(pipe, jid)
         return if jid.nil? || jid.to_s.empty?
 
-        pipe.call('DEL', counter_key(jid))
+        pipe.call_v(['DEL', counter_key(jid)])
       end
 
       def counter_key(jid)
