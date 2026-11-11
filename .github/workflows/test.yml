@@ -264,14 +264,15 @@ jobs:
       # scheduled_zero_loss_test spawns a private server, because `maxmemory` and
       # DEBUG SLEEP are server-wide and the service container is shared by every
       # worker. WURK_REQUIRE_REDIS_SERVER turns that test's skip into a failure, so
-      # the zero-loss proof can never go missing quietly from this job. The package
-      # autostarts a service nothing here uses.
+      # the zero-loss proof can never go missing quietly from this job. The binary
+      # comes from the redis:7.4 image the service already pulled, not apt: the
+      # Ubuntu mirrors were unresolvable from runners for hours (PR #918).
       - name: install redis-server binary
         if: env.RUN == 'true'
         run: |
-          sudo apt-get -o Acquire::Retries=3 update
-          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends redis-server
-          sudo systemctl stop redis-server
+          docker run --rm --entrypoint cat redis:7.4 /usr/local/bin/redis-server > "$RUNNER_TEMP/redis-server"
+          sudo install -m 0755 "$RUNNER_TEMP/redis-server" /usr/local/bin/redis-server
+          redis-server --version
       # COVERAGE=1 is set for the whole job, so this one invocation is both the
       # test gate and the blocking line+branch coverage gate (>= 90% each, from
       # test_helper's SimpleCov config). The Cobertura report is still uploaded

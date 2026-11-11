@@ -112,7 +112,7 @@ Minitest, real Redis. Parity tests are oracles: when Wurk diverges from one, Wur
 
 - **The merge bot merges on green.** Soak and review come before the push, not after.
 - **A merge does not deploy.** Only a merged `lib/wurk/version.rb` bump publishes. `release: x.y.z` and nothing else, with `bundle exec rake release:relock_demo`. Never tag, never `gem push` (#420, #858). Then verify directly: the gem on RubyGems, the tag, the demo's `/demo/build`.
-- **A red `compat` leg on `main` is yours to fix**, though it never blocks a merge. Rubocop's `TargetRubyVersion` catches syntax, not runtime behavior, and local runs use a newer Ruby than the 3.2 floor (#823, #869).
+- **A red `compat` leg on `main` is yours to fix**, required by the ruleset or not. Rubocop's `TargetRubyVersion` catches syntax, not runtime behavior, and local runs use a newer Ruby than the 3.2 floor (#823, #869).
 - **`lib/` edits move line anchors.** The ledger and `test/conformance/` pin `lib/` line ranges (`bin/check` reports drift). Run `bin/repin-anchors`, on the tree the PR actually contains: anchors re-pinned on a wider tree go red once the PR is split.
 - **Stage by path.** Never `git add -A`: the tree may hold someone else's work. A split PR is tested on its own tree.
 - **A PR body claims only what the diff does.** Evidence you could not get is stated as missing (#823).
