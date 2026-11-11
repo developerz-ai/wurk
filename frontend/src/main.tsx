@@ -34,9 +34,10 @@ const embedded =
 
 const root = document.getElementById('wurk-root');
 // Strings resolve once, so the first render waits for the locale's bundle
-// (an English-only page settles without a fetch).
+// (an English-only page settles without a fetch). A chunk that stalls rather
+// than fails falls back to English after 3s, like a failed one.
 if (root) {
-  ready.then(() =>
+  Promise.race([ready, new Promise<void>((resolve) => setTimeout(resolve, 3000))]).then(() =>
     // Solid's render takes a component factory (a function returning JSX), not
     // an element — it establishes the reactive root that owns the whole app.
     render(

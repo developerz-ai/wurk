@@ -193,9 +193,9 @@ class JobRecordTest < Wurk::Test::UnitCase
       rec = Wurk::JobRecord.new({ 'class' => 'J', 'error_backtrace' => 'eJyLVkrLz1fSUUpKLFKKBQAbWAPm' })
       print loaded_at_boot, ' ', rec.error_backtrace.inspect
     RUBY
-    out, status = Open3.capture2e({ 'COVERAGE' => nil }, 'bundle', 'exec', 'ruby', '-Ilib', '-e', script)
+    out, err, status = Open3.capture3({ 'COVERAGE' => nil }, 'bundle', 'exec', 'ruby', '-Ilib', '-e', script)
 
-    assert_predicate status, :success?, out
+    assert_predicate status, :success?, err
     assert_equal 'no ["foo", "bar"]', out
   end
 

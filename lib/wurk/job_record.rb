@@ -89,6 +89,7 @@ module Wurk
       compressed = item['error_backtrace']
       return nil unless compressed
 
+      # Before anything that can raise: the rescue below names Zlib.
       require 'zlib'
       Wurk.load_json(Zlib.inflate(Base64.decode64(compressed)))
     rescue Zlib::DataError, ArgumentError, ::JSON::ParserError

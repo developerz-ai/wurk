@@ -216,6 +216,14 @@ class StaticAssetsTest < Wurk::Test::EngineCase
     assert_equal File.binread(asset), Zlib.gunzip(last_response.body)
   end
 
+  def test_a_lower_q_value_loses_even_when_listed_first
+    asset = compressed_asset
+
+    get "/wurk-assets/assets/#{File.basename(asset)}", {}, 'HTTP_ACCEPT_ENCODING' => 'br;q=0.1, gzip;q=0.9'
+
+    assert_equal 'gzip', last_response.headers['content-encoding']
+  end
+
   def test_identity_when_the_client_accepts_no_encoding_or_refuses_them
     asset = compressed_asset
 

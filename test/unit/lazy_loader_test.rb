@@ -105,6 +105,17 @@ class LazyLoaderTest < Wurk::Test::UnitCase
     assert_equal 'constant', result['sidekiq_web_defined']
   end
 
+  def test_require_sidekiq_web_leaves_the_server_tier_unloaded
+    files = ruby(<<~RUBY)
+      require 'json'
+      require 'sidekiq/web'
+      Sidekiq::Web
+      print JSON.dump(%w[cli swarm launcher manager].select { |f| $LOADED_FEATURES.any? { |l| l.end_with?("/lib/wurk/\#{f}.rb") } })
+    RUBY
+
+    assert_empty files
+  end
+
   def test_every_alias_cold_from_its_sidekiq_name_is_the_wurk_object
     result = ruby(<<~RUBY)
       require 'json'
@@ -119,8 +130,10 @@ class LazyLoaderTest < Wurk::Test::UnitCase
           wr.write("\#{alias_name}: \#{e.message}")
         end
         wr.close
-        Process.wait(pid)
-        rd.read.then { |msg| msg unless msg.empty? }
+        _, status = Process.wait2(pid)
+        msg = rd.read
+        msg = "\#{alias_name}: child exited \#{status.inspect}" if msg.empty? && !status.success?
+        msg unless msg.empty?
       end
       print JSON.dump(bad)
     RUBY
