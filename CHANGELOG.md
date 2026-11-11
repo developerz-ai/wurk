@@ -4,6 +4,10 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 Each release's notes live in their own file under [`docs/changelog/`](docs/changelog/); this page is the index, newest first. Not released yet: [`docs/changelog/unreleased.md`](docs/changelog/unreleased.md) ([diff since the last release][Unreleased]). A pull request with a user-visible change adds its line there.
 
+## [1.12.0] - 2026-11-11
+
+A poison-pill job is no longer handed to a live worker while it is being killed; `wurk boot-check` and boot warnings catch worker-only crash loops and silent misconfiguration; `unique_for`, `retry_for` and `timeout` given as Durations work. [Release notes](docs/changelog/1.12.0.md).
+
 ## [1.11.1] - 2026-11-06
 
 Periodic fixes from a production rollback: a loop whose class is gone no longer becomes a retry storm, and `config.periodic` registers when the server boots instead of while initializers load. [Release notes](docs/changelog/1.11.1.md).
@@ -148,7 +152,8 @@ Releases publish to RubyGems through GitHub Actions OIDC trusted publishing, and
 
 First public (pre-1.0) release. [Release notes](docs/changelog/0.0.1.md).
 
-[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.11.1...HEAD
+[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.12.0...HEAD
+[1.12.0]: https://github.com/developerz-ai/wurk/compare/v1.11.1...v1.12.0
 [1.11.1]: https://github.com/developerz-ai/wurk/compare/v1.11.0...v1.11.1
 [1.11.0]: https://github.com/developerz-ai/wurk/compare/v1.10.0...v1.11.0
 [1.10.0]: https://github.com/developerz-ai/wurk/compare/v1.9.0...v1.10.0
