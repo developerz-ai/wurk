@@ -96,7 +96,7 @@ export default function Limiters() {
     <Switch>
       <Match when={q.isPending}>
         <div>
-          <PageHeader icon="fa-gauge" title={t('nav.limiters')} summary={t('summaries.limiters')} />
+          <PageHeader icon="gauge" title={t('nav.limiters')} summary={t('summaries.limiters')} />
           <SkeletonTable rows={8} cols={readOnly() ? 6 : 7} />
         </div>
       </Match>
@@ -106,7 +106,7 @@ export default function Limiters() {
       <Match when={q.data}>
         {(data) => (
           <div>
-            <PageHeader icon="fa-gauge" title={t('nav.limiters')} summary={t('summaries.limiters')}>
+            <PageHeader icon="gauge" title={t('nav.limiters')} summary={t('summaries.limiters')}>
               <span class="badge badge-muted">{formatNumber(data().total)}</span>
             </PageHeader>
 

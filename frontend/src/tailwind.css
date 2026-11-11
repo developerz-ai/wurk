@@ -3,7 +3,6 @@
    styles/main.scss in main.tsx; the SCSS `:root` token block (unlayered) then
    overrides daisyUI's layered `dark` theme to the Obsidian zinc palette. */
 @import "tailwindcss";
-@import "@fortawesome/fontawesome-free/css/all.min.css";
 
 /* daisyUI supplies the component scheme only — both palettes are overridden in
    styles/abstracts/_tokens.scss. `dark --default` keeps dark on bare `:root`;

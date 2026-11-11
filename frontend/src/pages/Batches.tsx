@@ -68,7 +68,7 @@ export default function Batches() {
     <Switch>
       <Match when={q.isPending}>
         <div>
-          <PageHeader icon="fa-table-cells-large" title={t('nav.batches')} summary={t('summaries.batches')} />
+          <PageHeader icon="table-cells-large" title={t('nav.batches')} summary={t('summaries.batches')} />
           <SkeletonTable rows={8} cols={7} />
         </div>
       </Match>
@@ -78,7 +78,7 @@ export default function Batches() {
       <Match when={q.data}>
         {(data) => (
           <div>
-            <PageHeader icon="fa-table-cells-large" title={t('nav.batches')} summary={t('summaries.batches')}>
+            <PageHeader icon="table-cells-large" title={t('nav.batches')} summary={t('summaries.batches')}>
               <span class="badge badge-accent">{formatNumber(data().total)}</span>
             </PageHeader>
 

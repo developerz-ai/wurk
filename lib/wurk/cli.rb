@@ -11,8 +11,6 @@ require_relative 'version'
 require_relative 'configuration'
 require_relative 'component'
 require_relative 'capsule'
-require_relative 'launcher'
-require_relative 'rails_boot'
 require_relative 'boot_checks'
 
 module Wurk
@@ -496,6 +494,7 @@ module Wurk
 
     # What a worker loads only later: every constant, and the routes.
     def boot_check_reach
+      Wurk.eager_load!
       eager_load_rails
       draw_routes
     end

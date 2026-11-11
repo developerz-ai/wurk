@@ -5,7 +5,7 @@ created_by: sebi
 worked_by: "sebi (Claude Code)"
 owner: sebi
 percent: 45
-current_focus: "wave 4a PR; sales #380 unblock (visual QA fix-forward); then 4b lazy load tiers (06 L1-L9), release 1.14.0, wave 5 long tail"
+current_focus: "wave 4b PR (lazy load tiers + dashboard bytes); then release 1.14.0, adopter bumps, wave 5 long tail"
 slices:
   - file: 01-ci-green-doc-truth.md
     status: in_progress
@@ -24,7 +24,7 @@ slices:
     percent: 100
   - file: 06-perf-hot-path-boot.md
     status: in_progress
-    percent: 60
+    percent: 80
   - file: 07-algorithms.md
     status: in_progress
     percent: 65
@@ -74,7 +74,7 @@ decisions:
   - id: U3
     date: 2026-11-11
     by: executor (delegated full authority by owner)
-    decision: "Ship a `sidekiq` executable from the wurk gem (04 D1): additive, not breaking - `bundle exec sidekiq -C ...` keeps working after the gem swap; the real-gem clash is already an ERROR via 03 G2. Breaking rows U4-U6 stay open for the owner."
+    decision: "Ship a `sidekiq` executable from the wurk gem (04 D1): additive, not breaking - `bundle exec sidekiq -C ...` keeps working after the gem swap; the real-gem clash is already an ERROR via 03 G2. Breaking rows U4-U6 decided below (none ships a break in 1.x)."
   - id: U11
     date: 2026-11-11
     by: sebi (owner, in-session instruction)
@@ -92,8 +92,44 @@ decisions:
     date: 2026-11-10
     by: sebi (owner, in-session instruction)
     decision: "Public surfaces (README, docs/site/llms.txt, docs/site/index.html) may state that teams running billions of jobs a month on Wurk in production recommend it, labelled user-reported. Supersedes audit 2026-10-04 H8/R11 for user-reported volume only; published throughput still needs docs/benchmarks.md numbers (12 T1 soak). Guard: test/unit/forbidden_claims_test.rb SCALE_SOURCE."
+  - id: U1
+    date: 2026-11-11
+    by: executor (owner granted full authority incl. HITL rows, 2026-11-11 in-session)
+    decision: "Require the Ruby 3.2 compat leg. Applied: ruleset main-protection (20556704) now requires `compat (ruby 3.2.11, rails 8.1, redis)` alongside the six existing checks. The leg runs on every PR (if: !cancelled()), so a docs-only PR cannot stall on it; it passed 14/14 recent main runs. Read live: `gh api repos/developerz-ai/wurk/rulesets/20556704`."
+  - id: U4
+    date: 2026-11-11
+    by: executor (owner granted full authority incl. HITL rows, 2026-11-11 in-session)
+    decision: "`unique_for:` without `unique!` stays a WARN in 1.x (03 G1 as shipped). Auto-enable would diverge from Ent, which requires `unique!`."
+  - id: U5
+    date: 2026-11-11
+    by: executor (owner granted full authority incl. HITL rows, 2026-11-11 in-session)
+    decision: "Keep parity with Sidekiq Ent's swarm default when WURK_COUNT/SIDEKIQ_COUNT is unset; the effective count and its source are already logged at boot (`Wurk swarm size: N children (Etc.nprocessors|SIDEKIQ_COUNT=N)`). No default change."
+  - id: U6
+    date: 2026-11-11
+    by: executor (owner granted full authority incl. HITL rows, 2026-11-11 in-session)
+    decision: "Embedded swarm opt-in everywhere and an `authoritative!` periodic default are breaking: deferred to 2.0, not shipped in 1.x. 1.x keeps the G3 role line."
+  - id: U7
+    date: 2026-11-11
+    by: executor (owner granted full authority incl. HITL rows, 2026-11-11 in-session)
+    decision: "Per-queue ACK-on-completion: declined for now. Its only motivating consumer was treasury's payments queue, and treasury is not migrating (U11). Reopen with a bench if an adopter asks."
+  - id: U8
+    date: 2026-11-11
+    by: executor (owner granted full authority incl. HITL rows, 2026-11-11 in-session)
+    decision: "Opt-in Redis key prefix: DECLINED. It breaks wire compatibility with Sidekiq tooling. Isolation is the app's own Dragonfly instance; a logical DB on a shared instance only stops key-name collisions (a Wurk ACL user needs every key and can SELECT/FLUSHDB any DB), so sharing is for trusted first-party apps only (refined in developerz-ai/infrastructure#2278 review). Unblocks 20 X2 (record the outcome in the infra note)."
+  - id: U9
+    date: 2026-11-11
+    by: executor (owner granted full authority incl. HITL rows, 2026-11-11 in-session)
+    decision: "Same-origin guard: ACCEPTED with a strict rule. When Sec-Fetch-Site is absent, a state-changing request passes only if its Origin header (or Referer when Origin is absent) matches the request's own scheme+host+port; neither header present still denies. Default stays deny. Ships in wave 5 (09 W3) with tests."
+  - id: U10
+    date: 2026-11-11
+    by: executor (owner granted full authority incl. HITL rows, 2026-11-11 in-session)
+    decision: "Real Pro/Ent Redis dump from a customer: closed. It is customer data and treasury is read-only; key shapes stay validated by the documented-shape parity oracles (test/parity) instead."
 evidence:
+  - "19 X2: tesote/infrastructure#780 merged (b1dd5148): WURK_HEALTH_PORT=7433 on tesote-com, gringotts, sales (+staging) workers, prometheus.io annotations, per-stack NetworkPolicy; `wurk` alert group (MetricsMissing, ChildrenMissing, QueueLatencyHigh, QueueHasNoConsumers, WorkerRestarted, RedisUnreachable, NoLeader, DeadSetGrowing, FetchErrors) with promtool tests. Live: up=1 for all 5 worker pods, children fresh==expected, leader=1 per namespace, 9 rules health=ok inactive. Forced staging crash loop NOT run (would break shared staging; rules covered by promtool cases). Child-restart counter needs Wurk 11 O1 (wurk_swarm_child_restarts_total)."
+  - "20 X1 already shipped: developerz-ai/infrastructure#2266 (ed671d23), legald worker liveness+startup `wurk health --window 60`, grace 40s > 25s timeout + 5. X3: #2276 (2dd7ce3c) wurk-demo Dragonfly drops --cache_mode (now cache_mode:store, noeviction) + ServiceMonitor + tests/stacks/wurk-job-stores.test.ts; #2277 (8ac8f421) WurkJobStoreMemoryHigh (>75% maxmemory 5m, critical). dragonfly-jobs (legald) already compliant (512mb, no cache_mode, persisted). X2: #2278 (2b6a6f37) records U8 declined. Finding outside scope: Sidekiq apps sitelocaleai + venom-is queue on shared dragonfly-prod with --cache_mode=true (jobs evictable)."
+  - "sales 1.13.0 live: #381 (visual QA 48/760 -> 0: preview 500, external image, demo video 404s, a11y contrast/touch-target/overflow fixes with existing tokens; preview-only diffs now trigger the browser QA job + previews_render_test) merged f480b67; #380 (wurk 1.13.0, configure_client wrapper removed) merged 2fa4231, Deploy run 42998034939, ArgoCD sales-production Synced/Healthy, worker sha256:f2f515fb, log `Wurk 1.13.0 on dragonfly 1.34.0`, deploy-status Live 2fa4231. All 5 adopters on 1.13.0. Open in sales: manual_start_test.rb:47 flake on main."
   - "wave 4a (branch wave4a-cut-cost): hotpath 105->79 allocs/job (logger buffer + pid cache, golden bytes; 8 built-in middleware shared per chain entry, audited; positional UnitOfWork, prebuilt LMOVE/LREM call_v; coarse clock on paused cache; heartbeat RPOP count), 3.00 cmds/job unchanged; P2 dropped (measured), lock-free ACK slot dropped (mutex ~150ns). dashboard K1/K2/K3/K5 + A1/A2/A6/A11/A14/A16: SSE+stats 9->2 RT, queues 6->2, queue detail 5->1, batches p999 25276->2, retry_all 2.02->0.06 RT/entry. algo A3 windowed fast delete, A5 limiter 6/7->2/3 RT (registration memo REMOVED at integration: hid limiters after flush/eviction, demo self-heal test), A7 never-fired walk 1.2s->1ms, A8 26550->3 RT, A9/A10/A15, K4 (= Sidekiq 8.1.6 flush shape). A4 NOT shipped: no cheaper check keeps the 90-140s lost-host bound (measured). memory M1 fresh-child guard (no fork-loop) + rss/pss/uss metric, M2 prefork warmup on every swarm path (shared 0.57->0.72 vs no warmup), M3, M5 byte cap opt-in, M6 bounded caches, M7 dead-set lazy backtrace, P5 one INFO; configure_server skip WARN->DEBUG (adopter finding). Coordinator: buffered drain before push_prepared (test fails without), Cron.prefork wired, bench tally excludes connection upkeep. Gate: suite 6528/0 (98.25/91.64), parity 407/0, ecosystem/frontend/python green. Timing deferred to PR bench vs base + wave 6 (box loaded)."
+  - "wave 4b (branch wave4b-lazy-load): L1-L4 lazy tiers via Ruby autoload (Wurk::LazyLoader, Sidekiq aliases in lib/wurk/compat/*): require wurk 163->95 files, 186->110ms, 17.5->12.5MB RSS; server boot 233->176ms; rails require 80->62ms; Wurk.eager_load! before first fork (child Pss 34-35->31-32MB). L7 zlib lazy + idle footprint integration test (fetch pool move measured: no idle difference, not shipped). L8/W8 dashboard first load 777->352KB raw, ~104KB br: on-demand locales, 47 inline SVG icons, precompressed .br/.gz served by Accept-Encoding with Vary; nav-label locale race fixed. Open: Geist font name mismatch (needs decision), Dashboard \"View All\" untranslated. Gate: bin/check full green (460s)."
   - "1.13.0 adopters (tesote): tesote.com #522 merged 50d1f0a, ArgoCD tesote-com-production Synced/Healthy sha-50d1f0a, worker `Wurk 1.13.0 on dragonfly 1.34.0`; gringotts #17 merged 93f3066, gringotts-production Synced/Healthy sha-93f3066, worker `Wurk 1.13.0`; sales #380 (removes `unless Wurk.server?` around configure_client, proven DEBUG on 1.13.0) BLOCKED by required visual QA red on main since sales #378 (48/760 pictures) - fix-forward agent dispatched. `elapsed` unit change: no reader in any adopter repo or infra origin/main."
   - "release 1.13.0: PR #914 merged (112e11b); release.yml all green; rubygems wurk 1.13.0 (06:44Z); tag v1.13.0 -> 112e11b; GitHub Release Latest + .gem; demo /demo/build 112e11b. Carries wave 3 (#913). Follow-up #915 (keepalive PING excluded from commands-per-job) merged 038981d."
   - "17 hiscore 1.13.0: hiscore-ro/hiscore.ro#115 merged (a534217), boot-check --runner wurk in CI, deployed via bin/deploy (REVISION a534217, log `Wurk 1.13.0 on redis 8.10.2`, elapsed in seconds, site 200). 18 legald: #312 (1.12.0, 3f0c9f4) + #314 (1.13.0, a844683) merged; bin/wurk-boot-check --runner wurk; ArgoCD rolled sha-a844683, worker `Wurk 1.13.0 on dragonfly 1.39.0`, 0 WARN; configure_client WARN retired. Kept: legald Sidekiq.redis stub in tests (app /up probe), /profiles/:key deny for per-session read-only. New wurk finding -> wave 4a memory agent: `configure_server block skipped` WARN in non-server processes (Sidekiq silent)."

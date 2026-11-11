@@ -11,7 +11,7 @@ import '@fontsource/jetbrains-mono/500.css';
 import './tailwind.css';
 import './styles/main.scss';
 import App from './App';
-import { applyLocale, locale, t } from './i18n';
+import { applyLocale, locale, ready, t } from './i18n';
 import { startTheme } from './theme';
 
 // Set text direction + language from the resolved locale before first paint so
@@ -33,26 +33,31 @@ const embedded =
   new URLSearchParams(window.location.search).has('wurk_ext_embed');
 
 const root = document.getElementById('wurk-root');
+// Strings resolve once, so the first render waits for the locale's bundle
+// (an English-only page settles without a fetch). A chunk that stalls rather
+// than fails falls back to English after 3s, like a failed one.
 if (root) {
-  // Solid's render takes a component factory (a function returning JSX), not an
-  // element — it establishes the reactive root that owns the whole app.
-  render(
-    () =>
-      embedded ? (
-        <div
-          style={{
-            padding: '2rem',
-            'text-align': 'center',
-            color: 'var(--text-muted)',
-            'font-size': '14px',
-            'line-height': 1.6,
-          }}
-        >
-          {t('extension.notRendered')}
-        </div>
-      ) : (
-        <App />
-      ),
-    root,
+  Promise.race([ready, new Promise<void>((resolve) => setTimeout(resolve, 3000))]).then(() =>
+    // Solid's render takes a component factory (a function returning JSX), not
+    // an element — it establishes the reactive root that owns the whole app.
+    render(
+      () =>
+        embedded ? (
+          <div
+            style={{
+              padding: '2rem',
+              'text-align': 'center',
+              color: 'var(--text-muted)',
+              'font-size': '14px',
+              'line-height': 1.6,
+            }}
+          >
+            {t('extension.notRendered')}
+          </div>
+        ) : (
+          <App />
+        ),
+      root,
+    ),
   );
 }

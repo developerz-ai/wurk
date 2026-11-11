@@ -4,7 +4,6 @@ require_relative '../component'
 require_relative '../keys'
 require_relative '../job_record'
 require_relative '../timer_loop'
-require_relative 'rollup'
 
 module Wurk
   module Metrics

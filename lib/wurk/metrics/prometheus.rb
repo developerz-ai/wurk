@@ -3,7 +3,6 @@
 require 'json'
 require_relative '../component'
 require_relative '../keys'
-require_relative '../leader'
 require_relative '../version'
 require_relative '../queue_consumers'
 require_relative 'process_counters'

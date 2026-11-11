@@ -1,6 +1,6 @@
 ---
 - entry: 'Quiet does not step the leader down; full shutdown does'
-  anchor: lib/wurk/launcher.rb#L140-L150
+  anchor: lib/wurk/launcher.rb#L136-L146
   fragment: |-
     @managers.each(&:quiet)
     @poller&.terminate
@@ -25,7 +25,7 @@
     return unless preload_app?
 
 - entry: "`:fork` and `:leader` extend the free spec's lifecycle events"
-  anchor: lib/wurk/configuration.rb#L112
+  anchor: lib/wurk/configuration.rb#L111
   fragment: |-
     LIFECYCLE_EVENTS = %i[startup fork quiet shutdown exit heartbeat beat leader].freeze
 
@@ -37,17 +37,17 @@
     end
 
 - entry: 'DEFAULTS adds `:redis_error_handlers`'
-  anchor: lib/wurk/configuration.rb#L52
+  anchor: lib/wurk/configuration.rb#L51
   fragment: |-
     redis_error_handlers: [],
 
 - entry: 'DEFAULTS adds `:redis_error_handlers`'
-  anchor: lib/wurk/configuration.rb#L369
+  anchor: lib/wurk/configuration.rb#L368
   fragment: |-
     @options[:redis_error_handlers] << block
 
 - entry: 'DEFAULTS adds `:redis_error_handlers`'
-  anchor: lib/wurk/configuration.rb#L1292-L1293
+  anchor: lib/wurk/configuration.rb#L1289-L1290
   fragment: |-
     def dispatch_redis_error(info)
     redis_error_handlers.each do |handler|
@@ -73,22 +73,22 @@
     end
 
 - entry: 'Pool sizing: three disjoint pools per process'
-  anchor: lib/wurk/configuration.rb#L307
+  anchor: lib/wurk/configuration.rb#L306
   fragment: |-
     WEB_POOL_DEFAULT_SIZE = 5
 
 - entry: 'Pool sizing: three disjoint pools per process'
-  anchor: lib/wurk/configuration.rb#L317
+  anchor: lib/wurk/configuration.rb#L316
   fragment: |-
     @options[:web_pool_size] || WEB_POOL_DEFAULT_SIZE
 
 - entry: 'Pool sizing: three disjoint pools per process'
-  anchor: lib/wurk/configuration.rb#L334
+  anchor: lib/wurk/configuration.rb#L333
   fragment: |-
     @web_redis_pool ||= build_redis_pool(size: web_pool_size, name: 'web', pool_timeout: WEB_POOL_TIMEOUT)
 
 - entry: '`reap_idle_redis_connections` sweeps from a per-pool reaper thread, not the heartbeat'
-  anchor: lib/wurk/configuration.rb#L268-L269
+  anchor: lib/wurk/configuration.rb#L267-L268
   fragment: |-
     def reap_idle_redis_connections(timeout = 60)
     self[:redis_idle_timeout] = timeout

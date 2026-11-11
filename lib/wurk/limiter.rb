@@ -267,13 +267,6 @@ module Wurk
   end
 end
 
-require_relative 'limiter/base'
-require_relative 'limiter/concurrent'
-require_relative 'limiter/bucket'
-require_relative 'limiter/window'
-require_relative 'limiter/leaky'
-require_relative 'limiter/points'
-require_relative 'limiter/unlimited'
 require_relative 'middleware'
 require_relative 'limiter/server_middleware'
 # Server-middleware registration happens in wurk.rb after the Wurk

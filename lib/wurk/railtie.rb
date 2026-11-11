@@ -2,7 +2,6 @@
 
 require 'rails/railtie'
 require 'active_support/ordered_options'
-require_relative 'rails_boot'
 
 module Wurk
   # Rails integration surface only: register the host-facing `config.wurk`

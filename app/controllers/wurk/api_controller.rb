@@ -2,7 +2,6 @@
 
 require_relative 'api/serializers'
 require_relative 'api/pagination'
-require 'wurk/web'
 
 module Wurk
   # JSON APIs consumed by the SolidJS SPA. Action methods stay thin; mapping to

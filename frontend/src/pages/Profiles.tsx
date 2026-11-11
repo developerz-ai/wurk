@@ -6,6 +6,7 @@ import { absoluteTime, formatNumber, hoverTime } from '../utils';
 import { timeZone } from '../tz';
 import { basePath } from '../basePath';
 import { getJSON } from '../http';
+import Icon from '../components/Icon';
 
 // One row from GET <mount>/api/profiles (Wurk::Api::Serializers.profile_record).
 interface Profile {
@@ -98,7 +99,7 @@ export default function Profiles() {
                                 target="_blank"
                                 rel="noopener noreferrer"
                               >
-                                <i class="fa-solid fa-up-right-from-square" aria-hidden="true" /> {t('extension.open')}
+                                <Icon name="up-right-from-square" /> {t('extension.open')}
                               </a>
                             </td>
                           </tr>

@@ -12,7 +12,7 @@ export default function NotFound() {
 
   return (
     <div>
-      <PageHeader icon="fa-compass" title={t('notfound.title')} summary={t('notfound.hint')} />
+      <PageHeader icon="compass" title={t('notfound.title')} summary={t('notfound.hint')} />
       <div class="empty-state">
         <A href="/" class="btn btn-accent">
           {t('notfound.home')}

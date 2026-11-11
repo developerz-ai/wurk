@@ -7,6 +7,7 @@ import { basePath } from '../basePath';
 import { fetchText } from '../http';
 import { t } from '../i18n';
 import extensionCss from '../styles/pages/_extension.scss?inline';
+import Icon from '../components/Icon';
 
 // Renders a third-party extension tab registered via
 // Sidekiq::Web.register_extension. When the tab maps to a registered extension
@@ -101,7 +102,7 @@ function NativeExtension(props: { extName: string; indexPath: string; title: str
 
   return (
     <>
-      <PageHeader icon="fa-puzzle-piece" title={props.title} summary={t('extension.summary')} />
+      <PageHeader icon="puzzle-piece" title={props.title} summary={t('extension.summary')} />
       <Show when={error()}>
         <div class="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>
       </Show>
@@ -149,9 +150,9 @@ function IframeExtension(props: { tab: string; title: string }) {
   const src = () => `${basePath()}/${props.tab}?wurk_ext_embed=1`;
   return (
     <>
-      <PageHeader icon="fa-puzzle-piece" title={props.title} summary={t('extension.summary')}>
+      <PageHeader icon="puzzle-piece" title={props.title} summary={t('extension.summary')}>
         <a class="btn btn-sm" href={`${basePath()}/${props.tab}`} target="_blank" rel="noopener noreferrer">
-          <i class="fa-solid fa-arrow-up-right-from-square" style={{ 'margin-inline-end': '0.4rem' }} />
+          <Icon name="arrow-up-right-from-square" style={{ 'margin-inline-end': '0.4rem' }} />
           {t('extension.open')}
         </a>
       </PageHeader>

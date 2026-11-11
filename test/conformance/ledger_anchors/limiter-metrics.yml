@@ -1,17 +1,17 @@
 - entry: 'Concurrent limiter polls instead of using XREAD waiter signalling'
-  anchor: lib/wurk/limiter/concurrent.rb#L16
+  anchor: lib/wurk/limiter/concurrent.rb#L14
   fragment: |-
     WAIT_SLEEP = 0.05
 
 - entry: 'Concurrent limiter polls instead of using XREAD waiter signalling'
-  anchor: lib/wurk/limiter/concurrent.rb#L89-L98
+  anchor: lib/wurk/limiter/concurrent.rb#L87-L96
   fragment: |-
     loop do
       return monotime if acquire(slot, waited)[0].to_i == 1
       return if @options[:policy] == :ignore
 
 - entry: 'Concurrent limiter polls instead of using XREAD waiter signalling'
-  anchor: lib/wurk/limiter/concurrent.rb#L101-L109
+  anchor: lib/wurk/limiter/concurrent.rb#L99-L107
   fragment: |-
     def acquire(slot, waited)
       lua(:limiter_concurrent_acquire,
@@ -30,7 +30,7 @@
     local removed = redis.call('ZREM', KEYS[1], ARGV[1])
 
 - entry: 'Concurrent limiter polls instead of using XREAD waiter signalling'
-  anchor: lib/wurk/limiter/concurrent.rb#L53-L55
+  anchor: lib/wurk/limiter/concurrent.rb#L51-L53
   fragment: |-
     def state_keys
       [state_key, stats_key]
@@ -76,14 +76,14 @@
       emit(:increment, metric, tags: tags, sample_rate: sample_rate)
 
 - entry: 'An interrupted `IterableJob` run books `p` + `ms`, never `f` (#394, resolved in PR1)'
-  anchor: lib/wurk/middleware/interrupt_handler.rb#L39-L41
+  anchor: lib/wurk/middleware/interrupt_handler.rb#L38-L40
   fragment: |-
     rescue Wurk::Job::Interrupted
       repush(job, queue)
       raise Wurk::JobRetry::Skip
 
 - entry: 'An interrupted `IterableJob` run books `p` + `ms`, never `f` (#394, resolved in PR1)'
-  anchor: lib/wurk/middleware/interrupt_handler.rb#L54
+  anchor: lib/wurk/middleware/interrupt_handler.rb#L53
   fragment: |-
     Wurk.configuration.server_middleware.prepend(Wurk::Middleware::InterruptHandler)
 
@@ -100,17 +100,17 @@
     Wurk.configuration.server_middleware.add(Wurk::Middleware::Expiry)
 
 - entry: 'An interrupted `IterableJob` run books `p` + `ms`, never `f` (#394, resolved in PR1)'
-  anchor: lib/wurk.rb#L337
+  anchor: lib/wurk.rb#L342
   fragment: |-
     Wurk.configuration.server_middleware.add(Wurk::Limiter::ServerMiddleware)
 
 - entry: 'An interrupted `IterableJob` run books `p` + `ms`, never `f` (#394, resolved in PR1)'
-  anchor: lib/wurk.rb#L353
+  anchor: lib/wurk.rb#L358
   fragment: |-
     Wurk.configuration.server_middleware.add(Wurk::Metrics::Statsd)
 
 - entry: 'An interrupted `IterableJob` run books `p` + `ms`, never `f` (#394, resolved in PR1)'
-  anchor: lib/wurk.rb#L360
+  anchor: lib/wurk.rb#L365
   fragment: |-
     Wurk.configuration.server_middleware.add(Wurk::Metrics::History)
 
@@ -136,7 +136,7 @@
       return
 
 - entry: '`:max_iteration_runtime` is accepted but not consumed'
-  anchor: lib/wurk/configuration.rb#L33
+  anchor: lib/wurk/configuration.rb#L32
   fragment: |-
     max_iteration_runtime: nil,
 

@@ -66,7 +66,7 @@ export default function Dead() {
 
   return (
     <div>
-      <PageHeader icon="fa-skull" title={t('nav.dead')} summary={t('summaries.dead')}>
+      <PageHeader icon="skull" title={t('nav.dead')} summary={t('summaries.dead')}>
         <Show when={query.data}>{(data) => <span class="badge badge-danger">{formatNumber(data().total)}</span>}</Show>
         <Show when={list.filtered() && list.matching() !== undefined}>
           <span class="badge">{t('common.matching', { n: list.matching()! })}</span>

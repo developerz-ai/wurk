@@ -1,9 +1,7 @@
 # frozen_string_literal: true
 
 require_relative '../limiter'
-require_relative '../cron'
 require_relative '../client'
-require_relative '../metrics/query'
 
 module Wurk
   class Web

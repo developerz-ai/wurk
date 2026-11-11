@@ -3,7 +3,6 @@
 require 'rails/engine'
 require_relative '../active_job/queue_adapters/wurk_adapter'
 require_relative 'dashboard_manifest'
-require_relative 'web'
 
 module Wurk
   # Rails mountable engine. Owns the dashboard mount, the asset path for
@@ -44,6 +43,14 @@ module Wurk
       CACHEABLE_METHODS = %w[GET HEAD].freeze
       CACHEABLE_STATUSES = [200, 206, 304].freeze
 
+      # `rake frontend:build` writes a .br and a .gz next to each fingerprinted
+      # text asset (frontend/vite.config.ts, wurk-precompress). The mount sits
+      # ahead of any deflater the host runs, so without these the dashboard
+      # went out uncompressed. Preference order when the client's q-values tie.
+      ENCODINGS = { 'br' => '.br', 'gzip' => '.gz' }.freeze
+      OFFERED_ENCODINGS = [*ENCODINGS.keys, 'identity'].freeze
+      PRECOMPRESSED = /\.(?:js|css|svg|json)\z/
+
       def initialize(app, root:)
         @app   = app
         @files = ::Rack::Files.new(root)
@@ -56,20 +63,55 @@ module Wurk
         inner = env.dup
         stripped = path.delete_prefix(PREFIX)
         inner[::Rack::PATH_INFO] = stripped.empty? ? '/' : stripped
-        response = @files.call(inner)
+        response = precompressed(inner, env, stripped) || @files.call(inner)
         return @app.call(env) if response[0] == 404
 
-        stamp_cache_control(response, env, stripped)
+        stamp_cache_headers(response, env, stripped)
         response
       end
 
       private
 
+      # The variant the client accepts and the build wrote, served with the
+      # original's content type; nil sends the identity file. A Range request
+      # gets identity so byte offsets mean what the client thinks they mean.
+      def precompressed(inner, env, stripped)
+        return unless CACHEABLE_METHODS.include?(env[::Rack::REQUEST_METHOD])
+        return unless precompressible?(stripped)
+        return if env['HTTP_RANGE']
+
+        encoding = negotiated_encoding(env)
+        return unless encoding
+
+        variant = @files.call(inner.merge(::Rack::PATH_INFO => "#{stripped}#{ENCODINGS[encoding]}"))
+        return unless variant[0] == 200
+
+        variant[1]['content-type'] = ::Rack::Mime.mime_type(::File.extname(stripped))
+        variant[1]['content-encoding'] = encoding
+        variant
+      end
+
+      # 'br', 'gzip', or nil for identity (no header, or every coding refused).
+      def negotiated_encoding(env)
+        accepted = ::Rack::Utils.q_values(env['HTTP_ACCEPT_ENCODING'].to_s)
+        encoding = ::Rack::Utils.select_best_encoding(OFFERED_ENCODINGS, accepted)
+        encoding if ENCODINGS.key?(encoding)
+      end
+
+      def precompressible?(stripped)
+        stripped.start_with?(FINGERPRINTED_PREFIX) && stripped.match?(PRECOMPRESSED)
+      end
+
       # This mount is inserted at index 0 of the HOST app's stack (see the
       # initializer below), so Rack::ETag and Rack::ConditionalGet never see
       # these responses — without this the dashboard's fingerprinted bundle
       # shipped with no cache directive at all and was refetched every load.
-      def stamp_cache_control(response, env, stripped)
+      #
+      # Vary goes on every answer for a path that has variants, identity
+      # included, or a shared cache could hand gzip to a client that can't
+      # read it.
+      def stamp_cache_headers(response, env, stripped)
+        response[1]['vary'] = 'accept-encoding' if precompressible?(stripped)
         return unless CACHEABLE_METHODS.include?(env[::Rack::REQUEST_METHOD])
         return unless CACHEABLE_STATUSES.include?(response[0])
 

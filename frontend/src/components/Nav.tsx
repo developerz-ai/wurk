@@ -8,6 +8,7 @@ import LocalePicker from './LocalePicker';
 import ThemeToggle from './ThemeToggle';
 import TimezonePicker from './TimezonePicker';
 import logoUrl from '../assets/wurk-logo.png';
+import Icon from './Icon';
 
 interface NavProps {
   open: boolean;
@@ -17,10 +18,6 @@ interface NavProps {
   /** Desktop: flip between the icon rail and the full-width nav. */
   onToggleCollapse: () => void;
 }
-
-// Labels resolve once at module load: a locale change reloads the page (see
-// components/LocalePicker.tsx), so the rail never needs a reactive label.
-const LINKS = NAV_PANES.map((pane) => ({ ...pane, label: paneLabel(pane) }));
 
 export default function Nav(props: NavProps) {
   // Custom tabs navigate within the SPA via /ext/:tab: registered server-rendered
@@ -151,19 +148,19 @@ export default function Nav(props: NavProps) {
         <div style={{ height: '1px', background: 'var(--border)', margin: '0 1rem 0.5rem' }} />
 
         <ul style={{ 'list-style': 'none', flex: 1 }}>
-          <For each={LINKS}>
+          <For each={NAV_PANES}>
             {(link) => (
               <li>
                 <A
                   href={link.to}
                   end={link.end}
                   onClick={handleNavClick}
-                  title={link.label}
+                  title={paneLabel(link)}
                   class="wurk-navlink"
                   activeClass="active"
                 >
-                  <i class={`fa-solid ${link.icon} wurk-navlink__icon`} aria-hidden="true" />
-                  <span class="nav-label">{link.label}</span>
+                  <Icon name={link.icon} class="wurk-navlink__icon" />
+                  <span class="nav-label">{paneLabel(link)}</span>
                 </A>
               </li>
             )}
@@ -194,7 +191,7 @@ export default function Nav(props: NavProps) {
                   class="wurk-navlink"
                   activeClass="active"
                 >
-                  <i class="fa-solid fa-puzzle-piece wurk-navlink__icon" aria-hidden="true" />
+                  <Icon name="puzzle-piece" class="wurk-navlink__icon" />
                   <span class="nav-label">{tab.name}</span>
                 </A>
               </li>
@@ -228,10 +225,7 @@ export default function Nav(props: NavProps) {
             font: 'inherit',
           }}
         >
-          <i
-            class={`fa-solid ${props.collapsed ? 'fa-angles-right' : 'fa-angles-left'} wurk-navlink__icon`}
-            aria-hidden="true"
-          />
+          <Icon name={props.collapsed ? 'angles-right' : 'angles-left'} class="wurk-navlink__icon" />
           <span class="nav-label">{t('nav.collapse')}</span>
         </button>
 
@@ -263,7 +257,7 @@ export default function Nav(props: NavProps) {
             transition: 'background var(--dur-base) var(--ease-standard), color var(--dur-base) var(--ease-standard)',
           }}
         >
-          <i class="fa-brands fa-github" style={{ 'font-size': '16px', width: '20px', 'text-align': 'center', flex: 'none' }} />
+          <Icon name="github" style={{ 'font-size': '16px', width: '20px', 'text-align': 'center', flex: 'none' }} />
           <span class="nav-label">GitHub</span>
         </a>
       </nav>

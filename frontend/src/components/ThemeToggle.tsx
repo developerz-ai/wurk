@@ -1,13 +1,15 @@
 import { createSignal } from 'solid-js';
 import { t } from '../i18n';
+import type { IconName } from '../icons';
 import { setThemePreference, themePreference, type ThemePreference } from '../theme';
+import Icon from './Icon';
 
 // Cycle order and the icon each state wears. `system` leads because it is the
 // default, so the first press off it is an explicit "no, this one".
-const CYCLE: readonly { preference: ThemePreference; icon: string }[] = [
-  { preference: 'system', icon: 'fa-circle-half-stroke' },
-  { preference: 'light', icon: 'fa-sun' },
-  { preference: 'dark', icon: 'fa-moon' },
+const CYCLE: readonly { preference: ThemePreference; icon: IconName }[] = [
+  { preference: 'system', icon: 'circle-half-stroke' },
+  { preference: 'light', icon: 'sun' },
+  { preference: 'dark', icon: 'moon' },
 ];
 
 /**
@@ -43,7 +45,7 @@ export default function ThemeToggle() {
       title={t('nav.theme_next', { name: label(next()) })}
       onClick={cycle}
     >
-      <i class={`fa-solid ${icon()} wurk-navlink__icon`} aria-hidden="true" />
+      <Icon name={icon()} class="wurk-navlink__icon" />
       <span class="nav-label">{label(preference())}</span>
     </button>
   );

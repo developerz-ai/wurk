@@ -236,7 +236,7 @@ export default function Queues() {
     <Switch>
       <Match when={query.isPending}>
         <div>
-          <PageHeader icon="fa-layer-group" title={t('nav.queues')} summary={t('summaries.queues')} />
+          <PageHeader icon="layer-group" title={t('nav.queues')} summary={t('summaries.queues')} />
           <SkeletonTable rows={8} cols={5} />
         </div>
       </Match>
@@ -246,7 +246,7 @@ export default function Queues() {
       <Match when={query.data}>
         {(_data) => (
           <div>
-            <PageHeader icon="fa-layer-group" title={t('nav.queues')} summary={t('summaries.queues')} />
+            <PageHeader icon="layer-group" title={t('nav.queues')} summary={t('summaries.queues')} />
 
             <Show when={sorted().length > 0} fallback={<div class="empty-state">{t('common.empty')}</div>}>
               <div class="table-wrapper">

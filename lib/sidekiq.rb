@@ -4,8 +4,9 @@
 # Sidekiq::* alias layer (lib/wurk/compat.rb), so code and third-party gems
 # written against Sidekiq load Wurk without changing a single require. The
 # sibling files under lib/sidekiq/ cover the documented `require "sidekiq/…"`
-# sub-paths the ecosystem uses; all are one-line passthroughs because Wurk
-# loads its full surface (web included) from the single "wurk" entrypoint.
+# sub-paths the ecosystem uses. "wurk" loads the client tier and autoloads the
+# rest (Wurk::LazyLoader); a sub-path whose surface is lazy loads it, so
+# `require "sidekiq/web"` defines Sidekiq::Web as it does upstream.
 #
 # Bundler-level substitution (a gem's `add_dependency "sidekiq"`) is handled
 # by the companion shim gem in ecosystem/sidekiq-shim/.

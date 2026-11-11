@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require_relative 'base'
-
 module Wurk
   module Limiter
     # Token-bucket with explicit `estimate:` per call. Refills at

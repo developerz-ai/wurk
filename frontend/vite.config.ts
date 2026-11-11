@@ -1,8 +1,9 @@
 import { defineConfig } from "vite";
 import solid from "vite-plugin-solid";
 import tailwindcss from "@tailwindcss/vite";
-import { readFileSync, writeFileSync } from "fs";
-import { resolve } from "path";
+import { readdirSync, readFileSync, writeFileSync } from "fs";
+import { join, resolve } from "path";
+import { brotliCompressSync, constants as zlib, gzipSync } from "zlib";
 
 // Built artifacts land in ../vendor/assets/dashboard at gem release time.
 // See docs/idea/09-precompiled-assets.md.
@@ -10,6 +11,10 @@ import { resolve } from "path";
 // Dev-server port comes from VITE_PORT (exported by bin/dev) so the logged port
 // and the real server never disagree; defaults to 5173.
 const devPort = Number(process.env.VITE_PORT) || 5173;
+
+// Text the engine's asset mount can answer pre-compressed. Fonts and images
+// are already compressed formats; a .gz of a .woff2 only costs gem bytes.
+const COMPRESSIBLE = /\.(js|css|svg|json)$/;
 
 export default defineConfig({
   plugins: [
@@ -42,6 +47,38 @@ export default defineConfig({
         };
 
         writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+      },
+    },
+    {
+      // Writes a .gz and a .br next to every fingerprinted text asset, so the
+      // engine serves the compressed bytes straight off disk instead of making
+      // each host add a deflater (or ship the dashboard uncompressed). A
+      // variant that would not be smaller is skipped; the engine then serves
+      // the original.
+      name: "wurk-precompress",
+      apply: "build",
+      writeBundle(options) {
+        const assetsDir = join(options.dir!, "assets");
+        for (const name of readdirSync(assetsDir)) {
+          if (!COMPRESSIBLE.test(name)) continue;
+          const path = join(assetsDir, name);
+          const raw = readFileSync(path);
+          const variants: [string, Buffer][] = [
+            [".gz", gzipSync(raw, { level: 9 })],
+            [
+              ".br",
+              brotliCompressSync(raw, {
+                params: {
+                  [zlib.BROTLI_PARAM_QUALITY]: zlib.BROTLI_MAX_QUALITY,
+                  [zlib.BROTLI_PARAM_SIZE_HINT]: raw.length,
+                },
+              }),
+            ],
+          ];
+          for (const [ext, bytes] of variants) {
+            if (bytes.length < raw.length) writeFileSync(path + ext, bytes);
+          }
+        }
       },
     },
   ],

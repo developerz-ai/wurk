@@ -2,6 +2,7 @@ import { For, Show, createEffect, createMemo, createSignal } from 'solid-js';
 import { t } from '../i18n';
 import { browserZone, setTimeZone, storedZone, supportedZones, timeZone } from '../tz';
 import Modal from './Modal';
+import Icon from './Icon';
 
 interface Entry {
   /** The zone to persist, or null for the entry that clears the override. */
@@ -120,7 +121,7 @@ export default function TimezonePicker() {
         title={t('timezone.shown_in', { name: timeZone })}
         onClick={() => setIsOpen(true)}
       >
-        <i class="fa-solid fa-globe wurk-navlink__icon" aria-hidden="true" />
+        <Icon name="globe" class="wurk-navlink__icon" />
         <span class="nav-label">
           <bdi>{shortLabel(timeZone)}</bdi>
         </span>
@@ -162,7 +163,7 @@ export default function TimezonePicker() {
                 >
                   <bdi>{entry.label}</bdi>
                   <Show when={entry.selected}>
-                    <i class="fa-solid fa-check" aria-hidden="true" />
+                    <Icon name="check" />
                   </Show>
                 </button>
               )}

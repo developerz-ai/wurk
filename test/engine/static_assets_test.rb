@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative '../engine_test_helper'
+require 'zlib'
 
 # Verifies that Wurk::Engine::AssetMount is wired to serve precompiled SPA
 # assets from vendor/assets/dashboard. Tests hashed filename serving and
@@ -179,5 +180,83 @@ class StaticAssetsTest < Wurk::Test::EngineCase
     files = Dir.glob("#{assets_subdir}/*.{js,css}")
 
     assert_predicate files, :any?, 'assets/ should contain built JS and CSS files'
+  end
+
+  # `rake frontend:build` writes .br and .gz siblings for every fingerprinted
+  # JS/CSS file; the mount answers Accept-Encoding with them because it sits
+  # ahead of any deflater the host runs.
+  def compressed_asset
+    asset = Dir.glob(ASSETS_DIR.join('assets', '*.js')).find { |f| File.exist?("#{f}.br") && File.exist?("#{f}.gz") }
+    skip 'no precompressed JS asset; run `rake frontend:build`' unless asset
+    asset
+  end
+
+  def test_brotli_variant_when_the_client_accepts_br
+    asset = compressed_asset
+
+    get "/wurk-assets/assets/#{File.basename(asset)}", {}, 'HTTP_ACCEPT_ENCODING' => 'gzip, deflate, br'
+
+    assert_equal 200, last_response.status
+    assert_equal 'br', last_response.headers['content-encoding']
+    assert_equal 'accept-encoding', last_response.headers['vary']
+    assert_match %r{\Atext/javascript}, last_response.headers['content-type']
+    assert_equal File.binread("#{asset}.br"), last_response.body
+    assert_equal 'public, max-age=31536000, immutable', last_response.headers['cache-control']
+  end
+
+  def test_gzip_variant_when_the_client_accepts_only_gzip
+    asset = compressed_asset
+
+    get "/wurk-assets/assets/#{File.basename(asset)}", {}, 'HTTP_ACCEPT_ENCODING' => 'gzip'
+
+    assert_equal 200, last_response.status
+    assert_equal 'gzip', last_response.headers['content-encoding']
+    assert_equal 'accept-encoding', last_response.headers['vary']
+    assert_match %r{\Atext/javascript}, last_response.headers['content-type']
+    assert_equal File.binread(asset), Zlib.gunzip(last_response.body)
+  end
+
+  def test_a_lower_q_value_loses_even_when_listed_first
+    asset = compressed_asset
+
+    get "/wurk-assets/assets/#{File.basename(asset)}", {}, 'HTTP_ACCEPT_ENCODING' => 'br;q=0.1, gzip;q=0.9'
+
+    assert_equal 'gzip', last_response.headers['content-encoding']
+  end
+
+  def test_identity_when_the_client_accepts_no_encoding_or_refuses_them
+    asset = compressed_asset
+
+    [nil, 'identity', 'br;q=0, gzip;q=0'].each do |accept|
+      headers = accept ? { 'HTTP_ACCEPT_ENCODING' => accept } : {}
+      get "/wurk-assets/assets/#{File.basename(asset)}", {}, headers
+
+      assert_equal 200, last_response.status, accept.inspect
+      assert_nil last_response.headers['content-encoding'], accept.inspect
+      assert_equal 'accept-encoding', last_response.headers['vary'], accept.inspect
+      assert_equal File.binread(asset), last_response.body, accept.inspect
+    end
+  end
+
+  # Byte offsets in a Range header address the identity file.
+  def test_range_request_is_served_from_the_identity_file
+    asset = compressed_asset
+
+    get "/wurk-assets/assets/#{File.basename(asset)}", {}, 'HTTP_ACCEPT_ENCODING' => 'br', 'HTTP_RANGE' => 'bytes=0-9'
+
+    assert_equal 206, last_response.status
+    assert_nil last_response.headers['content-encoding']
+    assert_equal File.binread(asset, 10), last_response.body
+  end
+
+  def test_asset_without_a_variant_is_served_as_is
+    font = Dir.glob(ASSETS_DIR.join('assets', '*.woff2')).first
+    skip 'no built font to probe' unless font
+
+    get "/wurk-assets/assets/#{File.basename(font)}", {}, 'HTTP_ACCEPT_ENCODING' => 'br, gzip'
+
+    assert_equal 200, last_response.status
+    assert_nil last_response.headers['content-encoding']
+    assert_nil last_response.headers['vary']
   end
 end

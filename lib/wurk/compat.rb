@@ -50,16 +50,6 @@ module Sidekiq
   # classes under them — but `Sidekiq.pro?` / `Sidekiq.ent?` still return
   # `false` per docs/target/sidekiq-free.md §32 (Wurk advertises as free OSS).
   module Pro
-    # Sidekiq Pro mounts the dashboard at `Sidekiq::Pro::Web`; it's the same
-    # board as `Sidekiq::Web` here, so a Pro app's `mount Sidekiq::Pro::Web`
-    # drops in unchanged. `Wurk::Web` is already required by the time this file
-    # loads (lib/wurk.rb requires wurk/web before wurk/compat).
-    Web = Wurk::Web
-
-    # `use Sidekiq::Pro::BatchStatus` — the polling Rack middleware that serves
-    # GET /batch_status/<bid>.json. Spec: docs/target/sidekiq-pro.md §10.3.
-    BatchStatus = Wurk::Web::BatchStatus
-
     # Pro module-level statsd accessor (spec §1): `Sidekiq::Pro.dogstatsd = ...`.
     # Delegates to the canonical `config.dogstatsd=` (spec §9.1), so either form
     # feeds the same Wurk::Metrics::Statsd client.
@@ -119,38 +109,14 @@ module Sidekiq
   private_constant :RailsNamespace
 
   BasicFetch       = Wurk::Fetcher::Reliable
-  WebHelpers       = Wurk::Web::Extension::Helpers
-  Paginator        = Wurk::Web::Paginator
   Batch            = Wurk::Batch
   BatchSet         = Wurk::BatchSet
   Capsule          = Wurk::Capsule
-  CLI              = Wurk::CLI
   Client           = Wurk::Client
   Component        = Wurk::Component
   Config           = Wurk::Configuration
   Context          = Wurk::Context
-  # No `Sidekiq::Cron` alias on purpose (#204): real Sidekiq never defines it
-  # — that namespace belongs to the third-party sidekiq-cron gem, and squatting
-  # it made the gem's own classes (Poller, Job) collide at load. Wurk's native
-  # periodic surface is `Sidekiq::Periodic` (Ent parity) / `Wurk::Cron`.
-  CronParser       = Wurk::Cron::Parser
-  Periodic         = Wurk::Cron
   DeadSet          = Wurk::DeadSet
-  Deploy           = Wurk::Deploy
-  Embedded         = Wurk::Embedded
-  Encryption       = Wurk::Encryption
-  # A Wurk extra, not parity — aliased because nothing else claims the name.
-  # Checked before adding it, the way `Sidekiq::Cron` (#204) and
-  # `Sidekiq::Status` taught us to: upstream Sidekiq defines no `Flow` anywhere
-  # in `lib/` at the pinned parity SHA, RubyGems has no `sidekiq-flow` or
-  # `sidekiq_flow` gem, and the only `Sidekiq::Flow` in public Ruby is a
-  # `FlowIdMiddleware` nested under a gem's *own* `Sidekiq` module, which this
-  # constant cannot reach.
-  Flow             = Wurk::Flow
-  FlowSet          = Wurk::FlowSet
-  History          = Wurk::History
-  IterableJob      = Wurk::IterableJob
-  IterableJobQuery = Wurk::IterableJobQuery
   Job              = Wurk::Job
   JobLogger        = Wurk::JobLogger
   JobRecord        = Wurk::JobRecord
@@ -161,11 +127,9 @@ module Sidekiq
   JobSet           = Wurk::JobSet
   JobUtil          = Wurk::JobUtil
   Keys             = Wurk::Keys
-  Launcher         = Wurk::Launcher
   Limiter          = Wurk::Limiter
   Loader           = Wurk::Loader
   Logger           = Wurk::Logger
-  Manager          = Wurk::Manager
   Metrics          = Wurk::Metrics
   Middleware       = Wurk::Middleware
   ServerMiddleware = Wurk::Middleware::ServerMiddleware
@@ -174,13 +138,10 @@ module Sidekiq
   ProcessSet       = Wurk::ProcessSet
   Processor        = Wurk::Processor
   Profiler         = Wurk::Profiler
-  ProfileSet       = Wurk::ProfileSet
-  ProfileRecord    = Wurk::ProfileRecord
   Queue            = Wurk::Queue
   RedisClientAdapter = Wurk::RedisClientAdapter
   RedisConnection  = Wurk::RedisConnection
   RetrySet         = Wurk::RetrySet
-  Scheduled        = Wurk::Scheduled
   ScheduledSet     = Wurk::ScheduledSet
   Shutdown         = Wurk::Shutdown
   SortedEntry      = Wurk::SortedEntry
@@ -200,11 +161,44 @@ module Sidekiq
   TransactionAwareClient = Wurk::TransactionAwareClient
   Queues           = Wurk::Queues
   EmptyQueueError  = Wurk::Testing::EmptyQueueError
-  Web              = Wurk::Web
   Work             = Wurk::Work
   Worker           = Wurk::Worker
   Workers          = Wurk::Workers
   WorkSet          = Wurk::WorkSet
+
+  # Aliases of lazy Wurk constants (Wurk::LazyLoader) are autoloads too, so
+  # `defined?(Sidekiq::Web)` holds before the load and the alias is the very
+  # object its target is. Each points at a file under lib/wurk/compat/ that
+  # loads the target and assigns the alias: the target's own file defines only
+  # the Wurk name, so an autoload onto it would leave `Sidekiq::X` undefined.
+  # Those files name their targets rather than require them: web.rb, swarm.rb
+  # and iterable_job.rb require subfiles that reopen the class before defining
+  # it, which a direct require would turn into a circular one.
+  #
+  # No `Sidekiq::Cron` alias on purpose (#204): real Sidekiq never defines it
+  # — that namespace belongs to the third-party sidekiq-cron gem, and squatting
+  # it made the gem's own classes (Poller, Job) collide at load. Wurk's native
+  # periodic surface is `Sidekiq::Periodic` (Ent parity) / `Wurk::Cron`.
+  #
+  # `Flow` is a Wurk extra, not parity — aliased because nothing else claims
+  # the name. Checked before adding it, the way `Sidekiq::Cron` (#204) and
+  # `Sidekiq::Status` taught us to: upstream Sidekiq defines no `Flow` anywhere
+  # in `lib/` at the pinned parity SHA, RubyGems has no `sidekiq-flow` or
+  # `sidekiq_flow` gem, and the only `Sidekiq::Flow` in public Ruby is a
+  # `FlowIdMiddleware` nested under a gem's *own* `Sidekiq` module, which this
+  # constant cannot reach.
+  Wurk::LazyLoader.register(
+    self,
+    CLI: 'compat/server', Embedded: 'compat/server', Launcher: 'compat/server',
+    Manager: 'compat/server', Scheduled: 'compat/server',
+    History: 'compat/server', Periodic: 'compat/server', CronParser: 'compat/server',
+    Web: 'compat/web', WebHelpers: 'compat/web', Paginator: 'compat/web',
+    ProfileSet: 'compat/profile_set', ProfileRecord: 'compat/profile_set',
+    Flow: 'compat/flow', FlowSet: 'compat/flow',
+    IterableJob: 'compat/iterable_job', IterableJobQuery: 'compat/iterable_job',
+    Deploy: 'compat/deploy', Encryption: 'compat/encryption'
+  )
+  Wurk::LazyLoader.register(Pro, Web: 'compat/web', BatchStatus: 'compat/web')
 
   # Top-level Sidekiq.configure_server / configure_client / redis / logger
   # delegate to Wurk's class methods. Third-party gems treat these as the

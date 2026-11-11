@@ -1,6 +1,7 @@
 import { For, Show, createEffect, createSignal, onCleanup } from 'solid-js';
 import { Portal } from 'solid-js/web';
 import { availableLocales, bundleFor, locale, setLocale, t } from '../i18n';
+import Icon from './Icon';
 
 // Endonyms: every language named in itself, never translated — a menu that
 // offers "German" to someone who can't read English is useless. Keyed by the
@@ -166,7 +167,7 @@ export default function LocalePicker() {
         onClick={() => (isOpen() ? close(false) : open())}
         onKeyDown={onTriggerKeyDown}
       >
-        <i class="fa-solid fa-language wurk-navlink__icon" aria-hidden="true" />
+        <Icon name="language" class="wurk-navlink__icon" />
         <span class="nav-label">
           <bdi>{currentLabel}</bdi>
         </span>
@@ -202,7 +203,7 @@ export default function LocalePicker() {
                   >
                     <bdi>{ENDONYMS[code] ?? code}</bdi>
                     <Show when={code === active}>
-                      <i class="fa-solid fa-check" aria-hidden="true" />
+                      <Icon name="check" />
                     </Show>
                   </button>
                 )}

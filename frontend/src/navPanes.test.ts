@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { GLYPHS } from './icons';
 import { NAV_PANES } from './navPanes';
 
 /**
@@ -64,10 +65,8 @@ describe('nav pane inventory', () => {
     for (const pane of NAV_PANES) expect(pane.end).toBe(pane.to === '/');
   });
 
-  it('gives every pane a Font Awesome solid icon', () => {
-    expect(
-      NAV_PANES.filter((pane) => !/^fa-[a-z0-9-]+$/.test(pane.icon)).map((pane) => pane.icon),
-    ).toEqual([]);
+  it('gives every pane a shipped icon', () => {
+    expect(NAV_PANES.filter((pane) => !Object.hasOwn(GLYPHS, pane.icon)).map((pane) => pane.icon)).toEqual([]);
   });
 
   it('translates every pane label in every shipped locale', () => {

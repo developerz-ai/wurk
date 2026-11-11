@@ -3,7 +3,6 @@
 require_relative '../middleware'
 require_relative '../job'
 require_relative '../job_retry'
-require_relative '../encryption'
 
 module Wurk
   module Middleware
