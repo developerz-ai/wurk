@@ -50,11 +50,11 @@ slices:
     status: in_progress
     percent: 60
   - file: 15-adopter-sales.md
-    status: not_started
-    percent: 0
+    status: in_progress
+    percent: 50
   - file: 16-adopter-gringotts.md
-    status: not_started
-    percent: 0
+    status: in_progress
+    percent: 50
   - file: 17-adopter-hiscore.md
     status: in_progress
     percent: 60
@@ -89,6 +89,9 @@ decisions:
     by: sebi (owner, in-session instruction)
     decision: "Public surfaces (README, docs/site/llms.txt, docs/site/index.html) may state that teams running billions of jobs a month on Wurk in production recommend it, labelled user-reported. Supersedes audit 2026-10-04 H8/R11 for user-reported volume only; published throughput still needs docs/benchmarks.md numbers (12 T1 soak). Guard: test/unit/forbidden_claims_test.rb SCALE_SOURCE."
 evidence:
+  - "wave 2: PR #911 merged (11cd262) incl. review fixes (soak verdict, usage Redis isolation, vs_sidekiq edge race)."
+  - "15 sales: tesote/sales#377 merged (f67f4c41) + live (/version f67f4c4, worker pod 1/1 `Wurk 1.12.0 on dragonfly 1.34.0`, no WARN): wurk 1.12.0; worker-image boot-check step in CI via rails/bin/deploy/wurk boot-check; WorkerBootTest uses public `wurk boot-check`. Workarounds still needed (1.12.0 retires none): pool built before config.redis= keeps 1s read_timeout (03 G9); `unless Wurk.server?` around configure_client (same false-positive WARN as gringotts); reliable_scheduler! (default poller can double-run; LLM jobs billed twice); Sentry ignore list (05 E2); unconsumed-queue tests (03 G5). Deferred S3, S4 (05 E4)."
+  - "16 gringotts: tesote/gringotts-wizarding-bank#12 merged (2f31df6) + deployed (Deploy run 42957382632; worker pod 1/1, log `Wurk 1.12.0 on dragonfly 1.34.0`, /up 200): wurk 1.12.0, boot-check stage in bin/check (catches the cc2a24f Dotenv crash), Rails 8.1.4.1 (bundler-audit), image healthcheck -> wurk health. Local ~/workspace/tesote/gringotts-wizarding-bank is env files only (its rails/.env.test points REDIS_URL at DB 0); clone at gringotts-wizarding-bank.git-clone. Wave-3 wurk false positive: `configure_client block skipped` WARN (lib/wurk/configuration.rb ~905) fires for the standard client+server block pattern that Sidekiq skips silently -> DEBUG or suppress when a server block exists. S2/S3/S5 deferred on 11 K3-K5."
   - "17 hiscore: hiscore-ro/hiscore.ro#114 merged (cdd5889): wurk 1.12.0, CI boot-check job (wired into ci-ok; not a required check - owner call), dead config.topology + require wurk/engine removed; deployed 2026-11-11 04:08Z via bin/deploy (release 20261111040820, rev cdd5889): hiscore_wurk active, log `Wurk 1.12.0 on redis 8.10.2` + role line `wurk; 1 process x 3 threads (redis pool 10, fetch 3); AR pool 5`; hiscore.ro 200; pre-existing app errors only (template digest at boot, Anaf::ImportInvoices invoice 8842131813 hourly). Wave-3 wurk bug: boot-check always logs a wurkswarm-parent role and boots the swarm path, even for single-process `wurk` apps (needs a runner flag)."
   - "wave 2 measured serially on a quiet host @ 8a4eda4 (docs/benchmarks.md Re-run 2026-11-11 + docs/benchmarks/2026-11-11/): vs Sidekiq 8.1.6 noop 0.86x, cpu 0.98x, io 1.00x, boot 0.49s vs 0.35s; noop gap 21.9us/job (fetch 58%, logger 17%, ACK 14%, middleware ~16%); short soak BALANCED (19,435 jobs, 0 lost, 0 unattributed, 12 faults); per-child Pss +160-220 kB/10k jobs after warmup. 24h soak still pending."
   - "wave 2 (algobench): 7 benches + bench/algo/support.rb; deterministic before-values recorded for 07 A1-A11/A14/A16 and 21 K1-K5 (bench:algo_counts, CI step in bench.yml). Plan corrections: A19 DROPPED (ProcessSet cleanup lock is cluster-wide -> O(P)/min, not O(P^2)); A8 cost = classes x FOREIGN loops only; NEW for A7: never-fired loops walk next_fire_at minute-by-minute each tick (50 yearly loops -> ~1.2s tick)."
