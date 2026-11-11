@@ -98,6 +98,13 @@ WARMUP = [JOBS / 10, 1].max
 # reports the counters as they stood before it ran, so it never counts itself.
 HARNESS_COMMANDS = %w[config|resetstat].freeze
 
+# Connection upkeep, not job work: redis-client PINGs a connection that sat
+# idle past `idle_timeout` before reusing it (RedisClient#raw_connection), and a
+# reconnect re-sends its handshake. Whether one lands inside the window is
+# timing — a single stray PING once read as 3.002 commands/job and failed the
+# budget. They are printed below the table, never counted per job.
+CONNECTION_COMMANDS = %w[ping hello auth select client|setname client|setinfo].freeze
+
 class BenchJob
   include Wurk::Job
 
@@ -122,11 +129,13 @@ def drain(processor, jobs)
 end
 
 def report(calls, jobs)
-  rows = calls.sort_by { |_, count| -count }
-  rows.each { |cmd, count| printf("  %8d  %7.2f  %s\n", count, count / jobs.to_f, cmd) }
+  upkeep, work = calls.partition { |cmd, _| CONNECTION_COMMANDS.include?(cmd) }
+  work.sort_by { |_, count| -count }.each { |cmd, count| printf("  %8d  %7.2f  %s\n", count, count / jobs.to_f, cmd) }
   puts '  --------  -------'
-  total = calls.values.sum
+  total = work.sum { |_, count| count }
   printf("  %8d  %7.2f  total\n\n", total, total / jobs.to_f)
+  upkeep.each { |cmd, count| printf("  (not per job: %d %s, connection upkeep)\n", count, cmd) }
+  puts unless upkeep.empty?
   total / jobs.to_f
 end
 
