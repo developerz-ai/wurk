@@ -249,3 +249,26 @@ gates as the dashboard.
 | `GET /dashboard/stats` | `302` to `/stats` |
 
 The dashboard's own JSON (`/api/stats`) is a different, SPA-shaped payload.
+
+## What the dashboard costs Redis
+
+The pages a dashboard polls read Redis in a fixed number of round trips, however deep
+the page or however many queues there are (`bench/dashboard_paging.rb` gates the
+counts):
+
+| Read | Round trips |
+|---|---|
+| Landing payload (`/api/stats`, each SSE tick), queue list (`/api/queues`) | 2 |
+| One queue's gauges and a page of its jobs; a page of retries, scheduled or dead | 1 |
+| A page of batches or flows | 2 |
+
+Open SSE streams in one process share one read per second, so ten tabs cost what one
+does. Listing rows carry no backtrace and no batch jid lists: a job's backtrace is read
+when its detail opens, and a batch's failed and dead jids on its own page (list rows
+count them instead, as `failed_count` and `dead_count`).
+
+The Limits page checks that each registered limiter still has its metadata (one `EXISTS`
+per limiter) at most once a minute per process, rather than on every page; on a
+writable dashboard that check also drops the expired names from `lmtr-list`. Between
+checks, a limiter whose metadata expired still counts in the total and is left off its
+page, and a name found expired that registers again shows up at the next check.

@@ -143,7 +143,9 @@
     "at": "Planifié",
     "args": "Arguments",
     "error": "Erreur",
-    "backtrace": "Trace"
+    "backtrace": "Trace",
+    "backtrace_loading": "Chargement de la backtrace…",
+    "backtrace_unavailable": "Backtrace indisponible : la tâche n’est plus dans cet ensemble."
   },
   "search": {
     "emptyTitle": "Rechercher une tâche",

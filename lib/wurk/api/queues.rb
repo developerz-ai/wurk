@@ -58,14 +58,14 @@ module Wurk
       end
 
       def stats(_request)
-        Response.json(200, Serializers.stats(::Wurk::Stats.new))
+        Response.json(200, Serializers.stats(::Wurk::Stats::Snapshot.new))
       end
 
-      # Stats#queue_summaries rather than Queue.all: one pipeline instead of an
+      # A Stats snapshot rather than Queue.all: two pipelines instead of an
       # LLEN round trip per queue, and it comes back in the size-descending
       # order every other Wurk surface lists queues in.
       def index(_request)
-        Response.json(200, queues: ::Wurk::Stats.new.queue_summaries.map { |q| Serializers.queue_summary(q) })
+        Response.json(200, queues: ::Wurk::Stats::Snapshot.new.queue_summaries.map { |q| Serializers.queue_summary(q) })
       end
 
       # No 404 for a name nothing was ever enqueued under. A queue is not an
@@ -75,9 +75,10 @@ module Wurk
       # its first job is a legitimate pre-deploy move for the same reason.
       def show(request)
         window = Page.window!(request)
-        queue = ::Wurk::Queue.new(Validation.queue_name!(request.path_params[:name]))
-        jobs = Page.slice(queue, window) { |record| Serializers.job_record(record) }
-        Response.json(200, Serializers.queue_gauges(queue).merge(page: window.page, count: window.count, jobs: jobs))
+        name = Validation.queue_name!(request.path_params[:name])
+        snapshot = ::Wurk::Queue.new(name).snapshot(window.offset, window.count)
+        jobs = snapshot.records.map { |record| Serializers.job_record(record) }
+        Response.json(200, Serializers.queue_gauges(name, snapshot).merge(**window.to_h, jobs: jobs))
       end
 
       def retries(request) = sorted_set(request, ::Wurk::RetrySet.new)
@@ -95,12 +96,13 @@ module Wurk
         Response.json(200, name: queue.name, paused: paused)
       end
 
-      # `total` is read before the page is walked, so it describes the set the
-      # page was taken from rather than the one left after a poller drained it.
+      # `total` and the page are one pipelined read, so the total describes the
+      # set the page was taken from rather than the one left after a poller
+      # drained it.
       def sorted_set(request, set)
         window = Page.window!(request)
-        total = set.size
-        jobs = Page.slice(set, window) { |entry| Serializers.sorted_entry(entry) }
+        total, entries = set.snapshot(window.offset, window.count)
+        jobs = entries.map { |entry| Serializers.sorted_entry(entry) }
         Response.json(200, name: set.name, total: total, page: window.page, count: window.count, jobs: jobs)
       end
 

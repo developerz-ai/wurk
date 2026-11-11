@@ -45,11 +45,7 @@ module Wurk
         # what it returns but leaves the SET alone: GET must not write.
         def list(filter: nil, sweep: !Wurk::Web.config.read_only?)
           members = Wurk.redis(idempotent: true) { |c| c.call('SMEMBERS', Wurk::Limiter::LIST_KEY) }
-          names = (sweep ? sweep(members) : live(members)).sort
-          return names if filter.nil? || filter.to_s.empty?
-
-          needle = filter.to_s.downcase
-          names.select { |n| n.downcase.include?(needle) }
+          filtered((sweep ? sweep(members) : live(members)).sort, filter)
         end
 
         # Drop the names whose metadata is gone, return the ones still live.
@@ -90,6 +86,68 @@ module Wurk
         def metadata(name)
           raw = Wurk.redis(idempotent: true) { |c| c.call('HGETALL', meta_key(name)) }
           raw.is_a?(Array) ? raw.each_slice(2).to_h : raw
+        end
+
+        # Liveness probes per process, at most one per this many seconds.
+        PROBE_INTERVAL = 60.0
+        @probe_lock = ::Mutex.new
+        @probe = nil
+
+        # The dashboard's listing: `count` live limiters from `offset` of the
+        # sorted, filtered names, each `[name, metadata]`, and how many names
+        # there are. #list probes every member's metadata (an EXISTS each) on
+        # every call; here that probe — and, with `sweep`, the removal of the
+        # dead — runs at most once per PROBE_INTERVAL per process, and pages in
+        # between pay one SMEMBERS and one pipelined HGETALL for their rows.
+        # The cost of that: a limiter whose metadata expired since the last
+        # probe counts in `total` and is left off its page, and a name the
+        # probe found dead and that registers again stays hidden until the
+        # next probe.
+        #
+        # @return [Array(Integer, Array<Array(String, Hash)>)]
+        def page(filter:, offset:, count:, sweep: !Wurk::Web.config.read_only?)
+          members = Wurk.redis(idempotent: true) { |c| c.call('SMEMBERS', Wurk::Limiter::LIST_KEY) }
+          names = filtered((members - known_dead(members, sweep)).sort, filter)
+          [names.size, metadata_rows(names[offset, count] || [])]
+        end
+
+        def filtered(names, filter)
+          return names if filter.nil? || filter.to_s.empty?
+
+          needle = filter.to_s.downcase
+          names.select { |n| n.downcase.include?(needle) }
+        end
+
+        # Names the last probe of this pool found dead, probing (and sweeping)
+        # again once PROBE_INTERVAL has passed.
+        def known_dead(members, sweep)
+          pool = Wurk.redis_pool
+          now = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+          @probe_lock.synchronize do
+            probe = @probe
+            return probe[:dead] if probe && probe[:pool].equal?(pool) && now - probe[:at] < PROBE_INTERVAL
+
+            dead = members - (sweep ? sweep(members) : live(members))
+            @probe = { pool: pool, at: now, dead: dead }
+            dead
+          end
+        end
+
+        def metadata_rows(names)
+          return [] if names.empty?
+
+          raws = Wurk.redis(idempotent: true) do |c|
+            c.pipelined { |pipe| names.each { |n| pipe.call('HGETALL', meta_key(n)) } }
+          end
+          names.zip(raws).filter_map do |name, raw|
+            meta = raw.is_a?(Array) ? raw.each_slice(2).to_h : raw
+            [name, meta] unless meta.empty?
+          end
+        end
+
+        # Forgets the last probe, so the next #page probes. For tests.
+        def reset_probe!
+          @probe_lock.synchronize { @probe = nil }
         end
 
         def meta_key(name)

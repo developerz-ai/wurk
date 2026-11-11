@@ -403,6 +403,166 @@ class JobSetTest < Wurk::Test::UnitCase
     @pool.with { |c| c.call('DEL', private_set) }
   end
 
+  # The batched path (no hooked per-entry method) holds the same three rules.
+  def test_batched_retry_all_retries_a_job_that_refails_at_once_only_once
+    queue = unique_queue
+    private_set = test_private_set
+    seed_private(private_set, [[10, "brf-0-#{@ns}", { 'queue' => queue }], [11, "brf-1-#{@ns}", { 'queue' => queue }]])
+    pool = @pool
+    refail = lambda do |job|
+      next unless job['jid'].to_s.end_with?(@ns)
+
+      pool.with { |c| c.call('ZADD', private_set, 500, Wurk.dump_json(job.merge('retry_count' => 9))) }
+    end
+    set = private_job_set(private_set)
+
+    assert_equal(2, with_client_hook(refail) { set.retry_all })
+    assert_equal(2, @pool.with { |c| c.call('LLEN', "queue:#{queue}") })
+    assert_equal 2, set.size, 'the re-failed copies wait for the next retry_all'
+  ensure
+    @pool.with { |c| c.call('DEL', private_set, "queue:#{queue}") }
+  end
+
+  def test_batched_retry_all_skips_a_rejected_entry_and_finishes_the_rest
+    queue = unique_queue
+    private_set = test_private_set
+    seed_private(private_set, (0...3).map { |i| [10 + i, "brj-#{i}-#{@ns}", { 'queue' => queue }] })
+    set = private_job_set(private_set)
+    reject = ->(job) { raise ArgumentError, 'rejected by client' if job['jid'] == "brj-1-#{@ns}" }
+    reported = capture_handled_exceptions { assert_equal(2, with_client_hook(reject) { set.retry_all }) }
+
+    assert_equal(2, @pool.with { |c| c.call('LLEN', "queue:#{queue}") })
+    assert_equal ["brj-1-#{@ns}"], set.map(&:jid), 'the rejected entry is back in the set'
+    assert_equal [ArgumentError], reported.map(&:class)
+  ensure
+    @pool.with { |c| c.call('DEL', private_set, "queue:#{queue}") }
+  end
+
+  def test_batched_retry_all_puts_the_page_back_and_raises_on_a_lost_connection
+    queue = unique_queue
+    private_set = test_private_set
+    payloads = seed_private(private_set, (0...3).map { |i| [10 + i, "bce-#{i}-#{@ns}", { 'queue' => queue }] })
+    set = private_job_set(private_set)
+    lose = ->(job) { raise RedisClient::ConnectionError, 'gone' if job['jid'] == "bce-1-#{@ns}" }
+
+    assert_raises(RedisClient::ConnectionError) { with_client_hook(lose) { set.retry_all } }
+    assert_equal payloads.sort, @pool.with { |c| c.call('ZRANGE', private_set, 0, -1) }.sort
+    assert_equal(0, @pool.with { |c| c.call('LLEN', "queue:#{queue}") })
+  ensure
+    @pool.with { |c| c.call('DEL', private_set, "queue:#{queue}") }
+  end
+
+  # Review of #917: the page's ZREMs run in one pipeline, then a miss falls
+  # back to #delete_by_jid. When that fallback raises, the entries the
+  # pipeline already removed must go back, or they are gone for good.
+  def test_batched_take_puts_back_what_it_removed_when_a_fallback_raises
+    private_set = test_private_set
+    payloads = seed_private(private_set, (0...3).map { |i| [10 + i, "tkf-#{i}-#{@ns}"] })
+    set = private_job_set(private_set)
+    entries = set.to_a.sort_by(&:score)
+    # Same jid, other bytes: its ZREM misses and the fallback runs.
+    entries[1] = Wurk::SortedEntry.new(set, entries[1].score, "#{entries[1].value} ")
+    set.define_singleton_method(:delete_by_jid) { |*| raise RedisClient::ConnectionError, 'gone' }
+
+    assert_raises(RedisClient::ConnectionError) { set.send(:take, entries) }
+    assert_equal payloads.sort, @pool.with { |c| c.call('ZRANGE', private_set, 0, -1) }.sort
+  ensure
+    @pool.with { |c| c.call('DEL', private_set) }
+  end
+
+  # The same, with one fallback succeeding before a later one raises: the
+  # job the first fallback removed must come back too.
+  def test_batched_take_puts_back_an_earlier_fallback_when_a_later_one_raises
+    private_set = test_private_set
+    payloads = seed_private(private_set, (0...4).map { |i| [10 + i, "tkg-#{i}-#{@ns}"] })
+    set = private_job_set(private_set)
+    entries = set.to_a.sort_by(&:score)
+    [1, 2].each { |i| entries[i] = Wurk::SortedEntry.new(set, entries[i].score, "#{entries[i].value} ") }
+    real = set.method(:delete_by_jid)
+    calls = 0
+    set.define_singleton_method(:delete_by_jid) do |*a|
+      (calls += 1) == 1 ? real.call(*a) : raise(RedisClient::ConnectionError, 'gone')
+    end
+
+    assert_raises(RedisClient::ConnectionError) { set.send(:take, entries) }
+    assert_equal 2, calls
+    # Restored as the bytes read, which here carry the space that forced the miss.
+    jids = @pool.with { |c| c.call('ZRANGE', private_set, 0, -1) }.map { |v| Wurk.load_json(v)['jid'] }
+
+    assert_equal(payloads.map { |v| Wurk.load_json(v)['jid'] }.sort, jids.sort)
+  ensure
+    @pool.with { |c| c.call('DEL', private_set) }
+  end
+
+  def test_batched_retry_all_counts_a_job_middleware_halted_as_retried
+    queue = unique_queue
+    private_set = test_private_set
+    seed_private(private_set, (0...2).map { |i| [10 + i, "bh-#{i}-#{@ns}", { 'queue' => queue }] })
+    set = private_job_set(private_set)
+    halt = ->(job) { :halt if job['jid'] == "bh-0-#{@ns}" }
+
+    assert_equal(2, with_client_hook(halt) { set.retry_all })
+    assert_equal 0, set.size
+    assert_equal(1, @pool.with { |c| c.call('LLEN', "queue:#{queue}") })
+  ensure
+    @pool.with { |c| c.call('DEL', private_set, "queue:#{queue}") }
+  end
+
+  # A group whose write fails goes back whole and is reported; other queues'
+  # groups still land.
+  def test_batched_retry_all_puts_back_a_group_whose_write_fails
+    good = unique_queue
+    bad = unique_queue
+    private_set = test_private_set
+    rows = [[10, "bw-0-#{@ns}", { 'queue' => good }], [11, "bw-1-#{@ns}", { 'queue' => bad }],
+            [12, "bw-2-#{@ns}", { 'queue' => bad }]]
+    seed_private(private_set, rows)
+    client = Wurk::Client.new
+    client.define_singleton_method(:push_prepared) do |payloads|
+      raise ArgumentError, 'refused' if payloads.first['queue'] == bad
+
+      super(payloads)
+    end
+    set = private_job_set(private_set)
+    count = nil
+    reported = capture_handled_exceptions do
+      Wurk::Client.define_singleton_method(:new) { |*| client }
+      count = set.retry_all
+    ensure
+      Wurk::Client.singleton_class.remove_method(:new)
+    end
+
+    assert_equal 1, count
+    assert_equal(1, @pool.with { |c| c.call('LLEN', "queue:#{good}") })
+    assert_equal ["bw-1-#{@ns}", "bw-2-#{@ns}"], set.map(&:jid).sort
+    assert_equal [ArgumentError], reported.map(&:class)
+  ensure
+    @pool.with { |c| c.call('DEL', private_set, "queue:#{good}", "queue:#{bad}") }
+  end
+
+  # Upstream's per-entry loop, against the batched one: the same jobs land in
+  # the same queues with the same retry_count.
+  def test_batched_retry_all_pushes_what_the_per_entry_path_pushes
+    batched_q = unique_queue
+    rows = ->(q) { (0...120).map { |i| [10 + i, "eq-#{i}-#{@ns}", { 'queue' => q, 'retry_count' => 3 }] } }
+    batched_set = test_private_set
+    seed_private(batched_set, rows.call(batched_q))
+    per_entry_q = unique_queue
+    per_entry_set = test_private_set
+    seed_private(per_entry_set, rows.call(per_entry_q))
+
+    assert_equal 120, private_job_set(batched_set).retry_all
+    assert_equal 120, hooked_job_set(per_entry_set).retry_all
+    pushed = lambda do |q|
+      raw = @pool.with { |c| c.call('LRANGE', "queue:#{q}", 0, -1) }
+      raw.map { |job| Wurk.load_json(job).except('enqueued_at', 'queue', 'created_at') }
+    end
+
+    assert_equal pushed.call(per_entry_q), pushed.call(batched_q)
+  ensure
+    @pool.with { |c| c.call('DEL', batched_set, per_entry_set) }
+  end
+
   def test_kill_all_skips_an_entry_whose_kill_fails
     private_set = test_private_set
     payloads = seed_private(private_set, [[10, "kf-0-#{@ns}"], [11, "kf-1-#{@ns}"]])
@@ -535,12 +695,51 @@ class JobSetTest < Wurk::Test::UnitCase
     Class.new(Wurk::JobSet) { define_method(:initialize) { super(set_name) } }.new
   end
 
+  # A private set with #remove_job overridden, the way a gem hooks it: its
+  # retry_all takes SortedEntry#retry per entry, where the helpers below hook.
+  def hooked_job_set(set_name)
+    Class.new(Wurk::JobSet) do
+      define_method(:initialize) { super(set_name) }
+      define_method(:remove_job) { |entry| super(entry) }
+    end.new
+  end
+
+  # Client middleware calling `hook` with each job, for the batched
+  # retry_all's fault tests. `hook` returning :halt drops the job.
+  class HookMiddleware
+    class << self
+      attr_accessor :hook
+    end
+
+    def call(_worker, job, _queue, _pool)
+      return nil if HookMiddleware.hook&.call(job) == :halt
+
+      yield
+    end
+  end
+
+  def with_client_hook(hook, &)
+    mutex = Wurk::Test::GLOBAL_STATE_MUTEX
+    return install_client_hook(hook, &) if mutex.owned?
+
+    mutex.synchronize { install_client_hook(hook, &) }
+  end
+
+  def install_client_hook(hook)
+    HookMiddleware.hook = hook
+    Wurk.configuration.client_middleware.add(HookMiddleware)
+    yield
+  ensure
+    Wurk.configuration.client_middleware.remove(HookMiddleware)
+    HookMiddleware.hook = nil
+  end
+
   # A private set whose entries, once retried, land straight back in the set
   # with a bumped retry_count — what a job that raises on its first line does
   # between two pages of a retry_all.
   def refailing_job_set(set_name)
     pool = @pool
-    set = private_job_set(set_name)
+    set = hooked_job_set(set_name)
     set.define_singleton_method(:each) do |&blk|
       super() do |entry|
         entry.define_singleton_method(:retry) do
@@ -557,7 +756,7 @@ class JobSetTest < Wurk::Test::UnitCase
   # A private set whose entry `jid` fails its retry the way a rejected push
   # does: removed, then the push raises inside remove_job (which restores it).
   def rejecting_job_set(set_name, jid, &failure)
-    set = private_job_set(set_name)
+    set = hooked_job_set(set_name)
     set.define_singleton_method(:each) do |&blk|
       super() do |entry|
         entry.define_singleton_method(:retry) { send(:remove_job, &failure) } if entry.jid == jid

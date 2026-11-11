@@ -140,14 +140,19 @@ module Wurk
 
     private
 
+    # The `dear-leader` GET rides the HMGET pipeline and fills #leader's memo,
+    # so a listing that marks the leader row pays no round trip for it.
     def fetch_each_rows
       Wurk.redis(idempotent: true) do |conn|
         procs = conn.call('SMEMBERS', Keys::PROCESSES).sort
         next [] if procs.empty?
 
-        conn.pipelined do |pipe|
+        *rows, leader = conn.pipelined do |pipe|
           procs.each { |key| pipe.call('HMGET', key, *EACH_FIELDS) }
+          pipe.call('GET', 'dear-leader')
         end
+        @leader ||= leader || ''
+        rows
       end
     end
 

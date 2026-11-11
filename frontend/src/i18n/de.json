@@ -143,7 +143,9 @@
     "at": "Geplant",
     "args": "Argumente",
     "error": "Fehler",
-    "backtrace": "Backtrace"
+    "backtrace": "Backtrace",
+    "backtrace_loading": "Backtrace wird geladen…",
+    "backtrace_unavailable": "Backtrace nicht verfügbar: Der Job ist nicht mehr in dieser Liste."
   },
   "search": {
     "emptyTitle": "Nach einem Job suchen",

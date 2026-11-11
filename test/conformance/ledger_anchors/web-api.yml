@@ -51,12 +51,12 @@
     post 'busy/quiet', to: 'api#quiet_process', as: :api_quiet_process
     post 'busy/stop',  to: 'api#stop_process',  as: :api_stop_process
 - entry: "Busy-control HTTP request-shape parity is unsupported"
-  anchor: "app/controllers/wurk/api_controller.rb#L170-L171"
+  anchor: "app/controllers/wurk/api_controller.rb#L178-L179"
   fragment: |-
     def quiet_process = signal_processes(:quiet!)
     def stop_process  = signal_processes(:stop!)
 - entry: "Busy-control HTTP request-shape parity is unsupported"
-  anchor: "app/controllers/wurk/api_controller.rb#L446-L457"
+  anchor: "app/controllers/wurk/api_controller.rb#L450-L461"
   fragment: |-
     identity = params[:identity].to_s
     if identity.empty? || identity == 'all'
@@ -66,7 +66,7 @@
   fragment: |-
     q = ::Wurk::Queue.new(params[:name].to_s)
     page = ::Wurk::Api::Pagination.window(params)
-    jobs = ::Wurk::Api::Pagination.slice(q, page) { |rec| ::Wurk::Api::Serializers.job_record(rec) }
+    gauges, jobs = queue_page(q, page)
 - entry: "Queue `?direction=asc` is unimplemented"
   anchor: "app/controllers/wurk/api/pagination.rb#L29-L35"
   fragment: |-

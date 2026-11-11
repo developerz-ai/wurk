@@ -2,6 +2,7 @@
 
 require 'date'
 require_relative 'pool_checkout'
+require_relative 'queue_consumers'
 
 module Wurk
   # Read-only inspector for cluster state in Redis. The cheap counters are
@@ -76,7 +77,7 @@ module Wurk
         names = conn.call('SMEMBERS', Keys::QUEUES_SET)
         next [] if names.empty?
 
-        paused_set = conn.call('SMEMBERS', 'paused')
+        paused_set = conn.call('SMEMBERS', 'paused').to_set
         results = conn.pipelined do |pipe|
           names.each do |q|
             pipe.call('LLEN', Keys.queue(q))
@@ -164,6 +165,89 @@ module Wurk
       diff.negative? ? 0.0 : diff
     rescue ::JSON::ParserError, ::TypeError, ::ArgumentError
       0.0
+    end
+
+    # Every Stats reading taken at one moment, in two round trips: the
+    # counters with the `queues`, `paused` and `processes` members, then each
+    # queue's LLEN + tail and each process's `busy`. A plain Stats re-reads the
+    # queue set per method and pays seven round trips for what the dashboard's
+    # landing payload asks of it. Internal reader for the dashboard and the
+    # HTTP API: Stats keeps Sidekiq's per-method reads (§19.1).
+    #
+    # `consumers: true` also reads each process's `info` and answers
+    # #consumers, the per-queue subscriber count of QueueConsumers.counts.
+    class Snapshot < Stats
+      attr_reader :queue_summaries, :workers_size, :default_queue_latency
+
+      def initialize(consumers: false) # rubocop:disable Lint/MissingSuper
+        @with_consumers = consumers
+        Wurk.redis(idempotent: true) do |conn|
+          names, paused, identities = read_members(conn)
+          read_gauges(conn, names, paused.to_set, identities)
+        end
+      end
+
+      def enqueued = @queue_summaries.sum(&:size)
+      def queues = @queue_summaries.to_h { |summary| [summary.name, summary.size] }
+
+      # @return [Hash{String=>Integer}] queue → live subscribers.
+      def consumers
+        raise ArgumentError, 'Snapshot read without consumers: true' unless @with_consumers
+
+        @consumers
+      end
+
+      private
+
+      def read_members(conn)
+        replies = conn.pipelined do |pipe|
+          FAST_QUERIES.each { |args| pipe.call(*args) }
+          pipe.call('SMEMBERS', Keys::QUEUES_SET)
+          pipe.call('SMEMBERS', 'paused')
+          pipe.call('SMEMBERS', Keys::PROCESSES)
+        end
+        @stats = FAST_KEYS.zip(replies.first(FAST_KEYS.size).map(&:to_i)).to_h
+        replies.last(3)
+      end
+
+      # Queue replies first (LLEN, tail per queue), then the `default` tail when
+      # that queue is not listed, then one reply per process.
+      def read_gauges(conn, names, paused, identities)
+        default_listed = names.include?('default')
+        replies = conn.pipelined do |pipe|
+          queue_commands(pipe, names, default_listed)
+          identities.each { |id| process_command(pipe, id) }
+        end
+        queue_replies = replies.shift(names.size * 2)
+        default_tail = default_listed ? queue_replies[(names.index('default') * 2) + 1] : replies.shift
+        build_snapshot(names, queue_replies, paused, default_tail, replies)
+      end
+
+      def queue_commands(pipe, names, default_listed)
+        names.each do |q|
+          pipe.call('LLEN', Keys.queue(q))
+          pipe.call('LRANGE', Keys.queue(q), -1, -1)
+        end
+        pipe.call('LRANGE', Keys.queue('default'), -1, -1) unless default_listed
+      end
+
+      def process_command(pipe, identity)
+        return pipe.call('HGET', identity, 'busy') unless @with_consumers
+
+        pipe.call('HMGET', identity, 'busy', 'info')
+      end
+
+      def build_snapshot(names, queue_replies, paused, default_tail, process_replies)
+        @queue_summaries = build_summaries(names, queue_replies, paused).sort_by { |qd| -qd.size }
+        now_ms = ::Process.clock_gettime(::Process::CLOCK_REALTIME, :millisecond)
+        @default_queue_latency = compute_latency(default_tail.first, now_ms)
+        if @with_consumers
+          @workers_size = process_replies.sum { |busy, _| busy.to_i }
+          @consumers = QueueConsumers.tally(process_replies.map(&:last))
+        else
+          @workers_size = process_replies.sum(&:to_i)
+        end
+      end
     end
 
     # Per-day historical processed/failed/expired counts. Reads

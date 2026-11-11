@@ -13,10 +13,10 @@ module Wurk
     module Pagination
       DEFAULT_PAGE_SIZE = 25
       MAX_PAGE_SIZE = 200
-      # Offset pagination reaches page N by walking N*count rows through Ruby
-      # (and their Redis round-trips). An unclamped ?page= lets one request
-      # walk an entire million-row set; 1000 pages is far beyond any real UI
-      # depth while bounding the worst-case walk.
+      # An unfiltered listing reads its page at the offset (the set's
+      # #snapshot), whatever the depth; the walks that remain (#slice on a set
+      # without one, the Limits names) still pay per skipped row, and 1000
+      # pages is far beyond any real UI depth while bounding them.
       MAX_PAGE = 1_000
       # A substr that matches nothing would otherwise stream the whole backing
       # set through Ruby (same DoS shape Web::Search bounds with SCAN_BUDGET).
@@ -46,6 +46,9 @@ module Wurk
         fields.merge(filtered_total: page[:matched], filtered_total_exact: page[:exhausted])
       end
 
+      # Rows before the requested page: where an unfiltered listing reads from.
+      def offset(page) = page[:page] * page[:count]
+
       def clamp_int(value, min, max, default)
         Integer(value, 10).clamp(min, max)
       rescue ::ArgumentError, ::TypeError
@@ -68,11 +71,10 @@ module Wurk
       # filter we keep the fast path that skips serialization before the
       # offset.
       def slice(enumerable, page, &)
-        offset = page[:page] * page[:count]
         if page[:substr].empty?
-          slice_raw(enumerable, offset, page[:count], &)
+          slice_raw(enumerable, offset(page), page[:count], &)
         else
-          slice_filtered(enumerable, offset, page, &)
+          slice_filtered(enumerable, offset(page), page, &)
         end
       end
 

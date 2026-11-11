@@ -90,6 +90,27 @@ module Wurk
       payload['jid']
     end
 
+    # #push in two halves, for a caller that pushes many jobs in one write
+    # (JobSet#retry_all): #prepare_push runs one item through normalize →
+    # middleware → verify, #push_prepared writes what came back. Internal.
+    #
+    # @return [Hash, nil] the payload to write; nil when middleware halted it.
+    def prepare_push(item)
+      payload = invoke_chain(normalize_item(item))
+      verify_json(payload) if payload
+      payload
+    end
+
+    # One #raw_push for every payload, so they should share a queue, a batch
+    # or none, and a schedule or none: anything else is several writes, and one
+    # can land before another fails.
+    # @return [Array<String>] jids
+    def push_prepared(payloads)
+      buffered = raw_push(payloads)
+      emit_enqueued(payloads, buffered)
+      payloads.map { |payload| payload['jid'] }
+    end
+
     # @param items [Hash] String keys only: class, args (Array<Array>), at?, spread_interval?, batch_size?, jid?
     # @return [Array<String, nil>] jids in submission order; nil entries mark middleware-halted jobs.
     def push_bulk(items)

@@ -5,6 +5,7 @@ import { SortableTh } from '../components/SortableTh';
 import { useSort, type Accessors } from '../hooks/useSort';
 import { useParams } from '@solidjs/router';
 import { t } from '../i18n';
+import { basePath } from '../basePath';
 import { PageHeader } from '../components/PageHeader';
 import { formatArgs, formatNumber, hoverTime, relativeTime, truncate } from '../utils';
 import JobDetailModal, { type JobEntry } from '../components/JobDetailModal';
@@ -144,6 +145,7 @@ export default function Scheduled() {
               </Show>
               <JobDetailModal
                 entry={selected()}
+                detailUrl={selectedKey() ? `${basePath()}/api/scheduled/${encodeURIComponent(selectedKey()!)}` : null}
                 atLabel={t('table.scheduled_at')}
                 actions={readOnly() ? undefined : ACTIONS}
                 pending={single.isPending}

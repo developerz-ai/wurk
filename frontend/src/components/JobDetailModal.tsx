@@ -1,6 +1,8 @@
 import { For, Show, type JSX } from 'solid-js';
+import { useQuery } from '@tanstack/solid-query';
 import Modal from './Modal';
 import { t } from '../i18n';
+import { getJSON } from '../http';
 import { absoluteTime, formatArgs, hoverTime, relativeTime } from '../utils';
 import type { ActionDef } from './JobSetActionBar';
 
@@ -18,6 +20,9 @@ export interface JobEntry {
   retry_count?: number;
   error_class?: string | null;
   error_message?: string | null;
+  // Only on a detail read (GET <set>/:key, see `detailUrl`): listing rows
+  // leave it out, since inflating it per row costs the server for a field
+  // only this modal shows.
   error_backtrace?: string[] | null;
   // [label, value] rows contributed by third-party extensions via
   // Sidekiq::Web.custom_job_info_rows (spec §25.2).
@@ -47,10 +52,21 @@ interface JobDetailModalProps {
   onAction?: (cmd: string) => void;
   /** Disables footer buttons while a single-job mutation is in flight (prevents duplicate dispatches). */
   pending?: boolean;
+  /** The entry's detail endpoint (`<mount>/api/<set>/<key>`), read for the backtrace a listing row leaves out. */
+  detailUrl?: string | null;
   onClose: () => void;
 }
 
 export default function JobDetailModal(props: JobDetailModalProps) {
+  // Only a failed entry has a backtrace worth a request.
+  const wantsDetail = () => props.entry !== null && !!props.detailUrl && !!props.entry.error_class && props.entry.error_backtrace == null;
+  const detail = useQuery<JobEntry>(() => ({
+    queryKey: ['job-detail', props.detailUrl],
+    queryFn: () => getJSON<JobEntry>(props.detailUrl!),
+    enabled: wantsDetail(),
+    staleTime: 30_000,
+  }));
+  const backtrace = () => props.entry?.error_backtrace ?? (wantsDetail() ? detail.data?.error_backtrace : null);
   const footer =
     props.actions && props.actions.length > 0 && props.onAction ? (
       <div style={{ display: 'flex', gap: '0.5rem', 'justify-content': 'flex-end', 'flex-wrap': 'wrap' }}>
@@ -122,9 +138,19 @@ export default function JobDetailModal(props: JobDetailModalProps) {
               </div>
             </Show>
 
-            <Show when={entry().error_backtrace && entry().error_backtrace!.length > 0}>
+            <Show when={backtrace() && backtrace()!.length > 0}>
               <Field label={t('job.backtrace')}>
-                <pre class="job-backtrace">{entry().error_backtrace!.join('\n')}</pre>
+                <pre class="job-backtrace">{backtrace()!.join('\n')}</pre>
+              </Field>
+            </Show>
+            <Show when={wantsDetail() && detail.isPending}>
+              <Field label={t('job.backtrace')}>
+                <span style={{ color: 'var(--text-muted)' }}>{t('job.backtrace_loading')}</span>
+              </Field>
+            </Show>
+            <Show when={wantsDetail() && detail.isError}>
+              <Field label={t('job.backtrace')}>
+                <span style={{ color: 'var(--text-muted)' }}>{t('job.backtrace_unavailable')}</span>
               </Field>
             </Show>
 

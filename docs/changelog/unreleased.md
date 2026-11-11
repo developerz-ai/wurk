@@ -2,12 +2,17 @@
 
 ### Added
 
+- **`GET <retries|scheduled|dead>/:key`** in the dashboard API: one entry with its backtrace, which the job detail now fetches when opened.
+- `docs/dashboard.md` "What the dashboard costs Redis".
 - **`memory_limit_metric`** (`WURK_MAXMEM_METRIC`): recycle swarm children on `rss` (default), `pss` or `uss`. An unknown value raises at boot; a limit on a host without a readable `/proc` logs one WARN.
 - **`Wurk::Client.reliable_push_buffer_bytes`** (opt-in): caps the outage buffer by payload bytes as well as by count. Past it the overflow mode applies; a payload larger than the cap on its own is dropped (or raised under `:raise`).
 - `docs/deployment.md` "Memory": copy-on-write and the pre-fork warmup, allocator guidance (jemalloc, `MALLOC_ARENA_MAX`) and a table of Wurk-only keys with their TTLs.
 
 ### Changed
 
+- **The dashboard costs a fixed number of Redis round trips.** The landing payload, each live-update tick and the queue list take 2 (were 9 and 6), and open streams in one process share one read per second. Queue detail and the retry, scheduled and dead pages take 1 at any depth; batches and flows take 2 at any depth (page 999 of batches was 25,276). The Limits tab checks limiter metadata at most once a minute per process.
+- **Dashboard list payloads are smaller.** Batch rows report `failed_count` and `dead_count` instead of every failed and dead jid (the batch page still lists them), and job rows no longer carry `error_backtrace`. The HTTP API (`/v1`) rows are unchanged.
+- **"Retry All"** removes and pushes a page of 50 jobs in one round trip each (0.06 round trips per job, was 2.02). When a gem hooks the per-entry methods (sidekiq-unique-jobs), it keeps the per-entry path so the gem still runs.
 - **A concurrent-limited job costs 2 Redis round trips** (was 6), 3 when the limiter is built inside `perform` (was 7): the counters are booked inside the acquire and release scripts.
 - **The periodic (cron) tick reads every loop in 2 round trips** instead of 1 + 2 per loop, and boot registration takes 2–3 instead of up to ~26,000 with many classes.
 - **Fast deletes** (`Queue#delete_job`, `#delete_by_class`) walk the queue 1,000 entries per Lua call and remove at most 100 matches per call. Each call holds Redis well under 2 ms when nothing matches, up to ~10 ms when it removes entries halfway into a 1M-entry queue; the single script this replaced held Redis for the whole queue (~300 ms at 100k jobs). An entry another client removes ahead of the walk can be missed by that call; a second call finds it.

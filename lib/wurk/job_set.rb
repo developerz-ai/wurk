@@ -95,6 +95,22 @@ module Wurk
       end
     end
 
+    # The set's size and the `count` entries from `offset` in #each's
+    # newest-first order, in one round trip rather than #each's walk from the
+    # top. Internal reader for the dashboard and the HTTP API.
+    #
+    # @return [Array(Integer, Array<SortedEntry>)]
+    def snapshot(offset, count)
+      size, rows = Wurk.redis do |conn|
+        conn.pipelined do |pipe|
+          pipe.call('ZCARD', @name)
+          pipe.call('ZRANGE', @name, offset, offset + count - 1, 'REV', 'WITHSCORES')
+        end
+      end
+      rows = rows.each_slice(2).to_a unless rows.first.is_a?(Array)
+      [size, rows.map { |value, score| SortedEntry.new(self, score, value) }]
+    end
+
     # ZPOPMIN loop. Each iteration pops the single oldest member (lowest
     # score, e.g. earliest scheduled-at) and yields the raw JSON + score.
     # Stops when the set is empty.
@@ -112,8 +128,23 @@ module Wurk
 
     # Re-enqueues every job in this set via the client. Returns how many were
     # re-enqueued; a job the push rejects stays in the set (see #sweep_once).
+    #
+    # Same result as SortedEntry#retry per entry, which is upstream's loop, at
+    # a page's cost rather than an entry's: each page of #each is removed in
+    # one pipeline and pushed in one write per queue (#retry_page). A gem that
+    # hooks the per-entry path (sidekiq-unique-jobs prepends #delete_by_value
+    # to release its lock) gets that path, since a batch would skip its hook.
     def retry_all
-      sweep_once(&:retry)
+      return sweep_once(&:retry) if per_entry_hooked?
+
+      batch = []
+      done = sweep_once(batch: true) do |entry|
+        batch << entry
+        next 0 if batch.size < PAGE_SIZE
+
+        retry_page(batch.slice!(0..))
+      end
+      done + (batch.empty? ? 0 : retry_page(batch))
     end
 
     # Moves every job in this set to the dead set. Death handlers stay quiet
@@ -229,7 +260,7 @@ module Wurk
     # the dashboard with the rest of the set untouched. A lost connection is
     # everyone's — every later entry would fail the same way — so it raises.
     # Returns the entries processed without error.
-    def sweep_once
+    def sweep_once(batch: false)
       seen = ::Set.new
       done = 0
       loop do
@@ -238,21 +269,116 @@ module Wurk
           next unless seen.add?(entry.jid || entry.value)
 
           fresh += 1
-          done += 1 if sweep_entry(entry) { yield entry }
+          done += batch ? yield(entry) : sweep_entry(entry) { yield entry }
         end
         break if fresh.zero?
       end
       done
     end
 
+    # 1 when the entry's work succeeded, 0 when it raised and was reported.
     def sweep_entry(entry)
       yield
-      true
-    rescue ::RedisClient::ConnectionError, ::ConnectionPool::TimeoutError
+      1
+    rescue *SWEEP_FATAL
       raise
     rescue StandardError => e
       Wurk.configuration.handle_exception(e, { context: "#{@name} sweep", jid: entry.jid })
-      false
+      0
+    end
+
+    SWEEP_FATAL = [::RedisClient::ConnectionError, ::ConnectionPool::TimeoutError].freeze
+    # The per-entry methods a batched retry_all goes around.
+    BATCH_BYPASSES = { JobSet => %i[remove_job delete_by_value delete_by_jid],
+                       SortedEntry => %i[retry remove_job delete] }.freeze
+    private_constant :SWEEP_FATAL, :BATCH_BYPASSES
+
+    def per_entry_hooked?
+      BATCH_BYPASSES.any? do |klass, names|
+        owner = klass == JobSet ? self.class : SortedEntry
+        names.any? { |name| owner.instance_method(name).owner != klass }
+      end
+    end
+
+    # Removes `entries` in one pipeline, then pushes those this call removed
+    # in one write per (queue, batch, schedule) group — one pipeline each, so
+    # a group lands whole or not at all. What SortedEntry#retry does per
+    # entry, with its failure rules: an entry the client rejects goes back and
+    # is reported, a group whose write fails goes back and is reported, and a
+    # lost connection puts back everything not yet written before it raises.
+    # Returns the entries retried.
+    def retry_page(entries)
+      client = Client.new
+      unwritten = take(entries).to_h { |entry| [entry, true] }.compare_by_identity
+      groups, halted = prepare_retries(client, unwritten)
+      groups.each_value.sum(halted) { |pairs| write_group(client, pairs, unwritten) }
+    ensure
+      unwritten&.each_key(&:restore_after_failed_push)
+    end
+
+    # The payload of each removed entry, grouped for #write_group, and how
+    # many middleware halted: those count as retried, as #retry counts them
+    # (gone, nothing pushed). One the client rejects is put back and reported.
+    def prepare_retries(client, unwritten)
+      groups = {}
+      halted = 0
+      unwritten.each_key do |entry|
+        payload = client.prepare_push(retry_payload(entry))
+        unwritten.delete(entry) unless payload
+        next halted += 1 unless payload
+
+        (groups[[payload['queue'], payload['bid'], payload.key?('at')]] ||= []) << [entry, payload]
+      rescue *SWEEP_FATAL
+        raise
+      rescue StandardError => e
+        unwritten.delete(entry)
+        put_back(entry, e)
+      end
+      [groups, halted]
+    end
+
+    def put_back(entry, error)
+      entry.restore_after_failed_push
+      Wurk.configuration.handle_exception(error, { context: "#{@name} sweep", jid: entry.jid })
+    end
+
+    def write_group(client, pairs, unwritten)
+      entries = pairs.map(&:first)
+      written = sweep_entry(entries.first) { client.push_prepared(pairs.map(&:last)) }
+      entries.each { |entry| unwritten.delete(entry) }
+      entries.each(&:restore_after_failed_push) if written.zero?
+      written * pairs.size
+    end
+
+    # The entries this call removed. ZREM by the bytes each was read with, in
+    # one pipeline; a miss falls back to #delete_by_jid as #remove_job does.
+    # The pipeline has already removed the rest of the page when a fallback
+    # runs, so a fallback that raises puts back everything removed so far, the
+    # pipeline's hits and every earlier fallback, before it propagates:
+    # #retry_page's restore only covers what #take returned.
+    def take(entries)
+      taken, misses = split_by_zrem(entries)
+      misses.each { |entry| taken << entry if delete_by_jid(entry.score, entry.jid) }
+      taken
+    rescue StandardError
+      taken&.each(&:restore_after_failed_push)
+      raise
+    end
+
+    # [entries the pipelined ZREM removed, entries it missed].
+    def split_by_zrem(entries)
+      gone = Wurk.redis { |conn| conn.pipelined { |pipe| entries.each { |e| pipe.call('ZREM', @name, e.value) } } }
+      hits, misses = entries.zip(gone).partition { |_, removed| removed.to_i.positive? }
+      hits.each { note_removal }
+      [hits.map(&:first), misses.map(&:first)]
+    end
+
+    # The job SortedEntry#retry pushes: `retry_count` one lower, since the next
+    # failure bumps it again.
+    def retry_payload(entry)
+      job = Wurk.load_json(entry.value)
+      job['retry_count'] = job['retry_count'].to_i - 1 if job['retry_count']
+      job
     end
 
     # Translates ZRANGEBYSCORE input shapes (Time, Numeric, Range) to the

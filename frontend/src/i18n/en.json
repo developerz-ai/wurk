@@ -143,7 +143,9 @@
     "at": "Scheduled",
     "args": "Arguments",
     "error": "Error",
-    "backtrace": "Backtrace"
+    "backtrace": "Backtrace",
+    "backtrace_loading": "Loading backtrace…",
+    "backtrace_unavailable": "Backtrace unavailable: the job is no longer in this set."
   },
   "search": {
     "emptyTitle": "Search for a job",

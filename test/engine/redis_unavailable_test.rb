@@ -15,6 +15,13 @@ require_relative '../engine_test_helper'
 class RedisUnavailableTest < Wurk::Test::EngineCase
   parallelize_me!
 
+  # A stream tick within a second of another test's reuses its payload and
+  # never reaches the raising serializer.
+  def setup
+    super
+    ::Wurk::SseStreaming::SHARED_TICK.clear!
+  end
+
   def test_json_action_returns_structured_503_on_redis_error
     with_stats_payload_raising(RedisClient::CannotConnectError.new('boom')) do
       get '/wurk/api/stats'

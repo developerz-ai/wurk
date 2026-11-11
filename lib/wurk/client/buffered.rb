@@ -170,7 +170,7 @@ module Wurk
 
       class << self
         # Idempotent. Prepends the wrapper module into Wurk::Client so push /
-        # push_bulk drain the buffer before each call and raw_push catches
+        # push_bulk / push_prepared drain the buffer before each call and raw_push catches
         # connection errors. Safe to call from multiple threads.
         def install!
           install_mutex.synchronize do
@@ -796,6 +796,11 @@ module Wurk
         end
 
         def push_bulk(items)
+          Buffered.drain!(self) unless Buffered.unbuffered?
+          super
+        end
+
+        def push_prepared(payloads)
           Buffered.drain!(self) unless Buffered.unbuffered?
           super
         end
