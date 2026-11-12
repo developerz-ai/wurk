@@ -100,14 +100,16 @@ job shape tested runs after going back. Going back is not a clean mirror image f
 Wurk writes millisecond timestamps, which Sidekiq 7.x misreads
 ([details](#millisecond-timestamps-on-a-7x-app)).
 
-Running Sidekiq and Wurk workers against one Redis at the same time is not the supported
-path. A manual soak with stock Sidekiq 7.3.10 and a Wurk swarm on one queue (6,000 jobs,
-retries, `SIGKILL`s) lost nothing, and heartbeats, `quiet!` and `stop!` worked across the two.
-That run is not in CI and does not cover Pro or Enterprise: how Pro's orphan sweep treats
-Wurk's private lists, and how Enterprise's leader election and unique locks behave next to
-Wurk's, are unverified. So the supported production path is a **drain cutover**: stop
-Sidekiq's workers, then start Wurk's. The procedure, with the exact commands, is
-[§9](#9-production-cutover).
+Running Sidekiq and Wurk workers against one Redis at the same time is tested in CI for
+**stock Sidekiq 8** only (no Pro, no Enterprise): `test/integration/mixed_fleet_test.rb` runs
+real Sidekiq 8.1 and a Wurk swarm on one Redis, and a rolling cutover is supported there
+within what that test covers ([§9](#rolling-cutover-stock-sidekiq-8-only)). For a Sidekiq 7.x,
+Pro or Enterprise app the supported production path stays a **drain cutover**: stop
+Sidekiq's workers, then start Wurk's. A manual soak with stock Sidekiq 7.3.10 and a Wurk
+swarm on one queue (6,000 jobs, retries, `SIGKILL`s) lost nothing, but it is one run outside
+CI, and how Pro's orphan sweep treats Wurk's private lists, and how Enterprise's leader
+election and unique locks behave next to Wurk's, are unverified. The procedure, with the
+exact commands, is [§9](#9-production-cutover).
 
 > ⚠️ **The one thing to size before you ship:** Wurk forks one worker process *per CPU
 > core* by default, each running its own thread pool — so a single Sidekiq process
@@ -755,8 +757,10 @@ migrations are what this guide is checked against.
    ([§6](#6-third-party-gem-mappings)). A class left with `lock:` and no gem runs duplicates.
 8. **Rehearse on a copy of production Redis** — run the cutover in staging against a
    restored snapshot first. See [§9](#9-production-cutover).
-9. **Cut over by draining, not by mixing** — quiet and stop every Sidekiq worker,
-   confirm nothing is in flight, then start Wurk, then run `wurk verify`. Rolling back is the
+9. **Cut over by draining** — quiet and stop every Sidekiq worker,
+   confirm nothing is in flight, then start Wurk, then run `wurk verify`. A stock Sidekiq 8
+   app may roll instead, with both fleets live for a while, under the conditions in
+   [§9](#rolling-cutover-stock-sidekiq-8-only). Rolling back is the
    same drain in reverse plus the checks in [§9.5](#95-rollback). No key schema changes in
    either direction; timestamps do ([§10](#millisecond-timestamps-on-a-7x-app)).
 
@@ -774,20 +778,49 @@ the Enterprise spec also says ([§2.6](target/sidekiq-ent.md#26-semantics--edge-
 sidekiq-cron with a grace period behaves differently: see
 [late ticks](#sidekiq-cron--native-periodic-jobs).
 
-> **Why not a rolling mix?** A manual soak with stock Sidekiq 7.3.10 and a Wurk swarm worked
-> ([summary](#tldr--flip-the-switch)), but it is one run, outside CI, without Pro or Enterprise.
-> The known risks: stock Sidekiq never reclaims Wurk's five-segment private lists
-> ([§4](#4-redis-key-layout-identical-no-namespace)), so a job in one when its Wurk process
-> dies waits for a Wurk process (the soak confirmed it, with recovery about 70s after a fresh
-> Wurk booted); Pro's handling of those lists, Enterprise leader election (`dear-leader`) and
-> unique locks (`unique:<digest>`) have not been exercised across the two implementations, so an
-> overlap risks a doubled or missed cron tick and duplicate unique jobs; and Wurk's batch
-> "already fired" markers are implemented from the spec, not checked against a real Pro batch.
-> Pro §2.8 types `b-<bid>-success`/`b-<bid>-complete` as string/marker too, but there they mean
-> "callbacks pending", so a batch in flight at the swap can lose a callback silently
-> ([divergence](idea/parity-divergences.md#batch-fired-markers-use-b-bid-success-complete)).
-> A queue subset is a lower-risk probe: `wurk -q <queue>` beside stock Sidekiq on the others
-> consumed only that queue in the same manual test.
+#### Rolling cutover: stock Sidekiq 8 only
+
+`test/integration/mixed_fleet_test.rb` runs real Sidekiq 8.1, from its own bundle, next to a
+`wurkswarm` on one Redis, and records every push, run and completion in a jid ledger. For
+plain and scheduled jobs it proves:
+
+- With both fleets fetching from one queue while both clients push to it, every job ran
+  exactly once: none lost, none run twice, and the jobs each client wrote ran on
+  both engines.
+- Sidekiq alone promotes the scheduled jobs Wurk's client wrote, and Wurk alone promotes
+  Sidekiq's, across a handoff where Wurk starts and then Sidekiq stops.
+- Each side's API reads the other's job timestamps: `created_at`, `enqueued_at` and a
+  scheduled job's `at` come back as the right time, and queue latency is not negative. Sidekiq 8
+  writes milliseconds as Wurk does; 7.x does not
+  ([details](#millisecond-timestamps-on-a-7x-app)).
+- A Wurk swarm stopped with `TERM` while jobs outlive its shutdown timeout moves them from
+  its private lists back to the queue, and Sidekiq runs them.
+- A Wurk host killed outright (every process `SIGKILL`ed, as on an OOM kill or a lost node)
+  leaves its in-flight jobs in its private lists, and stock Sidekiq, fetching from the same
+  queue, leaves them there: it has no reclaim. Only a Wurk process returns them, 80-150s
+  after the dead owner's heartbeat lapses ([`reliability.md`](reliability.md#the-reaper);
+  that timing is not part of this test).
+
+So a stock Sidekiq 8 app can roll from Sidekiq to Wurk, or back, with both fleets live for a
+while, on two conditions: stop Wurk processes with `TERM` and let them exit, and before the
+last Wurk process goes, check that no Wurk private list is left (the
+[§9.2](#92-drain-sidekiq) step 4 scan). The test does not cover retries, periodic jobs,
+unique jobs, batches, encrypted jobs, Wurk-only features or the add-on gems; drain those,
+or prove them in your staging dry run.
+
+Sidekiq 7.x, Pro and Enterprise stay on the drain cutover below. Stock Sidekiq 7.x misreads
+Wurk's millisecond timestamps. Pro's handling of Wurk's five-segment private lists
+([§4](#4-redis-key-layout-identical-no-namespace)), Enterprise leader election (`dear-leader`)
+and unique locks (`unique:<digest>`) have not been exercised across the two implementations,
+so an overlap risks a doubled or missed cron tick and duplicate unique jobs; and Wurk's batch
+"already fired" markers are implemented from the spec, not checked against a real Pro batch.
+Pro §2.8 types `b-<bid>-success`/`b-<bid>-complete` as string/marker too, but there they mean
+"callbacks pending", so a batch in flight at the swap can lose a callback silently
+([divergence](idea/parity-divergences.md#batch-fired-markers-use-b-bid-success-complete)).
+A manual soak with stock Sidekiq 7.3.10 and a Wurk swarm worked
+([summary](#tldr--flip-the-switch)), but it is one run, outside CI, without Pro or Enterprise.
+A queue subset is a lower-risk probe: `wurk -q <queue>` beside stock Sidekiq on the others
+consumed only that queue in the same manual test.
 
 Run these in bash. Every Redis command goes through one wrapper, so it always targets
 the production Redis; define it once per shell:

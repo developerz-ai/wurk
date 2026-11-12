@@ -14,7 +14,7 @@ Then `bundle install && restart`. Your job classes, initializers, and live Redis
 Wurk reads and writes the **same Redis schema** Sidekiq does — same keys, same job JSON, same sorted-set score formats. So:
 
 - Jobs already enqueued under Sidekiq run on Wurk unchanged.
-- No data migration, but running Sidekiq and Wurk workers on one Redis at the same time is untested: cut over by draining (stop Sidekiq's workers, confirm nothing is in flight, start Wurk). See the production cutover section of docs/migrate-from-sidekiq.md.
+- No data migration. Running Sidekiq and Wurk workers on one Redis at the same time is tested for stock Sidekiq 8 only (no Pro, no Enterprise), which may roll under the conditions in the guide's rolling-cutover note; any other app cuts over by draining (stop Sidekiq's workers, confirm nothing is in flight, start Wurk). See the production cutover section of docs/migrate-from-sidekiq.md.
 - Every public `Wurk::*` class is exposed under its `Sidekiq::*` name, so `Sidekiq::Worker`, `Sidekiq::Batch`, `Sidekiq::Limiter`, `Sidekiq.configure_server` all resolve.
 - Rollback is the same drain in reverse, plus confirming Wurk's `queue:*|*` private lists are empty before Sidekiq starts. No schema change was made.
 

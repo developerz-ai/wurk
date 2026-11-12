@@ -596,6 +596,64 @@ jobs:
         if: env.RUN == 'true'
         run: bundle exec rake test:parity
 
+  # Stock Sidekiq 8 and a wurkswarm on one Redis (test/integration/mixed_fleet_test.rb),
+  # the evidence behind the mixed-fleet guidance in docs/migrate-from-sidekiq.md. Its own
+  # job because it needs the isolated Sidekiq bundle (bench/vs_sidekiq/Gemfile), which the
+  # `test` job does not install, so the file skips there. WURK_REQUIRE_MIXED_FLEET turns
+  # that skip into a failure here. Advisory: not in the ruleset.
+  mixed-fleet:
+    name: mixed fleet (stock Sidekiq + Wurk)
+    needs: detect
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      redis:
+        image: redis:7.4
+        ports: ["6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 10
+          --health-start-period 1s
+    env:
+      BUNDLE_GEMFILE: ${{ github.workspace }}/Gemfile
+      RAILS_VERSION: "8.1"
+      WURK_REQUIRE_MIXED_FLEET: "1"
+      # Per-step gate — see the `test` job (#469).
+      RUN: ${{ needs.detect.result != 'success' || (needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || (needs.detect.outputs.ruby == 'true' && needs.detect.outputs.code == 'true'))) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.RUN == 'true'
+        with:
+          persist-credentials: false
+      # STEP, not job-level `env:` — see the `test` job above.
+      - name: resolve redis port
+        if: env.RUN == 'true'
+        run: echo "REDIS_URL=redis://localhost:${{ job.services.redis.ports['6379'] }}/0" >> "$GITHUB_ENV"
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+        if: env.RUN == 'true'
+        with:
+          ruby-version: "4.0"
+          bundler-cache: true
+          # Same key the `test` job populates, so this job installs from cache.
+          cache-version: rails-${{ env.RAILS_VERSION }}
+      # The test runs its own redis-server on a private port; the binary comes from
+      # the image the service already pulled, as in the `test` job.
+      - name: install redis-server binary
+        if: env.RUN == 'true'
+        run: |
+          docker run --rm --entrypoint cat redis:7.4 /usr/local/bin/redis-server > "$RUNNER_TEMP/redis-server"
+          sudo install -m 0755 "$RUNNER_TEMP/redis-server" /usr/local/bin/redis-server
+          redis-server --version
+      - name: install stock Sidekiq (isolated bundle)
+        if: env.RUN == 'true'
+        run: BUNDLE_GEMFILE="$GITHUB_WORKSPACE/bench/vs_sidekiq/Gemfile" bundle install
+      - name: mixed fleet test
+        if: env.RUN == 'true'
+        run: bundle exec rake test TEST=test/integration/mixed_fleet_test.rb
+
   # Guard against deleted/truncated spec docs (the authoritative oracles for
   # parity). This is a quick, standalone check that doesn't require Redis or Ruby.
   spec-docs:
