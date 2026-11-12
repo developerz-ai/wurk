@@ -10,7 +10,8 @@ builds all of this for you. Write to Redis directly only when that is not an
 option.
 
 `test/parity/job_format_test.rb` pushes hand-built payloads with raw Redis
-commands, runs them through a real processor and checks every promise below.
+commands, runs them through a real processor and checks the required fields,
+the scheduled promotion path and the failure shape below.
 
 ## The payload
 

@@ -185,9 +185,10 @@ security constraints remain the same:
   `Delete All`), never raise.
 - `erb :_paging` and `erb :_job_info` are built in, and `erb` honours `locals:`.
 - CSRF follows Sidekiq's model: non-`GET` extension requests must be
-  same-origin per `Sec-Fetch-Site`, or, on a plain-HTTP origin that gets no
-  such header, per `Origin`/`Referer` ([§ CSRF](authentication.md#csrf));
-  cross-site requests are denied.
+  same-origin per `Sec-Fetch-Site`. In the engine mount, a plain-HTTP origin
+  that gets no such header is checked by `Origin`/`Referer` instead; the
+  standalone `Sidekiq::Web` rack app stays strict
+  ([§ CSRF](authentication.md#csrf)). Cross-site requests are denied.
 - Tabs added by bare `tabs["Label"] = "path"` mutation have no extension to
   render; those fall back to an Extension page that iframes the tab's own path
   (if the host mounts something reachable there, it renders in the frame).

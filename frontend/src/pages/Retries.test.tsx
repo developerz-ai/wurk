@@ -142,6 +142,46 @@ describe('job-set "all" actions under a filter (#101 W4)', () => {
     expect(sweeps.every(({ method }) => method === 'POST')).toBe(true);
     confirm.mockRestore();
   });
+
+  async function startSweep(onSweep: (url: URL) => unknown) {
+    const fetchMock = stubFetch((url) => {
+      if (url.pathname.endsWith('/all/retry')) return onSweep(url);
+      return { total: 500, page: 0, count: 25, entries: [entry(1)], filtered_total: 1004, filtered_total_exact: true };
+    });
+    renderRetries();
+    await screen.findByText('Job1');
+    fireEvent.input(screen.getByRole('searchbox'), { target: { value: 'boom' } });
+    fireEvent.click(await screen.findByRole('button', { name: `${t('actions.retry')} ${t('actions.matching_suffix')}` }));
+    return fetchMock;
+  }
+
+  const sweepsOf = (fetchMock: ReturnType<typeof stubFetch>) =>
+    requests(fetchMock).filter(({ url }) => url.pathname.endsWith('/api/retries/all/retry'));
+  const listReadsOf = (fetchMock: ReturnType<typeof stubFetch>) =>
+    requests(fetchMock).filter(({ url, method }) => method === 'GET' && url.pathname.endsWith('/api/retries'));
+
+  it('stops after 100 requests on a set that never ends and says there is more', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    let cursor = 0;
+    const fetchMock = await startSweep(() => ({ ok: true, count: 10, matched: 10, done: false, cursor: (cursor += 1000) }));
+
+    expect(await screen.findByText(t('toast.swept_partial', { n: 1000 }))).toBeInTheDocument();
+    expect(sweepsOf(fetchMock)).toHaveLength(100);
+    confirm.mockRestore();
+  });
+
+  it('refreshes the list when a later sweep page fails after earlier ones applied', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const fetchMock = await startSweep((url) => {
+      if (url.searchParams.get('cursor') === '0') return { ok: true, count: 1000, matched: 1000, done: false, cursor: 19000 };
+      throw new TypeError('network down');
+    });
+
+    await waitFor(() => expect(sweepsOf(fetchMock)).toHaveLength(2));
+    const readsAtFailure = listReadsOf(fetchMock).length;
+    await waitFor(() => expect(listReadsOf(fetchMock).length).toBeGreaterThan(readsAtFailure));
+    confirm.mockRestore();
+  });
 });
 
 describe('job detail backtrace (07-A16)', () => {

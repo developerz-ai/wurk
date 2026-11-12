@@ -84,7 +84,7 @@ class JobFormatParityTest < Wurk::Test::UnitCase
   # seconds, member stored without `enqueued_at`. Promotion stamps
   # `enqueued_at` as integer milliseconds and the job then runs unchanged.
   def test_a_hand_built_scheduled_job_is_promoted_and_runs
-    payload = job(EchoJob, ARGS)
+    payload = job(EchoJob, ARGS).except('enqueued_at')
     redis('ZADD', 'schedule', (Time.now.to_f - 1).to_s, JSON.generate(payload))
 
     Sidekiq::Scheduled::Enq.new(Sidekiq.default_configuration).enqueue_jobs(['schedule'])

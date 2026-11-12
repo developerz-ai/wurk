@@ -15,8 +15,9 @@ module Wurk
   # Neither header present is denied: only a non-browser client omits both,
   # and it carries no ambient session cookie to abuse.
   #
-  # Mirrors the standalone Rack surface (Wurk::Web#safe_request?) so every
-  # mutating dashboard entry point enforces one rule.
+  # The standalone Rack surface (Wurk::Web#safe_request?) applies the same
+  # Sec-Fetch-Site rule without this fallback: it stays strict, so a
+  # plain-HTTP standalone mount refuses unsafe requests (parity-divergences).
   module SameOriginGuard
     extend ActiveSupport::Concern
 

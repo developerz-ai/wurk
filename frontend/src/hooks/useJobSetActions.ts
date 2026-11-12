@@ -103,7 +103,12 @@ export function useJobSetActions(set: JobSetName) {
       pushToast(t(done ? 'toast.swept' : 'toast.swept_partial', { n: applied }), 'success');
       invalidate();
     },
-    onError,
+    // Earlier pages may already have applied before a later one failed, so
+    // the list is stale either way.
+    onError: (err: unknown) => {
+      onError(err);
+      invalidate();
+    },
     onSettled: () => setSwept(null),
   }));
 

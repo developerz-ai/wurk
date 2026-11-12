@@ -184,7 +184,11 @@ module Wurk
         raw = query['score']
         return nil if raw.nil? || raw == ''
 
-        Float(raw)
+        score = Float(raw)
+        # Float accepts "nan" and "inf"; Redis refuses NaN as a range bound.
+        raise Invalid, "The 'score' parameter must be a number." unless score.finite?
+
+        score
       rescue ::ArgumentError, ::TypeError
         raise Invalid, "The 'score' parameter must be a number."
       end

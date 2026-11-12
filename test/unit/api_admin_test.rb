@@ -69,7 +69,7 @@ class ApiAdminTest < Wurk::Test::UnitCase
   def test_retry_refuses_a_score_that_is_not_a_number
     jid = seed(Wurk::RetrySet.new)
 
-    %w[soon 1&score=2].each do |score|
+    %w[soon 1&score=2 nan inf -Infinity].each do |score|
       status, _headers, body = post("/v1/retries/#{jid}/retry?score=#{score}")
 
       assert_equal 400, status
