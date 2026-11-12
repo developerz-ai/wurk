@@ -207,6 +207,7 @@ class ClientPartialDeliveryTest < Wurk::Test::UnitCase
     conn = MidPushDropConn.new(raw_conn, deliver: deliver, kind: kind)
     pool = Wurk::RedisPool.new(size: 1, url: Wurk::Test.redis_url, name: 'partial')
     pool.instance_variable_set(:@pool, SingleConnPool.new(conn))
+    Wurk::Metrics::PoolRegistry.deregister(pool) # no pool for /metrics to report
     pool
   end
 
@@ -219,10 +220,6 @@ class ClientPartialDeliveryTest < Wurk::Test::UnitCase
     def with
       yield @conn
     end
-
-    # The RedisPool stays in Metrics::PoolRegistry, so a later /metrics render
-    # in the same process reads it.
-    def available = 1
 
     def shutdown(&); end
   end

@@ -567,6 +567,9 @@ class RedisPoolTest < Wurk::Test::UnitCase
   def pool_over(fake_pool, on_error: nil)
     pool = Wurk::RedisPool.new(size: 1, url: Wurk::Test.redis_url, pool_timeout: 1, name: 'fake', on_error: on_error)
     pool.instance_variable_set(:@pool, fake_pool)
+    # A stand-in is no pool for /metrics to report; a later render in this
+    # worker would read it.
+    Wurk::Metrics::PoolRegistry.deregister(pool)
     pool
   end
 
