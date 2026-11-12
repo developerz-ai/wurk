@@ -34,13 +34,3 @@
   }
 }
 
-// Skeleton shimmer: a highlight band sweeping across a masked placeholder while
-// data loads. Paired with `--skeleton-*` tokens in the skeleton component.
-@keyframes shimmer {
-  from {
-    background-position: -150% 0;
-  }
-  to {
-    background-position: 250% 0;
-  }
-}

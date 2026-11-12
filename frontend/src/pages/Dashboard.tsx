@@ -2,12 +2,11 @@ import { useQuery } from '@tanstack/solid-query';
 import { createSignal, createMemo, onMount, For, Show, Switch, Match } from 'solid-js';
 import { A, useSearchParams } from '@solidjs/router';
 import { AreaChart } from '../components/charts';
-import { AnimatedNumber } from '../components/AnimatedNumber';
 import { PageHeader } from '../components/PageHeader';
 import { Skeleton, SkeletonCards, SkeletonTable } from '../components/Skeleton';
 import { t } from '../i18n';
 import { useSSE } from '../hooks/useSSE';
-import { formatBucket, formatDuration } from '../utils';
+import { formatBucket, formatDuration, formatNumber } from '../utils';
 import { timeZone } from '../tz';
 import { basePath } from '../basePath';
 import { getJSON } from '../http';
@@ -175,7 +174,7 @@ export default function Dashboard() {
                   <Icon name="circle-check" class="obs-metric__icon" />
                 </div>
                 <span class="obs-metric__value">
-                  <AnimatedNumber value={s().processed} />
+                  {formatNumber(s().processed)}
                 </span>
                 <DeltaSub pct={hourlyDeltaPct(fullSeries(), 'processed')} goodWhenUp />
                 <Icon name="arrow-right" class="obs-card__go" />
@@ -186,7 +185,7 @@ export default function Dashboard() {
                   <Icon name="triangle-exclamation" class="obs-metric__icon" />
                 </div>
                 <span class="obs-metric__value">
-                  <AnimatedNumber value={s().failed} />
+                  {formatNumber(s().failed)}
                 </span>
                 <DeltaSub pct={hourlyDeltaPct(fullSeries(), 'failed')} goodWhenUp={false} />
                 <Icon name="arrow-right" class="obs-card__go" />
@@ -197,7 +196,7 @@ export default function Dashboard() {
                   <Icon name="ban" class="obs-metric__icon" />
                 </div>
                 <span class="obs-metric__value">
-                  <AnimatedNumber value={s().expired} />
+                  {formatNumber(s().expired)}
                 </span>
                 <span class="obs-metric__sub">{s().expired === 0 ? t('dashboard.stable_threshold') : t('dashboard.above_threshold')}</span>
                 <Icon name="arrow-right" class="obs-card__go" />
@@ -208,7 +207,7 @@ export default function Dashboard() {
                   <Icon name="spinner" class="obs-metric__icon" />
                 </div>
                 <span class="obs-metric__value">
-                  <AnimatedNumber value={s().busy} />
+                  {formatNumber(s().busy)}
                 </span>
                 <span class="obs-metric__sub">{s().busy === 0 ? t('dashboard.system_idle') : t('dashboard.processing')}</span>
                 <Icon name="arrow-right" class="obs-card__go" />
@@ -270,28 +269,28 @@ export default function Dashboard() {
               <A class="obs-card obs-stat obs-card--link" href="/queues">
                 <span class="obs-mono">{t('dashboard.enqueued')}</span>
                 <span class="obs-stat__value">
-                  <AnimatedNumber value={s().enqueued} />
+                  {formatNumber(s().enqueued)}
                 </span>
                 <Icon name="arrow-right" class="obs-card__go" />
               </A>
               <A class="obs-card obs-stat obs-card--link" href="/retries">
                 <span class="obs-mono">{t('dashboard.retries')}</span>
                 <span class="obs-stat__value">
-                  <AnimatedNumber value={s().retries} />
+                  {formatNumber(s().retries)}
                 </span>
                 <Icon name="arrow-right" class="obs-card__go" />
               </A>
               <A class="obs-card obs-stat obs-card--link" href="/scheduled">
                 <span class="obs-mono">{t('dashboard.scheduled')}</span>
                 <span class="obs-stat__value">
-                  <AnimatedNumber value={s().scheduled} />
+                  {formatNumber(s().scheduled)}
                 </span>
                 <Icon name="arrow-right" class="obs-card__go" />
               </A>
               <A class="obs-card obs-stat obs-card--link" href="/dead">
                 <span class="obs-mono">{t('dashboard.dead')}</span>
                 <span class="obs-stat__value">
-                  <AnimatedNumber value={s().dead} />
+                  {formatNumber(s().dead)}
                 </span>
                 <Icon name="arrow-right" class="obs-card__go" />
               </A>
@@ -323,7 +322,7 @@ export default function Dashboard() {
                         {(q) => (
                           <tr>
                             <td style={{ 'font-weight': 500, color: 'var(--obs-text)' }}>{q.name}</td>
-                            <td><AnimatedNumber value={q.size} /></td>
+                            <td>{formatNumber(q.size)}</td>
                             <td title={`${q.latency.toFixed(3)}s`}>{formatDuration(q.latency)}</td>
                             <td>
                               <Show

@@ -235,18 +235,17 @@ describe('Metrics — requested API URLs', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
     renderMetrics();
-    // Wait for both independent queue-history queries to land. The assertions
+    // Wait for both queue-history panels to render. The assertions
     // below are about the recorded URLs, so their render gates must not be
     // able to suppress them when the requested URL is wrong.
     await screen.findByText('Queue Latency (seconds)');
     await waitFor(() => expect(screen.getByTestId('barchart')).toBeInTheDocument());
 
     const urls = fetchMock.urls;
-    // Two call sites ask for the queue history — the depth panel and the
-    // latency panel — and both must ask for the same exact URL: the range's
-    // bucket interpolated into the path, with the window as a parameter.
+    // The depth panel and the latency panel share one query, so the page
+    // fetches the queue history once (a production HAR caught it twice): the
+    // range's bucket in the path, with the window as a parameter.
     expect(urls.filter((u) => u.startsWith('/wurk/api/queue-history/'))).toEqual([
-      '/wurk/api/queue-history/5m?window=7d',
       '/wurk/api/queue-history/5m?window=7d',
     ]);
     // Nothing else the default range requests may drift either.
