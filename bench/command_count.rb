@@ -5,7 +5,8 @@ require 'wurk'
 require_relative 'support'
 
 # Per-job Redis command tripwire — the round-trip half of the "Why wurk is
-# slower" story in docs/benchmarks.md. Scripts the `INFO commandstats` method
+# slower" story in docs/benchmarks.md — followed by a per-heartbeat one
+# (docs/benchmarks.md, "Commands per heartbeat"). Scripts the `INFO commandstats` method
 # that table was measured with: drain JOBS pre-enqueued noop jobs through the
 # REAL reliable fetcher and Processor#process_one, then read the server's own
 # per-command call counters and divide by jobs.
@@ -93,6 +94,17 @@ BASELINE = Float(ENV.fetch('WURK_BENCH_CMD_BASELINE', '3'))
 # not a mystery command-count drift.
 WARMUP = [JOBS / 10, 1].max
 
+# Per-beat heartbeat counts (plan 101/06 P6), held exactly in both directions
+# like the per-job pair above: a beat is a fixed command shape, so any drift is
+# a change to that shape. `plain` is an idle process with no statsd client,
+# leader or not. With `config.dogstatsd` set, every process GETs the leader
+# lock and gauges `busy`, and only the leader LLENs each of its queues for
+# `queue.size` (one queue here).
+PLAIN_BEAT = Float(ENV.fetch('WURK_BENCH_CMD_PLAIN_BEAT', '5'))
+FOLLOWER_BEAT = Float(ENV.fetch('WURK_BENCH_CMD_FOLLOWER_BEAT', '6'))
+LEADER_BEAT = Float(ENV.fetch('WURK_BENCH_CMD_LEADER_BEAT', '7'))
+BEATS = 10
+
 # Redis records CONFIG RESETSTAT *after* it clears the counters, so the reset
 # that opens the window shows up inside it. INFO needs no such treatment: it
 # reports the counters as they stood before it ran, so it never counts itself.
@@ -111,6 +123,9 @@ class BenchJob
   def perform(*); end
 end
 
+# Swallows gauges: the heartbeat's statsd branch runs, nothing is sent.
+NULL_STATSD = Class.new { def gauge(*, **); end }.new
+
 # Server-side call counters, keyed by command name ("hincrby", "config|get").
 def command_calls(capsule)
   info = capsule.redis { |c| c.call('INFO', 'commandstats') }
@@ -128,13 +143,13 @@ def drain(processor, jobs)
   Wurk::Processor::PROCESSED.reset
 end
 
-def report(calls, jobs)
+def report(calls, jobs, unit = 'job')
   upkeep, work = calls.partition { |cmd, _| CONNECTION_COMMANDS.include?(cmd) }
   work.sort_by { |_, count| -count }.each { |cmd, count| printf("  %8d  %7.2f  %s\n", count, count / jobs.to_f, cmd) }
   puts '  --------  -------'
   total = work.sum { |_, count| count }
   printf("  %8d  %7.2f  total\n\n", total, total / jobs.to_f)
-  upkeep.each { |cmd, count| printf("  (not per job: %d %s, connection upkeep)\n", count, cmd) }
+  upkeep.each { |cmd, count| printf("  (not per #{unit}: %d %s, connection upkeep)\n", count, cmd) }
   puts unless upkeep.empty?
   total / jobs.to_f
 end
@@ -191,3 +206,40 @@ if per_job < BASELINE
 end
 puts format('✓ %.2f commands/job, within the budget of %.2f and at the recorded baseline of %.2f',
             per_job, BUDGET, BASELINE)
+
+puts
+
+# A fresh Heartbeat per beat, so its leader? cache starts cold on each one —
+# as on every real beat, because BEAT_PAUSE (10s) outlasts
+# Component::LEADER_CACHE_TTL_MS (5s). The leader lock is planted, not won:
+# only the GET that reads it is under test.
+def beats(capsule, config, leader:)
+  identity = "bench-heartbeat:#{Process.pid}"
+  capsule.redis { |c| c.call('SET', Wurk::Leader::DEFAULT_KEY, leader ? identity : 'someone-else') }
+  Wurk::Heartbeat.new(identity:, config:).beat! # first-beat registration off the clock
+  capsule.redis { |c| c.call('CONFIG', 'RESETSTAT') }
+  BEATS.times { Wurk::Heartbeat.new(identity:, config:).beat! || abort('✗ a heartbeat failed') }
+  command_calls(capsule)
+end
+
+beat_failures = []
+{ 'plain' => [PLAIN_BEAT, nil, false],
+  'statsd follower' => [FOLLOWER_BEAT, -> { NULL_STATSD }, false],
+  'statsd leader' => [LEADER_BEAT, -> { NULL_STATSD }, true] }.each do |name, (baseline, statsd, leader)|
+  config.dogstatsd = statsd
+  calls = beats(capsule, config, leader:)
+  puts "wurk — #{BEATS} idle heartbeats, #{name} (INFO commandstats)\n\n"
+  puts '  commands  per beat  command'
+  per_beat = report(calls, BEATS, 'beat')
+  beat_failures << format('%s: %.2f commands/beat, recorded %.2f', name, per_beat, baseline) if per_beat != baseline
+end
+config.dogstatsd = nil
+capsule.redis { |c| c.call('FLUSHDB') }
+$stdout.flush
+
+unless beat_failures.empty?
+  abort "✗ heartbeat command count moved — re-baseline bench/command_count.rb and docs/benchmarks.md together:\n  " \
+        "#{beat_failures.join("\n  ")}"
+end
+puts format('✓ %.0f / %.0f / %.0f commands per beat (plain / statsd follower / statsd leader), at the baseline',
+            PLAIN_BEAT, FOLLOWER_BEAT, LEADER_BEAT)

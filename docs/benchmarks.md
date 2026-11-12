@@ -223,6 +223,18 @@ is **not** that number — it is the pre-implementation prototype, which priced 
 bracketing shape (a bare acquire and release around the fetch, 2.2x–2.6x) that the real
 implementation exists to avoid. Read it as the upper bound it is.
 
+### Commands per heartbeat
+
+Every process beats every 10 seconds whatever its throughput, so the beat is a fixed per-process cost, not a per-job one. `bin/rake bench:command_count` counts it after the per-job table, over 10 idle beats per case with `INFO commandstats`, and fails if any case moves either way:
+
+| case | per beat | commands |
+|---|---|---|
+| plain | 5 | SADD, HSET, EXPIRE, UNLINK (no job running), RPOP of the signal list |
+| statsd follower | 6 | plain + GET of the leader lock |
+| statsd leader | 7 | statsd follower + one LLEN per queue (one queue here) |
+
+`plain` is a process without `config.dogstatsd`, leader or not. A busy process swaps the UNLINK for a MULTI/UNLINK/HSET/EXPIRE/EXEC rewrite of its work hash, and a process holding [global-concurrency](plans/2026/08/07/101-beyond-sidekiq/10-global-concurrency.md) slots adds a slot-refresh script; neither case is counted. The cases run against a planted `dear-leader` value, so the leader GET is counted but leader election is not.
+
 ## The other half: Ruby-side cost per job
 
 Round trips are the headline, but they are not the whole bill. Once the fetch
@@ -359,6 +371,9 @@ harness:
 | `WURK_BENCH_CMD_JOBS` | `500` | `bench/command_count.rb` | jobs pushed while counting Redis commands |
 | `WURK_BENCH_CMD_BUDGET` | `3` | `bench/command_count.rb` | commands per job the run is allowed before it fails |
 | `WURK_BENCH_CMD_BASELINE` | `3` | `bench/command_count.rb` | commands per job the comparison treats as the baseline |
+| `WURK_BENCH_CMD_PLAIN_BEAT` | `5` | `bench/command_count.rb` | commands per heartbeat, no statsd client |
+| `WURK_BENCH_CMD_FOLLOWER_BEAT` | `6` | `bench/command_count.rb` | commands per heartbeat, statsd client, not the leader |
+| `WURK_BENCH_CMD_LEADER_BEAT` | `7` | `bench/command_count.rb` | commands per heartbeat, statsd client, leader |
 | `WURK_BENCH_MEM_JOBS` | `2000` | `bench/memory.rb` | jobs executed per RSS sample |
 | `WURK_BENCH_MEM_SAMPLES` | `5` | `bench/memory.rb` | RSS samples taken |
 | `WURK_BENCH_SWARM_CHILDREN` | `2` | `bench/swarm_boot.rb` | children forked per boot sample |

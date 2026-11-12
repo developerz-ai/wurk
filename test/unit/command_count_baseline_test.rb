@@ -14,6 +14,7 @@ class CommandCountBaselineTest < Minitest::Test
   SCRIPT = File.join(ROOT, 'bench', 'command_count.rb')
   DOC = File.join(ROOT, 'docs', 'benchmarks.md')
   BENCH_YML = File.join(ROOT, '.github', 'workflows', 'bench.yml')
+  BEAT_ROWS = { 'plain' => 'PLAIN_BEAT', 'statsd follower' => 'FOLLOWER_BEAT', 'statsd leader' => 'LEADER_BEAT' }.freeze
 
   def recorded(name)
     match = File.read(SCRIPT).match(/^#{name} = Float\(ENV\.fetch\('WURK_BENCH_CMD_#{name}', '([\d.]+)'\)\)$/)
@@ -33,6 +34,16 @@ class CommandCountBaselineTest < Minitest::Test
     refute_nil total, 'docs/benchmarks.md lost the command_count table'
     assert_in_delta recorded('BASELINE'), Float(total), 0.005,
                     're-baseline bench/command_count.rb and docs/benchmarks.md together'
+  end
+
+  def test_docs_publish_the_recorded_heartbeat_counts
+    rows = File.read(DOC).scan(/^\| (plain|statsd follower|statsd leader) \| (\d+) \|/).to_h
+
+    BEAT_ROWS.each do |row, name|
+      refute_nil rows[row], "docs/benchmarks.md lost the #{row} heartbeat row"
+      assert_equal recorded(name), Float(rows[row]),
+                   're-baseline bench/command_count.rb and docs/benchmarks.md together'
+    end
   end
 
   def test_ci_runs_the_gate_on_bench_inputs
