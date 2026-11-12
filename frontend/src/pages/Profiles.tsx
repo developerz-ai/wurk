@@ -91,16 +91,22 @@ export default function Profiles() {
                             <td>{formatNumber(Math.round(p.elapsed * 1000))} {t('common.ms')}</td>
                             <td>{fmtBytes(p.size)}</td>
                             <td style={{ 'text-align': 'end' }}>
-                              {/* Full reload (not client-route): the backend POSTs the blob
-                                  to the Firefox profiler then 302s out to profiler.firefox.com. */}
-                              <a
-                                class="obs-btn obs-btn--ghost obs-btn--sm"
-                                href={`${basePath()}/profiles/${encodeURIComponent(p.key)}`}
+                              {/* A form POST, not a link: uploading job data to the public
+                                  Firefox profiler is a side effect, so the server takes it only
+                                  as a same-origin POST, then 302s out to profiler.firefox.com.
+                                  `noopener` only: `noreferrer` would send `Origin: null`, which a
+                                  plain-HTTP dashboard's guard refuses. */}
+                              <form
+                                method="post"
+                                action={`${basePath()}/profiles/${encodeURIComponent(p.key)}`}
                                 target="_blank"
-                                rel="noopener noreferrer"
+                                rel="noopener"
+                                style={{ display: 'inline' }}
                               >
-                                <Icon name="up-right-from-square" /> {t('extension.open')}
-                              </a>
+                                <button type="submit" class="obs-btn obs-btn--ghost obs-btn--sm">
+                                  <Icon name="up-right-from-square" /> {t('extension.open')}
+                                </button>
+                              </form>
                             </td>
                           </tr>
                         )}

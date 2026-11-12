@@ -35,6 +35,10 @@ module Wurk
 
     HISTORY_WINDOW_UNITS = { 's' => 1, 'm' => 60, 'h' => 3600, 'd' => 86_400 }.freeze
     DEFAULT_HISTORY_WINDOW = 24 * 3600
+    # Sidekiq Web's dashboard `?days=N` range (free §25.4).
+    MAX_HISTORY_DAYS = 180
+    # Far past any real set; bounds a `?cursor=` before it reaches LRANGE.
+    MAX_CURSOR = 1 << 40
 
     # Per-set action whitelists. Maps the SPA's action name to the
     # SortedEntry/JobSet method. Anything not listed 400s — keeps the bulk/
@@ -67,10 +71,12 @@ module Wurk
       }
     end
 
+    # `?direction=asc` lists oldest first, the job the next fetch takes at the
+    # top, as Sidekiq Web's queue page does (free §25.4).
     def queue
       q = ::Wurk::Queue.new(params[:name].to_s)
       page = ::Wurk::Api::Pagination.window(params)
-      gauges, jobs = queue_page(q, page)
+      gauges, jobs = queue_page(q, page, params[:direction].to_s == 'asc')
       render json: {
         name: q.name, size: gauges.size, latency: gauges.latency, paused: gauges.paused?,
         **::Wurk::Api::Pagination.meta(page), jobs: jobs
@@ -121,6 +127,8 @@ module Wurk
 
     def retries_all
       set = ::Wurk::RetrySet.new
+      return sweep_matching(set, RETRY_ACTIONS) if filtered_sweep?
+
       count = case params[:cmd].to_s
               when 'retry'  then set.retry_all
               when 'kill'   then set.kill_all
@@ -136,6 +144,8 @@ module Wurk
 
     def scheduled_all
       set = ::Wurk::ScheduledSet.new
+      return sweep_matching(set, SCHEDULED_ACTIONS) if filtered_sweep?
+
       case params[:cmd].to_s
       when 'delete'       then render json: { ok: true, count: clear_set(set) }
       when 'add_to_queue' then drain_set(set, :add_to_queue)
@@ -149,6 +159,8 @@ module Wurk
 
     def dead_all
       set = ::Wurk::DeadSet.new
+      return sweep_matching(set, DEAD_ACTIONS) if filtered_sweep?
+
       count = case params[:cmd].to_s
               when 'retry'  then set.retry_all
               when 'delete' then clear_set(set)
@@ -179,11 +191,13 @@ module Wurk
 
     # Rows are Batch::Status#summary: #data with the failed and dead jid sets
     # counted rather than listed. GET /api/batches/:bid carries the jids.
+    # `?dead=1` lists `dead-batches` instead (Pro's Dead batches tab);
+    # `?tag=` narrows either to the batches carrying that tag, and takes the
+    # place of `?substr=` (BatchSet#tagged_snapshot).
     def batches
       page = ::Wurk::Api::Pagination.window(params)
-      total, rows = page_rows(::Wurk::BatchSet.new, page, :summary.to_proc) do |summary|
-        summary.transform_keys(&:to_sym)
-      end
+      set = %w[1 true].include?(params[:dead].to_s) ? ::Wurk::Batch::DeadSet.new : ::Wurk::BatchSet.new
+      total, rows = batch_rows(set, page, params[:tag].to_s)
       render json: { total: total, **::Wurk::Api::Pagination.meta(page), batches: rows }
     end
 
@@ -284,10 +298,11 @@ module Wurk
     end
 
     # Cluster-total throughput/failures time-series for the dashboard charts.
-    # `:bucket` is 1m/5m/1h; `?window=24h` (s/m/h/d suffix) is clamped to the
-    # bucket's retention. Chart-ready array under `series`.
+    # `:bucket` is 1m/5m/1h; `?window=24h` (s/m/h/d suffix) or `?days=N`
+    # (1..180, wins over window) is clamped to the bucket's retention.
+    # Chart-ready array under `series`.
     def history
-      window = parse_window(params[:window])
+      window = history_window(params)
       series = ::Wurk::Web::Enterprise::Historical.history(params[:bucket].to_s, window: window)
       render json: { bucket: params[:bucket].to_s, window: window, series: series.map { |row| ::Wurk::Api::Serializers.history_point(row) } }
     rescue ::ArgumentError => e
@@ -307,10 +322,10 @@ module Wurk
 
     # Per-queue size/latency gauge time-series for the Metrics/Historical tab.
     # `:bucket` is 1m/5m/1h; `?window=24h` (s/m/h/d) is clamped to the bucket's
-    # retention; optional `?queue=<name>` narrows to one queue. Each queue's
-    # `points` are chart-ready.
+    # retention (`?days=N` as on #history); optional `?queue=<name>` narrows
+    # to one queue. Each queue's `points` are chart-ready.
     def queue_history # rubocop:disable Metrics/AbcSize
-      window = parse_window(params[:window])
+      window = history_window(params)
       queues = params[:queue].present? ? [params[:queue].to_s] : nil
       series = ::Wurk::Web::Enterprise::Historical.queue_history(params[:bucket].to_s, window: window, queues: queues)
       render json: {
@@ -413,7 +428,7 @@ module Wurk
       return render(json: { error: 'unknown action' }, status: :bad_request) unless method
 
       keys = Array(params[:keys]).map(&:to_s).uniq
-      # Each key costs a ZRANGEBYSCORE plus per-entry mutations; an uncapped
+      # Each key costs a pipelined ZRANGEBYSCORE plus per-entry mutations; an uncapped
       # list lets one POST issue tens of thousands of round-trips. The UI's
       # per-row selections accumulate across pages (toggleAll works against
       # the visible page's keys only) and the bulk POST sends the whole Set,
@@ -443,8 +458,8 @@ module Wurk
 
     # 422 when any entry failed, so the SPA's error toast fires; `count` is
     # what was applied either way.
-    def render_applied(total, failures)
-      body = { ok: failures.empty?, count: total - failures.size }
+    def render_applied(total, failures, extra = {})
+      body = { ok: failures.empty?, count: total - failures.size, **extra }
       return render(json: body) if failures.empty?
 
       render json: body.merge(failed: failures), status: 422
@@ -471,13 +486,50 @@ module Wurk
     # Maps "<score>|<jid>" keys to live SortedEntry objects via score-bracketed
     # fetch (exact float match, narrowed by jid) — avoids depending on float→
     # string round-tripping between JS and Ruby. Skips malformed/empty keys.
+    # One pipelined round trip for every key (JobSet#fetch_pairs).
     def entries_for(set, keys)
-      keys.flat_map do |key|
+      pairs = keys.filter_map do |key|
         score, jid = key.to_s.split('|', 2)
-        next [] if jid.nil? || jid.empty?
-
-        set.fetch(score.to_f, jid)
+        [score.to_f, jid] unless jid.nil? || jid.empty?
       end
+      set.fetch_pairs(pairs)
+    end
+
+    def batch_rows(set, page, tag)
+      symbolize = ->(summary) { summary.transform_keys(&:to_sym) }
+      return page_rows(set, page, &symbolize) if tag.empty?
+
+      total, summaries = set.tagged_snapshot(tag, ::Wurk::Api::Pagination.offset(page), page[:count])
+      [total, summaries.map(&symbolize)]
+    end
+
+    def filtered_sweep? = !params[:substr].to_s.empty?
+
+    # `<set>/all/:cmd?substr=`: applies `cmd` to the entries the same filtered
+    # listing shows, newest first, at most SWEEP_LIMIT of them within the
+    # filter's scan budget per request. The answer carries `done` (the walk
+    # reached the end of the set) and `cursor`, the raw offset to send back as
+    # `?cursor=` to carry on: the rows examined minus those this request moved
+    # out of the set. Entries added or removed meanwhile above that offset
+    # shift it, so a resumed sweep can re-examine or skip a few rows.
+    def sweep_matching(set, actions)
+      method = actions[params[:cmd].to_s]
+      return render(json: { error: 'unknown action' }, status: :bad_request) unless method
+
+      entries, scanned_to, done = matching_entries(set)
+      failures = apply_each(entries, method)
+      cursor = scanned_to - (entries.size - failures.size)
+      render_applied(entries.size, failures, matched: entries.size, done: done, cursor: cursor)
+    end
+
+    # [the matches from `?cursor=`, the raw offset the walk stopped at, done].
+    def matching_entries(set)
+      from = ::Wurk::Api::Pagination.clamp_int(params[:cursor], 0, MAX_CURSOR, 0)
+      rows = ::Wurk::Api::Pagination.walk(from) { |offset, count| set.snapshot(offset, count).last }
+      entries, examined, done = ::Wurk::Api::Pagination.matching(rows, params[:substr].to_s) do |entry|
+        ::Wurk::Api::Serializers.sorted_entry(entry)
+      end
+      [entries, from + examined, done]
     end
 
     # UNLINKs the whole set, returning the count removed (read before clearing
@@ -507,26 +559,36 @@ module Wurk
 
     # [total, rows] of one listing page. Unfiltered, the page is read straight
     # off Redis at its offset (the set's #snapshot), so page 999 costs what
-    # page 0 does; a filter counts matching rows, so it still walks, bounded by
-    # FILTER_SCAN_LIMIT. `walk` maps a walked member to what #snapshot yields
-    # (a Batch::Status to its summary); the block serializes either.
-    def page_rows(set, page, walk = nil, &serialize)
+    # page 0 does; a filter counts matching rows, so it walks the set through
+    # the same #snapshot, bounded by FILTER_SCAN_LIMIT.
+    def page_rows(set, page, &)
       if page[:substr].empty?
         total, members = set.snapshot(::Wurk::Api::Pagination.offset(page), page[:count])
-        return [total, members.map(&serialize)]
+        return [total, members.map(&)]
       end
 
-      rows = ::Wurk::Api::Pagination.slice(set, page) { |member| serialize.call(walk ? walk.call(member) : member) }
-      [set.size, rows]
+      rows = ::Wurk::Api::Pagination.walk { |offset, count| set.snapshot(offset, count).last }
+      [set.size, ::Wurk::Api::Pagination.slice(rows, page, &)]
     end
 
     # The gauges (anything answering size/latency/paused?) and the page's rows.
-    def queue_page(queue, page)
+    def queue_page(queue, page, oldest_first)
       serialize = ->(rec) { ::Wurk::Api::Serializers.job_record(rec) }
-      return [queue, ::Wurk::Api::Pagination.slice(queue, page, &serialize)] unless page[:substr].empty?
+      unless page[:substr].empty?
+        rows = ::Wurk::Api::Pagination.walk { |offset, count| queue_records(queue, offset, count, oldest_first).last }
+        return [queue, ::Wurk::Api::Pagination.slice(rows, page, &serialize)]
+      end
 
-      snapshot = queue.snapshot(::Wurk::Api::Pagination.offset(page), page[:count])
-      [snapshot, snapshot.records.map(&serialize)]
+      snapshot, records = queue_records(queue, ::Wurk::Api::Pagination.offset(page), page[:count], oldest_first)
+      [snapshot, records.map(&serialize)]
+    end
+
+    # [snapshot, its records in listing order]. Oldest first reads the same
+    # LRANGE from the tail: negative indexes `-(offset + count)..-(offset + 1)`,
+    # which Redis clamps at the head, then reversed.
+    def queue_records(queue, offset, count, oldest_first)
+      snapshot = queue.snapshot(oldest_first ? -(offset + count) : offset, count)
+      [snapshot, oldest_first ? snapshot.records.reverse : snapshot.records]
     end
 
     def render_sorted_entry(set)
@@ -550,6 +612,13 @@ module Wurk
       ::Wurk::Api::Pagination.clamp_int(
         params[:limit], 1, ::Wurk::Web::Search::MAX_LIMIT, ::Wurk::Web::Search::DEFAULT_LIMIT
       )
+    end
+
+    # `?days=N` (1..MAX_HISTORY_DAYS) in seconds when it parses, else
+    # `?window=`.
+    def history_window(params)
+      days = ::Wurk::Api::Pagination.clamp_int(params[:days], 1, MAX_HISTORY_DAYS, nil)
+      days ? days * HISTORY_WINDOW_UNITS.fetch('d') : parse_window(params[:window])
     end
 
     # Resolves the per-class metrics window. `minutes:` wins when present;

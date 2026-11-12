@@ -67,7 +67,7 @@
     scope :api, defaults: { format: :json } do
       get  'meta',             to: 'api#meta'
 - entry: '`Sidekiq::Web` outside a Rails app routes extensions only'
-  anchor: 'config/routes.rb#L124-L142'
+  anchor: 'config/routes.rb#L126-L144'
   fragment: |-
     match 'ext/:name(/*subpath)', to: 'extensions#show', via: %i[get post put patch delete], as: :extension,
                                   format: false, defaults: { subpath: '' }, constraints: { name: %r{[^/]+} }

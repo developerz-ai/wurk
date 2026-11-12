@@ -99,8 +99,9 @@
   --radius: 8px;
   --radius-sm: 4px;
 
-  // Typography.
-  --font-sans: 'Geist', system-ui, -apple-system, sans-serif;
+  // Typography. The first family must be the name @fontsource registers
+  // ('Geist Sans', not 'Geist'), or the bundled font never applies (fonts.test.ts).
+  --font-sans: 'Geist Sans', system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', 'Menlo', monospace;
 
   --nav-width: 248px; // expanded (hover / mobile drawer)

@@ -11,6 +11,11 @@ the hot path. This is the additive invariant the whole surface is built on —
 see [`docs/plans/2026/08/07/101-beyond-sidekiq/07-http-producer-api.md`](plans/2026/08/07/101-beyond-sidekiq/07-http-producer-api.md)
 for the design rationale.
 
+The machine-readable contract is [`docs/api/openapi.yaml`](api/openapi.yaml)
+(OpenAPI 3.1). `test/unit/api_openapi_parity_test.rb` fails when a route,
+verb or scope there differs from the routers in `lib/wurk/api/`. To write
+jobs straight to Redis instead, see [`job-format.md`](job-format.md).
+
 ## Contents
 
 - [Enabling it](#enabling-it)
@@ -152,6 +157,9 @@ Three scopes, one implication:
 | `read` | every `GET`, plus `GET /jobs/:jid` |
 | `admin` | everything — implies `enqueue` and `read`, plus the destructive routes (`DELETE /jobs/:jid`, queue pause/unpause, process quiet/stop) |
 
+The operator actions — queue clear, retrying a job out of `retry` or `dead` —
+are `admin` too.
+
 ```ruby
 Wurk.configuration.api_token ENV.fetch('WURK_PRODUCER_TOKEN'), scopes: %i[enqueue read]
 Wurk.configuration.api_token ENV.fetch('WURK_OPERATOR_TOKEN'), scopes: %i[admin]
@@ -239,7 +247,7 @@ branches on; renaming one is a breaking change, adding one is not.
 | `invalid_request` | 400 | Malformed body, bad query param, unknown top-level job key. |
 | `payload_too_large` | 413 | Body, `args`, or one bulk job's `args` exceeded its configured cap (`max_bytes` extension member). |
 | `class_not_allowed` | 403 | `class` is not on `config.api_enqueue_classes`. |
-| `job_not_found` | 404 | No scheduled/retrying job, or no tracked status, for this jid. |
+| `job_not_found` | 404 | No job with this jid in the set the route addresses, or no tracked status for it. |
 | `batch_not_found` | 404 | No batch with this bid. |
 | `flow_not_found` | 404 | No flow with this fid. |
 | `process_not_found` | 404 | No live process with this identity. |
@@ -255,7 +263,10 @@ branches on; renaming one is a breaking change, adding one is not.
 A producer whose connection drops mid-`POST /jobs` can't tell a lost request
 from a lost response, so its only safe move is to resend — which, without
 help, enqueues the job twice. Send an `Idempotency-Key` and a resend replays
-the *first* response verbatim instead:
+the *first* response verbatim instead. `POST /jobs`, `POST /jobs/bulk`,
+`POST /queues/:name/clear`, `POST /retries/:jid/retry` and
+`POST /dead/:jid/retry` accept it; a resent clear without one would empty
+whatever was enqueued after the first.
 
 ```
 POST /v1/jobs
@@ -326,7 +337,7 @@ reshaped. An HTTP-enqueued job is byte-identical to one pushed by
 | `POST /jobs` | `enqueue` | One job. `201` + `{"jid": "..."}`, or `200` + `{"jid": null}` if server-side middleware (`collapse:`, `unique_for:`) dropped the push — that's the producer's own policy working, not a failure. |
 | `POST /jobs/bulk` | `enqueue` | Many, via the Lua bulk path. `{"class": ..., "args": [[...], [...]], "batch_size": 1000, "spread_interval": 5}`. `201`/`200` + `{"jids": [...]}`, index-aligned with `args`; `null` entries mark drops. |
 | `GET /jobs/:jid` | `read` | State, progress, result, error — from `Wurk::Status`. Only answers for a class with `track: true`; an untracked, unknown, or TTL-expired jid all read the same `404 job_not_found`, because Redis holds nothing that tells them apart. |
-| `DELETE /jobs/:jid` | `admin` | Removes a not-yet-run job from `schedule` or `retry` by jid. **Not** a running-job cancel — a job already handed to a processor keeps running, and one that already died stays in `dead`. |
+| `DELETE /jobs/:jid` | `admin` | Removes a not-yet-run job from `schedule` or `retry` by jid. **Not** a running-job cancel — a job already handed to a processor keeps running, and one that already died stays in `dead`. Optional `?score=` (the `at` of a `/scheduled` or `/retries` row) finds the job with one `ZRANGEBYSCORE` instead of scanning the set. |
 
 Job body, all keys optional except `class`:
 
@@ -374,10 +385,14 @@ deep a queue is.
 | `GET /queues/:name` | `read` | Gauges + a page of waiting jobs. No `404` for an unused name — a queue is a Redis LIST that exists only while it has members, so "never enqueued" and "just drained" are the same state. |
 | `POST /queues/:name/pause` | `admin` | Stops the fleet fetching from this queue. |
 | `POST /queues/:name/unpause` | `admin` | |
+| `POST /queues/:name/clear` | `admin` | Deletes every job waiting in the queue (`Queue#clear`). Takes `Idempotency-Key`. |
 | `GET /retries` | `read` | Paged `retry` set. |
+| `POST /retries/:jid/retry` | `admin` | Puts the job back on its queue now and refunds the attempt (`SortedEntry#retry`, the dashboard's Retry). Optional `?score=`; takes `Idempotency-Key`. `404 job_not_found` if it is no longer in `retry`. |
 | `GET /scheduled` | `read` | Paged `schedule` set. |
 | `GET /dead` | `read` | Paged `dead` set. |
-| `GET /batches/:bid` | `read` | Batch status/counters. `404 batch_not_found` if never created or expired. |
+| `POST /dead/:jid/retry` | `admin` | The same for a dead job. |
+| `GET /batches` | `read` | Paged batches, newest first. Each row counts failed and dead jids (`failed_count`, `dead_count`) rather than listing them. |
+| `GET /batches/:bid` | `read` | Batch status/counters, with the failed and dead jids. `404 batch_not_found` if never created or expired. |
 | `GET /flows/:fid` | `read` | A flow's state, counters and whole node graph. `404 flow_not_found` if never created or expired. |
 
 There is no `GET /flows` and no way to abandon one over this API. A producer
@@ -440,7 +455,8 @@ wurk.queues()          # [{"name": "default", "size": 3, ...}, ...]
 
 See [`clients/python/README.md`](../clients/python/README.md) for the full
 surface (`enqueue`, `bulk`, `status`, `cancel`, `queues`, `queue`,
-`pause_queue`/`unpause_queue`, `stats`) and error handling
+`pause_queue`/`unpause_queue`/`clear_queue`, `retry_retrying`/`retry_dead`,
+`batches`, `stats`) and error handling
 (`WurkAPIError`/`RateLimitedError`).
 
 Thin on purpose: no retries, no connection pooling, no framework

@@ -11,6 +11,13 @@ afterEach(() => {
 });
 
 describe('notifyError', () => {
+  it('maps a cross_origin 403 to its own message, not read-only', async () => {
+    render(() => <Toasts />);
+    notifyError(new RequestError(403, { error: 'cross_origin' }));
+    expect(await screen.findByText(t('toast.crossOrigin'))).toBeInTheDocument();
+    expect(screen.queryByText(t('toast.readonly'))).toBeNull();
+  });
+
   it('maps 403 to the read-only message', async () => {
     render(() => <Toasts />);
     notifyError(new RequestError(403));

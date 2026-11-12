@@ -31,6 +31,12 @@ module Wurk
         @routes = []
       end
 
+      # Pattern strings rebuilt from segments, so '/jobs/:jid' reads back as
+      # it was drawn.
+      def routes
+        @routes.map { |route| [route.verb, "/#{route.segments.join('/')}", route.scope] }
+      end
+
       def get(pattern, scope:, &handler) = add('GET', pattern, scope, handler)
       def post(pattern, scope:, &handler) = add('POST', pattern, scope, handler)
       def delete(pattern, scope:, &handler) = add('DELETE', pattern, scope, handler)

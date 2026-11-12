@@ -546,11 +546,22 @@ module Wurk
       end
     end
 
+    # One pipeline per generation of the batch tree rather than two round
+    # trips per batch: each flags its batches and reads their kids, the next
+    # flags those. Replay-safe for pipelined_eval: the flag converges and the
+    # reads are reads.
     def cascade_invalidate(bid)
-      Wurk.redis do |conn|
-        Wurk::Lua::Loader.eval_cached(conn, :batch_invalidate, keys: ["b-#{bid}"], argv: [])
-        kids = conn.call('SMEMBERS', "b-#{bid}-kids") || []
-        kids.each { |child| cascade_invalidate(child) }
+      generation = [bid]
+      until generation.empty?
+        replies = Wurk.redis do |conn|
+          Wurk::Lua::Loader.pipelined_eval(conn) do |pipe, eval_method|
+            generation.each do |member|
+              Wurk::Lua::Loader.public_send(eval_method, pipe, :batch_invalidate, keys: ["b-#{member}"], argv: [])
+              pipe.call('SMEMBERS', "b-#{member}-kids")
+            end
+          end
+        end
+        generation = replies.each_slice(2).flat_map { |_, kids| kids || [] }
       end
     end
 

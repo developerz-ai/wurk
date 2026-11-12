@@ -283,9 +283,16 @@ module Wurk
         Wurk.redis { |conn| conn.call('SCARD', "b-#{bid}-died") }.to_i.positive?
       end
 
+      # Two round trips however many kids: the death flags are read in one
+      # pipeline rather than one HGET per kid.
       def any_child_dead?(bid)
-        kids = Wurk.redis { |conn| conn.call('SMEMBERS', "b-#{bid}-kids") }
-        kids.any? { |kid| death_fired?(kid) }
+        Wurk.redis do |conn|
+          kids = conn.call('SMEMBERS', "b-#{bid}-kids")
+          next false if kids.empty?
+
+          flags = conn.pipelined { |pipe| kids.each { |kid| pipe.call('HGET', "b-#{kid}", 'death') } }
+          flags.include?('1')
+        end
       end
 
       # Per-callback rescue: one bad spec or a transient enqueue failure must

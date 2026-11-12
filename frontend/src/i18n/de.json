@@ -53,7 +53,8 @@
     "range_1h_desc": "die letzte Stunde",
     "range_24h_desc": "die letzten 24 Stunden",
     "range_7d_desc": "die letzten 7 Tage",
-    "range_30d_desc": "die letzten 30 Tage"
+    "range_30d_desc": "die letzten 30 Tage",
+    "viewAll": "Alle anzeigen"
   },
   "table": {
     "class": "Klasse",
@@ -197,7 +198,9 @@
     "reset": "Zurücksetzen",
     "enqueue": "Einreihen",
     "matching": "{n} passen zum Filter",
-    "all_filtered_hint": "„Alle\" wirkt auf die gesamte Menge, nicht nur auf die gefilterten Zeilen. Filter löschen, um es zu verwenden."
+    "matching_suffix": "Treffer",
+    "scope_matching": "die {n} zum Filter passenden Job(s) auf allen Seiten",
+    "sweeping": "{n} erledigt…"
   },
   "readonly": {
     "banner": "Nur-Lese-Modus"
@@ -209,7 +212,10 @@
     "unavailable": "Redis ist derzeit nicht verfügbar. Versuche es gleich noch einmal.",
     "dismiss": "Verwerfen",
     "region": "Benachrichtigungen",
-    "partial": "{count} angewendet, {failed} fehlgeschlagen. Die Liste wurde aktualisiert."
+    "partial": "{count} angewendet, {failed} fehlgeschlagen. Die Liste wurde aktualisiert.",
+    "crossOrigin": "Als Cross-Origin-Anfrage abgelehnt. Öffne das Dashboard mit demselben Schema, Host und Port, den der Server sieht (prüfe die Host- und X-Forwarded-*-Header deines Proxys).",
+    "swept": "{n} passende(r) Job(s) erledigt.",
+    "swept_partial": "{n} passende(r) Job(s) erledigt; es sind noch weitere übrig. Erneut ausführen, um fortzufahren."
   },
   "common": {
     "loading": "Lädt…",
@@ -221,9 +227,10 @@
     "load_failed": "Diese Seite konnte nicht geladen werden",
     "load_failed_hint": "Die App wurde möglicherweise seit dem Öffnen aktualisiert. Neu laden holt die neueste Version.",
     "reload": "Neu laden",
-    "filter_placeholder": "Nach Klasse oder JID filtern…",
+    "filter_placeholder": "Nach Klasse, JID oder Argumenten filtern…",
     "matching": "{n} Treffer",
-    "close": "Schließen"
+    "close": "Schließen",
+    "filter_placeholder_errors": "Nach Klasse, JID, Fehler oder Argumenten filtern…"
   },
   "limiters": {
     "exhausted": "erschöpft",
@@ -233,7 +240,9 @@
     "no_consumer": "Kein Konsument",
     "no_consumer_hint": "Kein aktiver Worker-Prozess abonniert diese Warteschlange, ihre Jobs werden also nicht ausgeführt.",
     "job_count": "{n} Jobs",
-    "latency_label": "Latenz"
+    "latency_label": "Latenz",
+    "oldest_first": "Älteste zuerst",
+    "newest_first": "Neueste zuerst"
   },
   "batches": {
     "children": "Kinder",
@@ -243,7 +252,10 @@
     "failed_jobs": "Fehlgeschlagene Jobs",
     "dead_jobs": "Tote Jobs",
     "complete": "abgeschlossen",
-    "invalidated": "ungültig"
+    "invalidated": "ungültig",
+    "active": "Aktiv",
+    "dead": "Tot",
+    "tag_placeholder": "Nach Tag filtern…"
   },
   "flows": {
     "graph": "Graph",
@@ -308,5 +320,12 @@
     "title": "Seite nicht gefunden",
     "hint": "Unter dieser Adresse gibt es im Dashboard keine Seite.",
     "home": "Zurück zum Dashboard"
+  },
+  "notices": {
+    "title": "Zustandshinweise",
+    "unconsumed": "Kein laufender Prozess abonniert: {names}. Ihre Jobs warten ohne Fehlermeldung.",
+    "foreign": "Nicht-Wurk-Prozesse laufen auf diesem Redis: {names}.",
+    "mixed": "Prozesse laufen mit unterschiedlichen Wurk-Versionen: {versions}.",
+    "embedded": "{n} Prozess(e) laufen eingebettet in einem Webserver."
   }
 }

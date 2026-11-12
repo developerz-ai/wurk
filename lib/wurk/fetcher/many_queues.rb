@@ -62,21 +62,31 @@ module Wurk
       end
 
       # `[public, private, public, private, ...]` for queues 2..n, fetch_first's
-      # KEYS, built as one Array rather than a pair per queue flattened. Strict
-      # mode with nothing paused hands #walk the same frozen array every pass,
-      # so the steady state reuses one build; a shuffled or filtered list is a
-      # fresh array per pass and rebuilds. Keyed on the pid too, for the reason
-      # #queue_keys is. Copy-on-write: processor threads share this fetcher.
+      # KEYS. A list #queues_cmd reuses across passes comes frozen (strict, with
+      # or without a pause), and its KEYS are built once and kept, keyed on the
+      # list's identity and the pid (for the reason #queue_keys is).
+      # Copy-on-write: processor threads share this fetcher. A shuffled list is
+      # new every pass, so its KEYS go into this thread's buffer instead: the
+      # script call copies them out before the buffer is written again.
       def claim_keys(queues)
         pid = PidCache.pid
         cached = @claim_keys
         return cached[2] if cached && cached[0].equal?(queues) && cached[1] == pid
+        return fill_claim_keys(claim_keys_buffer, queues) unless queues.frozen?
 
-        keys = []
-        queues.each_with_index { |public_q, i| keys << public_q << queue_keys(public_q).first unless i.zero? }
-        keys.freeze
+        keys = fill_claim_keys([], queues).freeze
         @claim_keys = [queues, pid, keys].freeze
         keys
+      end
+
+      def fill_claim_keys(keys, queues)
+        keys.clear
+        queues.each_with_index { |public_q, i| keys << public_q << queue_keys(public_q).first unless i.zero? }
+        keys
+      end
+
+      def claim_keys_buffer
+        ::Thread.current[:wurk_claim_keys] ||= []
       end
     end
   end

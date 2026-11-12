@@ -1,5 +1,6 @@
 import { For } from 'solid-js';
 import { t } from '../i18n';
+import { formatNumber } from '../utils';
 
 // One button's worth of config: the wire `cmd`, its localized label, whether
 // it's destructive (red + confirm), and the count it'd act on (drives the
@@ -15,12 +16,13 @@ interface JobSetActionBarProps {
   all: ActionDef[];
   selectedCount: number;
   total: number;
-  // A filter is narrowing the table. The "all" endpoints act on the whole
-  // set regardless (POST /api/<set>/all/<cmd> takes no filter), so they are
-  // disabled rather than let "Delete All" read as "delete what I see".
+  // A filter is narrowing the table: the "all" buttons then act on what it
+  // matches across the whole set, not just this page, and say so.
   filtered?: boolean;
   // Rows matching the active filter, preformatted ("1,204" / "20,000+").
   matching?: string;
+  // Entries a running filtered sweep has acted on so far.
+  progress?: number | null;
   pending: boolean;
   onBulk: (cmd: string) => void;
   onAll: (cmd: string) => void;
@@ -30,14 +32,20 @@ interface JobSetActionBarProps {
 // selection on the left, whole-set ("all") actions on the right. Rendered only
 // when the dashboard is read-write — callers gate on useMeta().read_only.
 export default function JobSetActionBar(props: JobSetActionBarProps) {
-  const confirmDanger = (a: ActionDef, scope: string) =>
-    !a.danger || window.confirm(t('actions.confirm', { action: a.label, scope }));
+  // Destructive actions confirm; so does any action over a filter's matches,
+  // which reaches rows the operator cannot see on this page.
+  const confirmDanger = (a: ActionDef, scope: string, always = false) =>
+    (!a.danger && !always) || window.confirm(t('actions.confirm', { action: a.label, scope }));
+  const allScope = () =>
+    props.filtered ? t('actions.scope_matching', { n: props.matching ?? '?' }) : t('actions.scope_all');
 
   return (
     <div class="action-bar">
       <div class="action-bar-group">
         <span class="action-bar-count">
-          {props.selectedCount > 0
+          {props.progress != null
+            ? t('actions.sweeping', { n: formatNumber(props.progress) })
+            : props.selectedCount > 0
             ? t('actions.selected', { n: props.selectedCount })
             : props.filtered && props.matching !== undefined
               ? t('actions.matching', { n: props.matching })
@@ -60,11 +68,10 @@ export default function JobSetActionBar(props: JobSetActionBarProps) {
           {(a) => (
             <button
               class={`btn btn-sm btn-ghost${a.danger ? ' btn-danger' : ''}`}
-              disabled={props.pending || props.total === 0 || props.filtered}
-              title={props.filtered ? t('actions.all_filtered_hint') : undefined}
-              onClick={() => confirmDanger(a, t('actions.scope_all')) && props.onAll(a.cmd)}
+              disabled={props.pending || props.total === 0}
+              onClick={() => confirmDanger(a, allScope(), props.filtered) && props.onAll(a.cmd)}
             >
-              {`${a.label} ${t('actions.all_suffix')}`}
+              {`${a.label} ${props.filtered ? t('actions.matching_suffix') : t('actions.all_suffix')}`}
             </button>
           )}
         </For>

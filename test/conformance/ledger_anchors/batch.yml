@@ -40,7 +40,7 @@
   fragment: |-
     @tags.each { |t| index_tag(pipe, "tags:#{t}") }
 - entry: 'Batch tags use a JSON field and reverse indexes, not `b-<bid>-tags`'
-  anchor: 'lib/wurk/batch.rb#L557-L560'
+  anchor: 'lib/wurk/batch.rb#L568-L571'
   fragment: |-
     data = fetch_hash
     load_meta(data)
@@ -52,7 +52,7 @@
     raw = @data['tags']
     return [] if raw.nil? || raw.empty?
 - entry: 'Batch tags use a JSON field and reverse indexes, not `b-<bid>-tags`'
-  anchor: 'lib/wurk/batch_set.rb#L52-L64'
+  anchor: 'lib/wurk/batch_set.rb#L68-L80'
   fragment: |-
     Wurk.redis do |conn|
     loop do

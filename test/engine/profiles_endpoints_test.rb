@@ -5,14 +5,14 @@ require 'net/http'
 
 # Drives the Profiles endpoints (#162) against the booted dummy app via
 # Rack::Test: the JSON list (/api/profiles) and the raw gzipped blob
-# (/profiles/:key/data). The external upload path (/profiles/:key) is driven
+# (/profiles/:key/data). The external upload (POST /profiles/:key) is driven
 # with Net::HTTP.start stubbed, never the real Firefox profiler.
 class ProfilesEndpointsTest < Wurk::Test::EngineCase
   parallelize_me!
 
   GECKO = '{"meta":{"interval":1},"threads":[]}'
 
-  # The dashboard's own link to /profiles/:key is a same-origin navigation.
+  # The dashboard's own upload form is a same-origin POST.
   def setup
     super
     header 'Sec-Fetch-Site', 'same-origin'
@@ -73,7 +73,7 @@ class ProfilesEndpointsTest < Wurk::Test::EngineCase
 
   # The store answers with a JWT; the view URL takes its payload's
   # `profileToken`, never the raw body (upstream Web::Application).
-  def test_profile_show_uploads_once_and_redirects_to_the_profile_token
+  def test_profile_upload_uploads_once_and_redirects_to_the_profile_token
     key = seed(jid: 'c', token: 't3')
     calls = 0
     fake = lambda do |*_args, **_opts|
@@ -82,8 +82,8 @@ class ProfilesEndpointsTest < Wurk::Test::EngineCase
     end
 
     stub_http_start(fake) do
-      get "/wurk/profiles/#{key}"
-      get "/wurk/profiles/#{key}"
+      post "/wurk/profiles/#{key}"
+      post "/wurk/profiles/#{key}"
     end
 
     assert_equal 302, last_response.status
@@ -93,62 +93,103 @@ class ProfilesEndpointsTest < Wurk::Test::EngineCase
   end
 
   # A `sid` Sidekiq's Web UI cached is reused as-is.
-  def test_profile_show_reuses_a_cached_sid
+  def test_profile_upload_reuses_a_cached_sid
     key = seed(jid: 'd', token: 't4')
     ::Wurk.redis { |c| c.call('HSET', key, 'sid', 'fromsidekiq') }
 
-    stub_http_start(->(*) { flunk 'uploaded despite a cached sid' }) { get "/wurk/profiles/#{key}" }
+    stub_http_start(->(*) { flunk 'uploaded despite a cached sid' }) { post "/wurk/profiles/#{key}" }
 
     assert_equal 'https://profiler.firefox.com/public/fromsidekiq', last_response.headers['Location']
   end
 
-  def test_profile_show_404_for_unknown_key
+  def test_profile_upload_404_for_unknown_key
+    post '/wurk/profiles/nope-missing'
+
+    assert_equal 404, last_response.status
+  end
+
+  def test_profile_upload_502_when_the_store_fails
+    key = seed(jid: 'f', token: 't5')
+
+    stub_http_start(->(*) { ::Net::HTTPInternalServerError.new('1.1', '500', 'boom') }) do
+      post "/wurk/profiles/#{key}"
+    end
+
+    assert_equal 502, last_response.status
+  end
+
+  # #101 W5: a GET must never send job data to a third party. It follows an
+  # upload already made and otherwise points at the POST.
+  def test_profile_get_never_uploads
+    key = seed(jid: 'g', token: 't6')
+
+    stub_http_start(->(*) { flunk 'a GET uploaded' }) { get "/wurk/profiles/#{key}" }
+
+    assert_equal 405, last_response.status
+    assert_equal 'POST', last_response.headers['Allow']
+  end
+
+  def test_profile_get_follows_a_cached_upload
+    key = seed(jid: 'h', token: 't7')
+    ::Wurk.redis { |c| c.call('HSET', key, 'sid', 'cached') }
+
+    get "/wurk/profiles/#{key}"
+
+    assert_equal 302, last_response.status
+    assert_equal 'https://profiler.firefox.com/public/cached', last_response.headers['Location']
+  end
+
+  def test_profile_get_404_for_unknown_key
     get '/wurk/profiles/nope-missing'
 
     assert_equal 404, last_response.status
   end
 
+  def test_read_only_refuses_upload_and_get
+    key = seed(jid: 'r', token: 't8')
+    ::Wurk.redis { |c| c.call('HSET', key, 'sid', 'cached') }
+    ::Wurk::Web.configure { |c| c.read_only = true }
+
+    stub_http_start(->(*) { flunk 'uploaded in read-only mode' }) do
+      post "/wurk/profiles/#{key}"
+
+      assert_equal 403, last_response.status
+
+      get "/wurk/profiles/#{key}"
+
+      assert_equal 403, last_response.status
+    end
+  ensure
+    ::Wurk::Web.reset_config!
+  end
+
   # W15 (#548): a cross-site page must not be able to trigger the upload with
-  # the operator's session (`<img src=".../profiles/<key>">`).
-  def test_profile_show_refuses_a_cross_site_request
+  # the operator's session (an auto-submitting form).
+  def test_profile_upload_refuses_a_cross_site_request
     key = seed(jid: 'x', token: 't9')
     header 'Sec-Fetch-Site', 'cross-site'
 
-    stub_http_start(->(*) { flunk 'uploaded for a cross-site request' }) { get "/wurk/profiles/#{key}" }
+    stub_http_start(->(*) { flunk 'uploaded for a cross-site request' }) { post "/wurk/profiles/#{key}" }
 
     assert_equal 403, last_response.status
   end
 
-  def test_profile_show_allows_a_typed_url
-    key = seed(jid: 'y', token: 't10')
-    ::Wurk.redis { |c| c.call('HSET', key, 'sid', 'cached') }
-    header 'Sec-Fetch-Site', 'none'
-
-    get "/wurk/profiles/#{key}"
-
-    assert_equal 302, last_response.status
-  end
-
-  def test_profile_show_without_fetch_metadata_requires_a_same_host_referer
+  def test_profile_upload_without_fetch_metadata_requires_a_same_origin_source
     key = seed(jid: 'z', token: 't11')
     ::Wurk.redis { |c| c.call('HSET', key, 'sid', 'cached') }
     header 'Sec-Fetch-Site', nil
 
-    get "/wurk/profiles/#{key}", {}, 'HTTP_REFERER' => 'https://evil.example/page'
+    post "/wurk/profiles/#{key}", {}, 'HTTP_ORIGIN' => 'https://evil.example'
 
     assert_equal 403, last_response.status
 
-    get "/wurk/profiles/#{key}"
+    post "/wurk/profiles/#{key}"
 
     assert_equal 403, last_response.status
 
-    get "/wurk/profiles/#{key}", {}, 'HTTP_REFERER' => 'http://example.org/wurk/profiles'
+    post "/wurk/profiles/#{key}", {}, 'HTTP_ORIGIN' => 'http://example.org'
 
     assert_equal 302, last_response.status
-
-    get "/wurk/profiles/#{key}", {}, 'HTTP_REFERER' => 'http://exa mple.org/'
-
-    assert_equal 403, last_response.status
   end
 
   private

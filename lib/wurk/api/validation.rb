@@ -176,6 +176,23 @@ module Wurk
       # @return [String] the fid.
       def fid!(fid) = url_safe!(fid, 'flow id')
 
+      # `?score=` is a member's ZSET score, the `at` a listing row carries.
+      # With it a lookup is one ZRANGEBYSCORE at that score instead of a ZSCAN
+      # over the whole set; nil when absent, so the caller falls back to the scan.
+      # @return [Float, nil]
+      def score!(query)
+        raw = query['score']
+        return nil if raw.nil? || raw == ''
+
+        score = Float(raw)
+        # Float accepts "nan" and "inf"; Redis refuses NaN as a range bound.
+        raise Invalid, "The 'score' parameter must be a number." unless score.finite?
+
+        score
+      rescue ::ArgumentError, ::TypeError
+        raise Invalid, "The 'score' parameter must be a number."
+      end
+
       def url_safe!(value, label)
         return value if value.is_a?(::String) && JID_FORMAT.match?(value)
 

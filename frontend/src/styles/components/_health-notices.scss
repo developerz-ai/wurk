@@ -1,0 +1,40 @@
+// ── Health notices ───────────────────────────────────────────────────────────
+// The Dashboard's strip of fleet conditions `wurk verify` would warn about
+// (src/components/HealthNotices.tsx). Absent while there is nothing to say.
+
+@use '../abstracts' as *;
+
+.health-notices {
+  display: flex;
+  flex-direction: column;
+  gap: to-rem(8);
+  margin-bottom: to-rem(20);
+}
+
+.health-notice {
+  display: flex;
+  align-items: center;
+  gap: to-rem(10);
+  padding: to-rem(10) to-rem(14);
+  border-radius: var(--radius);
+  font-size: to-rem(13);
+
+  &--warning {
+    background: color-mix(in oklch, var(--warning) 12%, transparent);
+    border: to-rem(1) solid color-mix(in oklch, var(--warning) 30%, transparent);
+    color: var(--warning);
+  }
+
+  &--info {
+    background: var(--surface-strong);
+    border: to-rem(1) solid var(--border);
+    color: var(--text-muted);
+  }
+
+  &__link {
+    margin-inline-start: auto;
+    white-space: nowrap;
+    color: inherit;
+    font-weight: 500;
+  }
+}

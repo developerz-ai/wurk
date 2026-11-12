@@ -50,14 +50,18 @@ export function dismissToast(id: number): void {
   });
 }
 
-// Maps a failed mutation to a status-aware toast: 403 = read-only mode, 404 =
-// the target was already acted on, 503 = Redis unavailable (plan 05's
-// structured 503s); anything else — including a non-HTTP network error — is a
-// generic failure.
+// Maps a failed mutation to a status-aware toast: a 403 whose body names
+// `cross_origin` is the same-origin guard (Wurk::SameOriginGuard), any other
+// 403 is read-only mode, 404 = the target was already acted on, 503 = Redis
+// unavailable (plan 05's structured 503s); anything else — including a non-HTTP
+// network error — is a generic failure.
 export function notifyError(err: unknown): void {
   const status = err instanceof RequestError ? err.status : 0;
-  const key =
-    status === 403
+  const body = err instanceof RequestError ? (err.body as { error?: unknown } | null | undefined) : undefined;
+  const crossOrigin = status === 403 && body?.error === 'cross_origin';
+  const key = crossOrigin
+    ? 'toast.crossOrigin'
+    : status === 403
       ? 'toast.readonly'
       : status === 404
         ? 'toast.gone'

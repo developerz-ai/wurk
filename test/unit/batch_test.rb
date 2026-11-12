@@ -314,6 +314,41 @@ class BatchTest < Wurk::Test::UnitCase
     assert_equal(2, @pool.with { |c| c.call('SCARD', "b-#{batch.bid}-jids") })
   end
 
+  # 07-A13: a generation of the tree costs one round trip, not two per batch
+  # (root + 40 kids + 40 grandkids was 162).
+  def test_invalidate_all_flags_the_tree_one_round_trip_per_generation
+    root, kids, grandkids = seed_tree(40)
+    batch = track(Wurk::Batch.new(root))
+    spy = TripSpy.new(Wurk.redis_pool)
+    Thread.current[:wurk_capsule] = spy
+    batch.invalidate_all
+    Thread.current[:wurk_capsule] = nil
+
+    assert_equal 3, spy.count
+    flags = @pool.with do |c|
+      c.pipelined { |p| [root, *kids, *grandkids].each { |b| p.call('HGET', "b-#{b}", 'invalidated') } }
+    end
+
+    assert_equal ['1'], flags.uniq
+  ensure
+    Thread.current[:wurk_capsule] = nil
+  end
+
+  # 07-A13: the subtree death gate reads every kid's flag in one pipeline.
+  def test_any_child_dead_reads_every_kid_in_one_pipeline
+    root, kids, = seed_tree(40)
+    spy = TripSpy.new(Wurk.redis_pool)
+    Thread.current[:wurk_capsule] = spy
+
+    refute Wurk::Batch::Callbacks.send(:any_child_dead?, root)
+    @pool.with { |c| c.call('HSET', "b-#{kids.last}", 'death', '1') }
+
+    assert Wurk::Batch::Callbacks.send(:any_child_dead?, root)
+    assert_equal 4, spy.count
+  ensure
+    Thread.current[:wurk_capsule] = nil
+  end
+
   def test_valid_default_true
     batch = track(Wurk::Batch.new)
     batch.jobs { perform_one(batch) }
@@ -491,6 +526,26 @@ class BatchTest < Wurk::Test::UnitCase
   def track(batch)
     @bids << batch.bid
     batch
+  end
+
+  # CommandSpy counting round trips: a pipeline is one, whatever it carries.
+  class TripSpy < Wurk::Test::CommandSpy
+    def record_batch(_commands) = nil
+  end
+
+  # A root with `width` kids, each with one grandkid, as raw batch hashes.
+  def seed_tree(width)
+    ns = "#{Process.pid}-#{object_id}"
+    root = "tree-#{ns}"
+    kids = Array.new(width) { |i| "#{root}-k#{i}" }
+    grandkids = kids.map { |kid| "#{kid}-g" }
+    @bids.push(root, *kids, *grandkids)
+    @pool.with do |c|
+      [root, *kids, *grandkids].each { |bid| c.call('HSET', "b-#{bid}", 'total', '0', 'pending', '0') }
+      c.call('SADD', "b-#{root}-kids", *kids)
+      kids.zip(grandkids).each { |kid, grandkid| c.call('SADD', "b-#{kid}-kids", grandkid) }
+    end
+    [root, kids, grandkids]
   end
 
   # Test stub — push through Wurk::Client so client middleware runs and

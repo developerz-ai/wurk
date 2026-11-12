@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/solid-query';
 import { createSignal, createMemo, onMount, For, Show, Switch, Match } from 'solid-js';
-import { A } from '@solidjs/router';
+import { A, useSearchParams } from '@solidjs/router';
 import { AreaChart } from '../components/charts';
 import { AnimatedNumber } from '../components/AnimatedNumber';
 import { PageHeader } from '../components/PageHeader';
@@ -12,6 +12,7 @@ import { timeZone } from '../tz';
 import { basePath } from '../basePath';
 import { getJSON } from '../http';
 import Icon from '../components/Icon';
+import { HealthNotices } from '../components/HealthNotices';
 
 interface StatsData {
   processed: number;
@@ -65,6 +66,15 @@ const RANGES = [
   { key: '30d', bucket: '1h', window: '30d', desc_key: 'dashboard.range_30d_desc' },
 ] as const;
 
+// Sidekiq Web's `GET /?days=N` (free §25.4, N in 1..180) opens the narrowest
+// range that covers N days. History is kept for 30 days, so anything longer
+// opens the 30d range.
+export function rangeIndexForDays(days: string | undefined): number {
+  const n = Number(days);
+  if (!Number.isInteger(n) || n < 1 || n > 180) return 0;
+  return n === 1 ? 1 : n <= 7 ? 2 : 3;
+}
+
 function DeltaSub(props: { pct: number | null; goodWhenUp: boolean }) {
   return (
     <Show when={props.pct !== null} fallback={<span class="obs-metric__sub">{t('dashboard.vs_last_hour')}</span>}>
@@ -86,7 +96,8 @@ function DeltaSub(props: { pct: number | null; goodWhenUp: boolean }) {
 
 export default function Dashboard() {
   const sse = useSSE();
-  const [rangeIdx, setRangeIdx] = createSignal(0); // default 1h
+  const [searchParams] = useSearchParams<{ days?: string }>();
+  const [rangeIdx, setRangeIdx] = createSignal(rangeIndexForDays(searchParams.days)); // default 1h
   const range = () => RANGES[rangeIdx()];
 
   onMount(() => {
@@ -156,6 +167,7 @@ export default function Dashboard() {
         {(s) => (
           <div class="obs">
             <Header />
+            <HealthNotices />
             <div class="obs-metrics">
               <A class="obs-card obs-metric obs-card--link" href="/metrics">
                 <div class="obs-metric__head">
@@ -289,7 +301,7 @@ export default function Dashboard() {
               <div class="obs-table__head">
                 <h2 class="obs-table__title">{t('table.queues')}</h2>
                 <A class="obs-table__link" href="/queues">
-                  View All <Icon name="arrow-right" />
+                  {t('dashboard.viewAll')} <Icon name="arrow-right" />
                 </A>
               </div>
               <Show

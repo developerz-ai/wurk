@@ -19,6 +19,7 @@ import chartLine from '@fortawesome/fontawesome-free/svgs/solid/chart-line.svg?r
 import check from '@fortawesome/fontawesome-free/svgs/solid/check.svg?raw';
 import circleCheck from '@fortawesome/fontawesome-free/svgs/solid/circle-check.svg?raw';
 import circleExclamation from '@fortawesome/fontawesome-free/svgs/solid/circle-exclamation.svg?raw';
+import circleInfo from '@fortawesome/fontawesome-free/svgs/solid/circle-info.svg?raw';
 import circleHalfStroke from '@fortawesome/fontawesome-free/svgs/solid/circle-half-stroke.svg?raw';
 import clock from '@fortawesome/fontawesome-free/svgs/solid/clock.svg?raw';
 import compass from '@fortawesome/fontawesome-free/svgs/solid/compass.svg?raw';
@@ -67,6 +68,7 @@ const SOURCES = {
   'circle-check': circleCheck,
   'circle-exclamation': circleExclamation,
   'circle-half-stroke': circleHalfStroke,
+  'circle-info': circleInfo,
   'clock': clock,
   'compass': compass,
   'crown': crown,

@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/solid-query';
 import { createSignal, onMount, For, Show, Switch, Match } from 'solid-js';
-import { useNavigate, useParams } from '@solidjs/router';
+import { useNavigate, useParams, useSearchParams } from '@solidjs/router';
 import { Pagination, maxPageOf } from '../components/Pagination';
 import { useServedPage } from '../hooks/useServedPage';
 import { ArgsValue } from '../components/ArgsValue';
@@ -19,6 +19,7 @@ import { SkeletonTable } from '../components/Skeleton';
 import { basePath } from '../basePath';
 import { getJSON, post } from '../http';
 import { notifyError } from '../toast';
+import Icon from '../components/Icon';
 
 interface QueueSummary {
   name: string;
@@ -63,12 +64,17 @@ function QueueJobs(props: { name: string }) {
   const meta = useMeta();
   const readOnly = () => meta.data?.read_only ?? false;
   const qc = useQueryClient();
+  // Sidekiq Web's `?direction=asc` (free §25.4): oldest first, so the job the
+  // next fetch takes is on top. Lives in the URL like `?page=`.
+  const [search, setSearch] = useSearchParams<{ direction?: string }>();
+  const asc = () => search.direction === 'asc';
+  const toggleDirection = () => setSearch({ direction: asc() ? undefined : 'asc', page: undefined });
 
   const query = useQuery<QueueDetail>(() => ({
-    queryKey: ['queue', props.name, page()],
+    queryKey: ['queue', props.name, page(), asc()],
     queryFn: () =>
       getJSON<QueueDetail>(
-        `${basePath()}/api/queues/${encodeURIComponent(props.name)}?page=${page() - 1}&count=${PAGE_SIZE}`,
+        `${basePath()}/api/queues/${encodeURIComponent(props.name)}?page=${page() - 1}&count=${PAGE_SIZE}${asc() ? '&direction=asc' : ''}`,
       ),
   }));
 
@@ -109,6 +115,16 @@ function QueueJobs(props: { name: string }) {
               <Show when={data().paused}>
                 <span class="badge badge-warning">{t('dashboard.paused')}</span>
               </Show>
+              <button
+                type="button"
+                class="btn btn-sm btn-ghost"
+                style={{ 'margin-inline-start': 'auto' }}
+                aria-pressed={asc()}
+                onClick={toggleDirection}
+              >
+                <Icon name={asc() ? 'arrow-up-short-wide' : 'arrow-down-wide-short'} />{' '}
+                {asc() ? t('queues.oldest_first') : t('queues.newest_first')}
+              </button>
             </div>
 
             <Show when={sorted().length > 0} fallback={<div class="empty-state">{t('common.empty')}</div>}>

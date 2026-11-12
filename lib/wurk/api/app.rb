@@ -3,6 +3,7 @@
 require 'rack'
 require_relative '../api'
 require_relative '../version'
+require_relative 'admin'
 require_relative 'auth'
 require_relative 'flows'
 require_relative 'jobs'
@@ -36,6 +37,10 @@ module Wurk
         draw(@router)
       end
 
+      # Every route this app answers, for test/unit/api_openapi_parity_test.rb
+      # to hold docs/api/openapi.yaml to.
+      def routes = @router.routes
+
       def call(env)
         request = Request.new(env)
         # Stamped once, before anything reads it, so every handler sees the
@@ -52,14 +57,14 @@ module Wurk
         @config || ::Wurk.configuration
       end
 
-      # One table per plane, each owning its own routes and handlers. Queues,
-      # Flows and Swarm join Jobs here.
+      # One table per plane, each owning its own routes and handlers.
       def draw(router)
         router.get('/', scope: Auth::ANY) { |request| root(request) }
         Jobs.draw(router)
         Queues.draw(router)
         Flows.draw(router)
         Swarm.draw(router)
+        Admin.draw(router)
       end
 
       # Authentication runs before the version gate and before routing, so an

@@ -39,6 +39,7 @@ module Wurk
         [:get, '/retries', :read, :retries],
         [:get, '/scheduled', :read, :scheduled],
         [:get, '/dead', :read, :dead],
+        [:get, '/batches', :read, :batches],
         [:get, '/batches/:bid', :read, :batch],
         [:post, '/queues/:name/pause', :admin, :pause],
         [:post, '/queues/:name/unpause', :admin, :unpause]
@@ -104,6 +105,15 @@ module Wurk
         total, entries = set.snapshot(window.offset, window.count)
         jobs = entries.map { |entry| Serializers.sorted_entry(entry) }
         Response.json(200, name: set.name, total: total, page: window.page, count: window.count, jobs: jobs)
+      end
+
+      # Newest first, each row Batch::Status#summary: the failed and dead jid
+      # sets counted rather than listed, so a page of 200 batches with 10k
+      # failures each is not two million jids. `/batches/:bid` carries them.
+      def batches(request)
+        window = Page.window!(request)
+        total, rows = ::Wurk::BatchSet.new.snapshot(window.offset, window.count)
+        Response.json(200, total: total, page: window.page, count: window.count, batches: rows)
       end
 
       def batch(request)

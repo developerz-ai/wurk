@@ -316,25 +316,54 @@ Anyone who can reach the mount can still read every job payload.
 
 The dashboard is a cookie-authenticated SPA that sends no Rails authenticity
 token, so `protect_from_forgery` doesn't apply. Wurk uses Sidekiq 8's model
-instead: **every mutating request must carry `Sec-Fetch-Site: same-origin`**.
+instead: **every mutating request must come from the dashboard's own origin**.
 
-- Browsers set that header themselves; a cross-site page can drive a victim's
-  browser but cannot forge it.
-- A **missing** header is denied too — only a non-browser client omits it, and
-  such a client carries no ambient session cookie to abuse.
+- With `Sec-Fetch-Site` present, it must be `same-origin`. Browsers set that
+  header themselves; a cross-site page can drive a victim's browser but cannot
+  forge it.
+- Browsers send `Sec-Fetch-Site` only to a potentially-trustworthy origin:
+  HTTPS, or `localhost`. A dashboard served over plain HTTP from any other host
+  (a LAN IP, an internal hostname) never gets it. Without it, the engine
+  compares the request's `Origin` header — or, when there is none, its
+  `Referer` — with the request's own scheme, host and port. They must match
+  exactly: `http://jobs.internal:8080` is not `http://jobs.internal` or
+  `https://jobs.internal:8080`. Browsers send `Origin` on every `fetch` POST,
+  so the SPA passes this check.
+- **Neither header present is denied.** Only a non-browser client omits all
+  three, and it carries no ambient session cookie to abuse.
+- A refusal is `403` with the JSON body `{"error":"cross_origin"}`; the SPA
+  shows it as a cross-origin refusal, not as read-only mode.
 - `GET`, `HEAD`, `OPTIONS`, `TRACE` are exempt.
-- Enforced identically on the JSON API, extension routes, and the standalone
-  Rack surface, so there's one rule to reason about.
+- Enforced identically on the JSON API, extension routes and the profile
+  upload. The standalone Rack surface
+  ([below](#the-standalone-sidekiqweb-mount)) still requires
+  `Sec-Fetch-Site: same-origin`, as Sidekiq does.
+
+Behind a reverse proxy, "the request's own" scheme, host and port are what Rails
+reads from it: `Host` (or `X-Forwarded-Host` when the app trusts the proxy),
+`X-Forwarded-Proto` and `X-Forwarded-Port`. A proxy that rewrites `Host`
+without forwarding the original makes every plain-HTTP mutation look
+cross-origin. Serve the dashboard over HTTPS and the `Sec-Fetch-Site` path
+applies instead.
 
 Consequence for scripting: a `curl`/service client **cannot** POST to the
-dashboard API unless it sets `Sec-Fetch-Site: same-origin` explicitly. That's
-deliberate. Prefer driving Wurk through its Ruby API (`Wurk::Queue`,
-`Wurk::RetrySet`, …) from your own authenticated endpoint rather than
-scripting the dashboard.
+dashboard API unless it sends `Sec-Fetch-Site: same-origin` or a matching
+`Origin` explicitly. That's deliberate. Prefer driving Wurk through its Ruby API
+(`Wurk::Queue`, `Wurk::RetrySet`, …) or the [HTTP API](api-http.md) from
+your own authenticated endpoint rather than scripting the dashboard.
 
 `Sidekiq::Web.configure { |c| c[:csrf] = false }` is accepted for
 compatibility (the setting round-trips) but does not disable the same-origin
 guard.
+
+### Profile uploads
+
+Sidekiq's Profiles page uploads a profile to the public Firefox profiler on a
+`GET /profiles/:key`. Sending job data to a third party is a side effect, so in
+Wurk only `POST /profiles/:key` uploads, under the same-origin rule above, and
+read-only mode refuses it. `GET /profiles/:key` redirects to an upload that
+already exists (made by either UI) and otherwise answers `405` with
+`Allow: POST`.
 
 ---
 

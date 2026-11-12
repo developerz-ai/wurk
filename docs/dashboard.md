@@ -1,5 +1,8 @@
 # Securing the dashboard
 
+> **Using the dashboard** — its pages, mounting under a sub-path, CSP, plain
+> HTTP: [Dashboard guide](dashboard-guide.md).
+>
 > **Full guide: [Authentication & authorization](authentication.md)** — Devise,
 > Warden, Sorcery, Basic auth, API tokens, route gates, role-based read/write
 > splits, the CSRF model, and what isn't gated. This page is the quick
@@ -181,8 +184,11 @@ security constraints remain the same:
   `t` helper; missing keys degrade to the humanized key (`DeleteAll` reads
   `Delete All`), never raise.
 - `erb :_paging` and `erb :_job_info` are built in, and `erb` honours `locals:`.
-- CSRF matches Sidekiq's model: non-`GET` extension requests must be
-  same-origin per `Sec-Fetch-Site`; cross-site requests are denied.
+- CSRF follows Sidekiq's model: non-`GET` extension requests must be
+  same-origin per `Sec-Fetch-Site`. In the engine mount, a plain-HTTP origin
+  that gets no such header is checked by `Origin`/`Referer` instead; the
+  standalone `Sidekiq::Web` rack app stays strict
+  ([§ CSRF](authentication.md#csrf)). Cross-site requests are denied.
 - Tabs added by bare `tabs["Label"] = "path"` mutation have no extension to
   render; those fall back to an Extension page that iframes the tab's own path
   (if the host mounts something reachable there, it renders in the frame).
