@@ -4,8 +4,8 @@ status: in_progress        # not_started | in_progress | blocked | complete | su
 created_by: sebi
 worked_by: "sebi (Claude Code)"
 owner: sebi
-percent: 45
-current_focus: "wave 5 PR (dashboard W1-W6/W9/W10, API A1-A4, observability O1-O7/K1-K5, algo A12/A13/A15/A17/A18, P3/P6, M9); adopter bumps to 1.14.0 in flight; then release 1.15.0, wave 6 soak"
+percent: 70
+current_focus: "24h soak on 1.15.0 running (started 2026-11-12 03:30Z, ~/soak/long-1.15.0, frozen tree 5ea710e); then publish Soak numbers in docs/benchmarks.md. Left: 12 T4 nightly vs_sidekiq, 09 W7 (design sign-off), 06 P6 bench section, adopter slice done-criteria (14-18)"
 slices:
   - file: 01-ci-green-doc-truth.md
     status: in_progress
@@ -26,23 +26,23 @@ slices:
     status: in_progress
     percent: 90
   - file: 07-algorithms.md
-    status: in_progress
-    percent: 95
+    status: complete
+    percent: 100
   - file: 08-memory.md
     status: in_progress
     percent: 95
   - file: 09-dashboard.md
     status: in_progress
-    percent: 90
+    percent: 95
   - file: 10-http-api-clients.md
-    status: in_progress
-    percent: 95
+    status: complete
+    percent: 100
   - file: 11-observability-ops.md
-    status: in_progress
-    percent: 95
+    status: complete
+    percent: 100
   - file: 12-proof-harness.md
     status: in_progress
-    percent: 40
+    percent: 75
   - file: 13-human-decisions.md
     status: complete
     percent: 100
@@ -125,6 +125,12 @@ decisions:
     by: executor (owner granted full authority incl. HITL rows, 2026-11-11 in-session)
     decision: "Real Pro/Ent Redis dump from a customer: closed. It is customer data and treasury is read-only; key shapes stay validated by the documented-shape parity oracles (test/parity) instead."
 evidence:
+  - "release 1.15.0: PR #922 merged (5ea710e); rubygems wurk 1.15.0; tag v1.15.0 -> 5ea710e; GitHub Release v1.15.0 latest (03:24Z); demo /demo/build 5ea710e. Carries wave 5a #920 (856fe0f; review: 16 threads, 6 fixed + 1 comment fix, 9 declined with evidence; stand-in pools deregistered from Metrics::PoolRegistry after compat legs caught the leak) and wave 5b #921 (be7d7e3; review: 10 threads, 7 fixed, 3 declined)."
+  - "1.15.0 live at every adopter (worker log lines, 2026-11-12): hiscore #117 01a642b via bin/deploy `Wurk 1.15.0 on redis 8.10.2`; tesote.com #527 adb27f6 `Wurk 1.15.0 on dragonfly 1.34.0`; gringotts #19 2e25c36 `Wurk 1.15.0 on dragonfly 1.34.0`; legald #317 ba7fd67 `Wurk 1.15.0 on dragonfly 1.39.0`; sales #384 7a6f43f (wurk removed from the CSP report-only exception: 1.15 runs under the enforced policy) `Wurk 1.15.0 on dragonfly 1.34.0`, /version 7a6f43f. 1.14.0 was live at all five before (#116/#383/#526/#18/#315)."
+  - "12 T2: PR #923 merged (9720d46): test/integration/mixed_fleet_test.rb runs real Sidekiq 8.1 + wurkswarm on one Redis via the soak ledger, own non-required CI job. Proved for plain + scheduled jobs: no loss/dup with both fleets on one queue, cross-side scheduled promotion, ms timestamps read both ways, TERM-stopped Wurk returns private lists, SIGKILLed Wurk host leaves them for a Wurk reaper (stock Sidekiq has no reclaim). docs/migrate-from-sidekiq.md now offers a rolling cutover for stock Sidekiq 8 only; 7.x/Pro/Ent stay drain-only."
+  - "12 soak: 2-min smoke on frozen 1.15.0 tree BALANCED (14,841 pushed, 0 lost, dup 3 all redis_outage-attributed, chaos kill9/parent_kill9/pause/redis_restart). 24h run (SOAK_MODE=long SOAK_DURATION=86400) started 2026-11-12 03:30Z; result pending."
+  - "18 legald: #316 merged (bdb145d): ci-backend runs on every PR (changes + always-running ci-ok gate); ruleset main-protection (20556709) requires ci-ok pinned to GitHub Actions (integration 15368). Root cause of #315 merging untested during the 2026-11-11 Actions outage. #317 states ci-ok as the required check."
+  - "open owner item: tesote/gringotts-wizarding-bank lacks repo secret INFRA_REPO_TOKEN, so Deploy's continue-on-error retention job fails each run (deploys unaffected)."
   - "wave 5 (branch wave5): 09 W1 CSP nonce on every script, W2 sub-path mount (relative asset URLs), W3 per U9 (Origin/Referer == own scheme+host+port when Sec-Fetch-Site absent, neither -> 403 {error:cross_origin} + own toast), W5 profiles upload POST-only (GET 405/redirect, read-only denied), W6 health notices from existing data (no heartbeat field), W4/W9 filters + Matching bulk via cursor (<=1000/req), batches ?tag/?dead=1, queue ?direction=asc, ?days=N, W10 page tests + docs/dashboard-guide.md, View All i18n, Geist Sans font now applies (W7 left: needs owner design sign-off). 10 A1 openapi.yaml + 2-way route parity test, A2 python e2e vs real wurk api (+ non-required python-e2e CI job), A3 admin retry/dead-retry/queue-clear/GET batches (idempotent), A4 docs/job-format.md + parity round-trip. 07 A12 bulk lookup 100->1 RT, A13 batch tree 162->3 RT, A17 ZSCAN 1000 + ?score= direct lookup, A15 metrics_retention (TTL only, 3d floor, default 30d), A18 outage replay 250->3 pushes. 06 P3 fetch-pass allocs 4->0 (strict+paused), 4-5->2 (weighted/random), 3.00 cmds/job unchanged; P6 heartbeat JSON built once (byte-identical test), statsd queue.size leader-only; L5/L6 skipped by measurement (lua.rb 2.4-2.7ms < 3ms bar; redis-client loads openssl itself). 11 O1 wurk_swarm_child_restarts_total{reason} + wurk_swarm_crash_streak (parent-owned unlinked file inherited by children, no Redis key; integration test SIGKILLs a child), O2-O7 (RTT, pool, poison/reclaim/leader/promotions+lag/buffer drops, oldest job + health --max-job-age, PSS, per-class histograms capped 20+other), K1 capistrano + StartLimit, K2/K3/K5. 08 M9 allocation budgets in metrics_query/dashboard_paging benches. Left: P6 heartbeat section in bench/command_count.rb; standalone Sidekiq::Web rack_app keeps strict Sec-Fetch-Site (U9 applied to the engine only)."
   - "release 1.14.0: PR #919 merged (9f70c45); rubygems wurk 1.14.0; tag v1.14.0 -> 9f70c45; GitHub Release; demo /demo/build 9f70c45. Carries waves 4a (#916/#917) + 4b (#918, review: 40 threads answered, 7 fixed)."
   - "19 X2: tesote/infrastructure#780 merged (b1dd5148): WURK_HEALTH_PORT=7433 on tesote-com, gringotts, sales (+staging) workers, prometheus.io annotations, per-stack NetworkPolicy; `wurk` alert group (MetricsMissing, ChildrenMissing, QueueLatencyHigh, QueueHasNoConsumers, WorkerRestarted, RedisUnreachable, NoLeader, DeadSetGrowing, FetchErrors) with promtool tests. Live: up=1 for all 5 worker pods, children fresh==expected, leader=1 per namespace, 9 rules health=ok inactive. Forced staging crash loop NOT run (would break shared staging; rules covered by promtool cases). Child-restart counter needs Wurk 11 O1 (wurk_swarm_child_restarts_total)."
@@ -157,4 +163,4 @@ evidence:
   - "wave 1 slice 'unique': Duration unique_for (string TTL ignored on release), retry_for Duration written as null, timeout/deadline Durations written as strings - fixed; follow-up: read side of Middleware::Timeout#bound_for for already-queued string timeouts."
   - "19 X1+X4: tesote/infrastructure#765 merged (2f33c9d2); tesote-com prod+staging and gringotts workers Ready on `wurk health` probes; grace already > timeout+5"
 notes: "Written 2026-11-10 from 5 read-only sweeps at v1.11.1 @ f6f509e. Sweeps 3-5 ran no tests, benches or Redis; rows marked inferred/suspect need a reproducing test first. Wave-4 cost cuts proceed only where wave-2 measurements justify them. Treasury is read-only. Human decisions U1-U11 in 13."
-last_updated: 2026-11-10
+last_updated: 2026-11-12
