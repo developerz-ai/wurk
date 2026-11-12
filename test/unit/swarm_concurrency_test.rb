@@ -38,7 +38,7 @@ class SwarmConcurrencyTest < Wurk::Test::UnitCase
       @order << :supervise
     end
 
-    def enqueue(_pids); end
+    def enqueue(_pids, _reason = nil); end
   end
 
   class ChurnSwarm < Wurk::Swarm

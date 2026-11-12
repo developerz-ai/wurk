@@ -19,6 +19,11 @@ module Wurk
   module Scheduled
     SETS = %w[retry schedule].freeze
 
+    # Promotions per set, for `/metrics` (`wurk_scheduler_promoted_total`).
+    def self.record_promotions(sset, count)
+      Metrics::ProcessCounters.increment([:scheduler_promoted, sset], count) if count.positive?
+    end
+
     # Source must match Wurk::Lua::ZPOPBYSCORE byte-for-byte: they share a SHA.
     LUA_ZPOPBYSCORE = Wurk::Lua::ZPOPBYSCORE
 
@@ -127,6 +132,7 @@ module Wurk
       def push_promoted(jobstr, sset, pushed)
         @client.push(Wurk.load_json(jobstr))
         pushed << jobstr
+        Scheduled.record_promotions(sset, 1)
         true
       rescue *TRANSIENT_ERRORS => e
         handle_exception(e, { context: 'scheduler_promote', set: sset })
@@ -235,6 +241,7 @@ module Wurk
             keys: [sset, Keys::QUEUES_SET, Keys::DEAD],
             argv: [real_time.to_s, Keys::QUEUE_PREFIX, real_ms.to_s, PROMOTE_BATCH.to_s]
           ).to_i
+          Scheduled.record_promotions(sset, promoted)
           break if promoted < PROMOTE_BATCH || @done
         end
       end

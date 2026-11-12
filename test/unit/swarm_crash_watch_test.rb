@@ -68,4 +68,17 @@ class SwarmCrashWatchTest < Wurk::Test::UnitCase
     refute w.due?([0], 200)
     assert w.due?([0], 250)
   end
+
+  def test_max_streak_is_the_longest_live_streak
+    w = watch
+
+    assert_equal 0, w.max_streak
+    2.times { |i| w.record(0, lifetime: 1, now: i) }
+    w.record(1, lifetime: 1, now: 0)
+
+    assert_equal 2, w.max_streak
+    w.settled(0, 61)
+
+    assert_equal 1, w.max_streak
+  end
 end

@@ -42,8 +42,12 @@ module Wurk
       # `fleet_size:` — slots in the swarm's topology, published to
       # Health.fleet_size so this child's health listener (if it wins the
       # port) can judge /ready on the whole swarm, not just itself.
-      def initialize(config, slot, index, parent_pid: ::Process.ppid, start_quiet: false, fleet_size: nil)
+      # `restart_counters:` — the parent's Swarm::RestartCounters, read by this
+      # child's health listener for `wurk_swarm_child_restarts_total`.
+      def initialize(config, slot, index, parent_pid: ::Process.ppid, start_quiet: false, fleet_size: nil,
+                     restart_counters: nil)
         @config = config
+        @restart_counters = restart_counters
         @slot = slot
         @index = index
         @fleet_size = fleet_size
@@ -61,6 +65,7 @@ module Wurk
         Wurk.server = true
         TestModeGuard.enforce!(@config.logger)
         Wurk::Health.fleet_size = @fleet_size
+        Wurk::Health.swarm_counters = @restart_counters
         # :fork runs in each child after our internal AR/Redis reconnect and
         # before fetching, so apps can reopen sockets / restart threads /
         # reconnect non-fork-safe libs (Ent §7.4). It never fires in the parent

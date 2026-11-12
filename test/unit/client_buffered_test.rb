@@ -164,9 +164,9 @@ class ClientBufferedTest < Wurk::Test::UnitCase
 
   # The replay is where the job actually reaches Redis, so that is where its
   # enqueue counts. Asserted as a sequence, not a tally: the totals match
-  # either way, and it is the attribution that moved — each replayed payload
-  # counts itself as it lands, then the live push counts its own.
-  def test_drain_emits_jobs_enqueued_as_each_payload_lands
+  # either way, and it is the attribution that moved — a replayed slice counts
+  # its payloads once it lands, then the live push counts its own.
+  def test_drain_emits_jobs_enqueued_as_each_slice_lands
     calls = with_statsd_capture do
       client, pool = outage_client
       client.push(base_item('args' => [1]))
@@ -175,8 +175,57 @@ class ClientBufferedTest < Wurk::Test::UnitCase
       client.push(base_item('args' => [3]))
     end
 
-    assert_equal %w[jobs.enqueued jobs.recovered.push jobs.enqueued jobs.recovered.push jobs.enqueued],
+    assert_equal %w[jobs.enqueued jobs.enqueued jobs.recovered.push jobs.recovered.push jobs.enqueued],
                  calls.grep(/\Ajobs\.(enqueued|recovered\.push)\z/)
+  end
+
+  # A18: a backlog replays in slices of REPLAY_SLICE, one raw_push each, in
+  # order, rather than one round trip per job.
+  def test_a_backlog_replays_in_slices_in_order
+    Wurk::Client.reliable_push_buffer = 1_000
+    client, pool = outage_client
+    count = (Wurk::Client::Buffered::REPLAY_SLICE * 2) + 50
+    count.times { |i| client.push(base_item('args' => [i])) }
+    recover(pool)
+    writes = pool.writes
+
+    assert_equal count, Wurk::Client::Buffered.drain!(client)
+    assert_equal 3, pool.writes - writes
+    assert_equal (0...count).map { |i| [i] }, queued_args.reverse
+  end
+
+  # One call is a pipeline per queue: a failure after the first queue landed
+  # gives back only the second queue's jobs, ahead of anything newer.
+  def test_a_partly_landed_slice_gives_back_only_what_did_not_land
+    other = "#{@queue}-other"
+    client, pool = outage_client
+    client.push(base_item('args' => [1]))
+    client.push(base_item('args' => [2], 'queue' => other))
+    pool.recover!
+    pool.fail_queue!("queue:#{other}")
+
+    assert_equal 1, Wurk::Client::Buffered.drain!(client, probe: true)
+    assert_equal [[1]], queued_args
+    assert_equal [[2]], buffered_args
+    assert_equal 1, Wurk::Client::Buffered.send(:undelivered_count)
+  ensure
+    @pool.with { |c| c.call('DEL', "queue:#{other}") }
+  end
+
+  def test_scheduled_and_immediate_backlog_each_land_where_they_belong
+    client, pool = outage_client
+    client.push(base_item('args' => [1]))
+    client.push(base_item('args' => [2], 'at' => Time.now.to_f + 3600))
+    client.push(base_item('args' => [3]))
+    recover(pool)
+
+    assert_equal 3, Wurk::Client::Buffered.drain!(client)
+    assert_equal [[1], [3]], queued_args.reverse
+    scheduled = @pool.with { |c| c.call('ZRANGE', 'schedule', 0, -1) }.map { |m| JSON.parse(m) }
+
+    assert_equal([[2]], scheduled.select { |j| j['queue'] == @queue }.map { |j| j['args'] })
+  ensure
+    @pool.with { |c| c.call('ZREMRANGEBYSCORE', 'schedule', '-inf', '+inf') }
   end
 
   # A payload the buffer never took (dropped by the ring cap) must not be
@@ -638,11 +687,13 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     Wurk::Client.reliable_push_buffer = 2
     failing = build_client(failing_pool)
     log = nil
+    drops = Wurk::Metrics::ProcessCounters.value(:client_buffer_drops)
     calls = with_statsd_capture do
       log = capture_wurk_log { 5.times { |i| failing.push(base_item('args' => [i])) } }
     end
 
     assert_equal 3, calls.count('jobs.dropped.push'), 'one count per dropped job'
+    assert_equal drops + 3, Wurk::Metrics::ProcessCounters.value(:client_buffer_drops)
     assert_equal 1, log.scan('reliable_push buffer full').size, 'one ERROR per burst, not per drop'
     assert_includes log, 'ERROR'
     assert_includes log, @class_name
@@ -1185,6 +1236,7 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     def fail! = @mode = :down
     def recover! = @mode = :up
     def explode! = @mode = :broken
+    def fail_queue!(key) = @failing_key = key
     def refuse! = @mode = :refusing
     def park_next_on(gate) = @gate = gate
 
@@ -1199,8 +1251,39 @@ class ClientBufferedTest < Wurk::Test::UnitCase
       when :refusing then raise RedisClient::CommandError, 'LOADING Redis is loading the dataset in memory'
       else
         @writes += 1
-        @real_pool.with(&)
+        @real_pool.with { |conn| yield(@failing_key ? KeyFailingConn.new(conn, @failing_key) : conn) }
       end
+    end
+  end
+
+  # Passes everything through but raises like a dead socket on a pipeline
+  # that writes `key`.
+  class KeyFailingConn
+    def initialize(conn, key)
+      @conn = conn
+      @key = key
+    end
+
+    def pipelined(&)
+      @conn.pipelined do |pipe|
+        yield KeyFailingPipe.new(pipe, @key)
+      end
+    end
+
+    def method_missing(...) = @conn.public_send(...)
+    def respond_to_missing?(name, include_private = false) = @conn.respond_to?(name, include_private) || super
+  end
+
+  class KeyFailingPipe < SimpleDelegator
+    def initialize(pipe, key)
+      super(pipe)
+      @key = key
+    end
+
+    def call(*args)
+      raise RedisClient::ConnectionError, 'simulated outage' if args.include?(@key)
+
+      __getobj__.call(*args)
     end
   end
 

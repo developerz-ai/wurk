@@ -95,10 +95,12 @@ class FetcherReaperTest < Wurk::Test::UnitCase
 
   def test_reclaims_orphaned_private_list_back_to_public_queue
     seed_private_list(DEAD_PID, %w[a b c])
+    drained = Wurk::Metrics::ProcessCounters.value(:reaper_drained)
 
     reclaimed = @reaper.reclaim!
 
     assert_equal 3, reclaimed
+    assert_equal drained + 3, Wurk::Metrics::ProcessCounters.value(:reaper_drained)
     assert_equal 0, llen(private_list(DEAD_PID)), 'private list should be drained'
     assert_equal 3, llen(@public_queue), 'jobs should be back on the public queue'
   end

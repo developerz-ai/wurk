@@ -77,8 +77,10 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
     json = payload_json
     3.times { recover(json) }
     @pool.with { |c| c.call('DEL', @public_q) }
+    kills = Wurk::Metrics::ProcessCounters.value(:poison_kills)
     recover(json)
 
+    assert_equal kills + 1, Wurk::Metrics::ProcessCounters.value(:poison_kills)
     assert_empty public_jobs
     assert_equal(0, @pool.with { |c| c.call('LLEN', @private_list) })
     assert_equal 1, dead_for_jid_count

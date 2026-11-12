@@ -60,6 +60,9 @@ module Wurk
       # own behavior, where a job that succeeds leaves nothing behind.
       status_ttl: Keys::STATUS_TTL,
       status_retention: nil,
+      # TTL in seconds of the 10-minute `j|` metrics buckets (Metrics::History);
+      # nil keeps MID_TERM, 30 days. See #metrics_retention=.
+      metrics_retention: nil,
       # Distributed tracing (Wurk::Telemetry). Seeded here, not written on
       # demand, so the read side answers on a config that `freeze!` has already
       # closed — and so a gem inspecting @options sees the same key set whether
@@ -186,6 +189,7 @@ module Wurk
     def []=(key, val)
       guard_frozen!
       RedisPool.validate_idle_timeout(val) if key == :redis_idle_timeout
+      val = parse_metrics_retention(val) if key == :metrics_retention && !val.nil?
       @options[key] = val
     end
 
@@ -195,6 +199,7 @@ module Wurk
     def merge!(other)
       guard_frozen!
       RedisPool.validate_idle_timeout(other[:redis_idle_timeout]) if other.key?(:redis_idle_timeout)
+      parse_metrics_retention(other[:metrics_retention]) unless other[:metrics_retention].nil?
       @options.merge!(other)
     end
 
@@ -973,6 +978,28 @@ module Wurk
     # WURK_MAXMEM_METRIC sets it, an explicit value wins.
     MEMORY_LIMIT_METRICS = %i[rss pss uss].freeze
 
+    # Upstream's own TTL for the 10-minute buckets; `hours:` windows read up to
+    # 72 hours of them, so nothing shorter is accepted.
+    METRICS_RETENTION_FLOOR = 3 * 24 * 60 * 60
+
+    # How long the 10-minute `j|` metrics buckets live. A TTL only: the keys,
+    # fields and scores stay Sidekiq's. Each live job class costs 3 fields per
+    # bucket, one bucket per 10 minutes, so retention scales those keys
+    # linearly (docs/metrics.md, "Redis footprint and retention"). nil restores
+    # the 30-day default.
+    def metrics_retention=(seconds)
+      guard_frozen!
+      @options[:metrics_retention] = seconds.nil? ? nil : parse_metrics_retention(seconds)
+    end
+
+    def parse_metrics_retention(seconds)
+      value = seconds.respond_to?(:to_i) ? seconds.to_i : 0
+      return value if value >= METRICS_RETENTION_FLOOR
+
+      raise ArgumentError, "metrics_retention must be >= #{METRICS_RETENTION_FLOOR}s (3 days), got #{seconds.inspect}"
+    end
+    private :parse_metrics_retention
+
     def memory_limit_metric
       @memory_limit_metric || env_memory_limit_metric || :rss
     end
@@ -1101,6 +1128,7 @@ module Wurk
     def validate_constructor_options!
       @options[:global_concurrency] = normalize_global_concurrency(@options[:global_concurrency])
       RedisPool.validate_idle_timeout(@options[:redis_idle_timeout])
+      parse_metrics_retention(@options[:metrics_retention]) unless @options[:metrics_retention].nil?
     end
 
     # One flat fork running the default capsule's queues + concurrency. The

@@ -446,6 +446,50 @@ class HeartbeatTest < Wurk::Test::UnitCase
     end
   end
 
+  # P6: queue.size is a cluster value, so only the leader LLENs for it.
+  def test_only_the_leader_emits_queue_sizes
+    Wurk::Test::STATSD_MUTEX.synchronize do
+      recorder = []
+      Wurk::Metrics::Statsd.instance_variable_set(:@client, build_statsd_client(recorder))
+      begin
+        build_heartbeat.beat!
+        follower = recorder.map { |m| m[1] }
+        recorder.clear
+        @pool.with { |c| c.call('SET', Wurk::Leader::DEFAULT_KEY, @identity) }
+        build_heartbeat.beat!
+      ensure
+        Wurk::Metrics::Statsd.reset!
+        @pool.with { |c| c.call('DEL', Wurk::Leader::DEFAULT_KEY) }
+      end
+
+      refute_includes follower, 'sidekiq.queue.size'
+      assert_includes recorder.map { |m| m[1] }, 'sidekiq.queue.size'
+    end
+  end
+
+  # P6: once the config is frozen the info JSON is built once, and it is the
+  # very bytes the per-beat builder produces.
+  def test_frozen_config_caches_the_info_json_byte_for_byte
+    hb = build_heartbeat
+    fresh = Wurk.dump_json(hb.send(:info_hash))
+    @config.define_singleton_method(:frozen?) { true }
+    cached = hb.send(:info_json)
+
+    assert_equal fresh, cached
+    assert_same cached, hb.send(:info_json)
+    hb.beat!
+
+    assert_equal(fresh, @pool.with { |c| c.call('HGET', @identity, 'info') })
+  end
+
+  def test_unfrozen_config_rebuilds_the_info_json
+    hb = build_heartbeat
+    first = hb.send(:info_json)
+    @config[:tag] = "#{@ns}-retagged"
+
+    refute_equal first, hb.send(:info_json)
+  end
+
   # --- page size (K26) -------------------------------------------------
 
   FakeEtc = Struct.new(:value) do

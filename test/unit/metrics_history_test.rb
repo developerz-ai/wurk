@@ -140,6 +140,45 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
     assert_in_delta Wurk::Metrics::Histogram::HISTOGRAM_TTL, hist, 60
   end
 
+  # A15: the 10-minute buckets' TTL is configurable; the key is not.
+  def test_metrics_retention_sets_the_ten_minute_ttl_only
+    Wurk.configuration.metrics_retention = 7 * 24 * 3600
+    Wurk::Metrics::History.record(@klass, 1, success: true, at: @at)
+    Wurk::Metrics::History.flush
+
+    short, mid = Wurk.redis do |c|
+      [Wurk::Metrics::History.minute_key(@at), Wurk::Metrics::History.ten_minute_key(@at)].map { |k| c.call('TTL', k) }
+    end
+
+    assert_in_delta 7 * 24 * 3600, mid, 60
+    assert_in_delta Wurk::Metrics::History::SHORT_TERM, short, 60
+  ensure
+    Wurk.configuration.metrics_retention = nil
+  end
+
+  def test_metrics_retention_rejects_less_than_upstreams_three_days
+    config = Wurk::Configuration.new
+
+    assert_raises(ArgumentError) { config.metrics_retention = 3600 }
+    assert_raises(ArgumentError) { config.metrics_retention = 'soon' }
+    config.metrics_retention = 3 * 24 * 3600
+
+    assert_equal 3 * 24 * 3600, config[:metrics_retention]
+  end
+
+  # wurk.yml reaches the config through merge!, and Configuration.new takes
+  # options directly: neither may slip a sub-floor TTL past the setter.
+  def test_metrics_retention_floor_holds_on_every_write_path
+    assert_raises(ArgumentError) { Wurk::Configuration.new(metrics_retention: 60) }
+    assert_raises(ArgumentError) { Wurk::Configuration.new.merge!(metrics_retention: 60) }
+    assert_raises(ArgumentError) { Wurk::Configuration.new[:metrics_retention] = 60 }
+
+    config = Wurk::Configuration.new(metrics_retention: 4 * 24 * 3600)
+    config.merge!(metrics_retention: nil)
+
+    assert_nil config[:metrics_retention]
+  end
+
   # `h|<klass>-D-H:M` u16 counters, one per Histogram::BUCKET_INTERVALS slot;
   # successes only.
   def test_record_writes_the_runtime_histogram

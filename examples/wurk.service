@@ -23,6 +23,12 @@ Description=wurk background worker
 # Start after Redis (and your DB) are reachable. Adjust to match your units —
 # e.g. `After=redis.service` if Redis runs on the same host via systemd.
 After=syslog.target network.target
+# A release that cannot boot must not restart forever: after 5 failed starts in
+# 5 minutes systemd stops trying and marks the unit failed, where
+# `systemctl status` and your alerting can see it. `systemctl reset-failed wurk`
+# re-arms it once fixed.
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 # Type=simple, NOT notify: Wurk does not emit sd_notify readiness/watchdog
@@ -45,14 +51,17 @@ ExecStart=/usr/local/bin/bundle exec wurk -e production
 ExecReload=/bin/kill -TSTP $MAINPID
 
 # Graceful shutdown: SIGTERM drains in-flight jobs up to Wurk's shutdown
-# timeout (`-t`, default 25s). Keep TimeoutStopSec a few seconds longer so a
-# clean drain always beats systemd's follow-up SIGKILL.
+# timeout (`-t`, default 25s); a wurkswarm parent waits `-t` + 5s before it
+# KILLs a straggler child. Keep TimeoutStopSec above that so a clean drain
+# always beats systemd's follow-up SIGKILL: raise both together.
 KillSignal=SIGTERM
-TimeoutStopSec=30
+TimeoutStopSec=35
 
-# Restart on crash, never on a clean SIGTERM stop.
+# Restart on crash, never on a clean SIGTERM stop. 5s apart, not 1s: a crash
+# at boot (bad config, Redis down) otherwise burns StartLimitBurst in seconds.
+# systemd >= 254 can back off instead: RestartSteps=5 and RestartMaxDelaySec=60.
 Restart=on-failure
-RestartSec=1
+RestartSec=5
 
 User=deploy
 Group=deploy

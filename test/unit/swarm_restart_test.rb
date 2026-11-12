@@ -47,6 +47,30 @@ class SwarmRestartTest < Wurk::Test::UnitCase
     assert_predicate @restart, :idle?
   end
 
+  # O1: each replacement forked is reported with the reason its slot was queued
+  # for, and a retried slot keeps its reason.
+  def test_restarted_reports_the_queued_reason_per_replacement
+    reasons = []
+    @restart = Wurk::Swarm::Restart.new(config.tap { |c| c.restarted = ->(reason) { reasons << reason } })
+    @restart.enqueue([100], :recycle)
+    @restart.advance
+    reap(@spawns.first[:pid])
+    @restart.advance
+    @t[0] += 1.0
+    @restart.advance
+
+    assert_equal %i[recycle recycle], reasons
+  end
+
+  def test_enqueue_defaults_to_rolling
+    reasons = []
+    @restart = Wurk::Swarm::Restart.new(config.tap { |c| c.restarted = ->(reason) { reasons << reason } })
+    @restart.enqueue([100])
+    @restart.advance
+
+    assert_equal [:rolling], reasons
+  end
+
   def test_replacement_death_keeps_old_and_retries_after_backoff
     @restart.enqueue([100])
     @restart.advance # spawn first replacement
@@ -97,6 +121,21 @@ class SwarmRestartTest < Wurk::Test::UnitCase
     assert_equal [0], @respawns
     assert_predicate @restart, :idle?
     assert_equal 1, @spawns.size, 'the restart machine must not retry a slot it handed off'
+  end
+
+  # The handed-off slot refills through the swarm's due-respawn path, which
+  # books no restart of its own: the machine counts it as the crash it is.
+  def test_both_dying_counts_the_handed_off_respawn_as_a_crash
+    reasons = []
+    @restart = Wurk::Swarm::Restart.new(config.tap { |c| c.restarted = ->(reason) { reasons << reason } })
+    @restart.enqueue([100], :recycle)
+    @restart.advance
+
+    reap(100)
+    reap(@spawns.first[:pid])
+    @restart.advance
+
+    assert_equal %i[recycle crash], reasons
   end
 
   def test_replacement_death_alone_never_hands_the_slot_to_respawn

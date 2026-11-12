@@ -41,6 +41,8 @@ module Wurk
       # upstream TTLs the 10-minute buckets at 3 days, but Wurk's dashboard
       # serves 7d/30d tabs off them (Query::MAX_HOURS = 720), so they must
       # live 30 days. Longer retention changes no key, field, or score.
+      # `config.metrics_retention=` overrides it (TTL only); MID_TERM stays the
+      # default.
       MID_TERM = 30 * 24 * 60 * 60
       SHORT_TERM = 8 * 60 * 60
 
@@ -148,8 +150,9 @@ module Wurk
         # drops a window Redis stayed down through.
         def flush(accumulator = ACCUMULATOR)
           error = nil
+          mid_term = Wurk.configuration[:metrics_retention] || MID_TERM
           accumulator.drain.each do |pool, minutes|
-            write(pool, minutes)
+            write(pool, minutes, mid_term)
           rescue ConnectionPool::PoolShuttingDownError
             next
           rescue StandardError => e
@@ -186,22 +189,24 @@ module Wurk
         # The `j|` keys are shared by every class, so each gets its EXPIRE once,
         # after the last HINCRBY into it; a 10-minute key two minutes share gets
         # one too. A histogram key is per class and minute, so it keeps its own.
-        def write(pool, minutes)
+        def write(pool, minutes, mid_term = MID_TERM)
           with_pool(pool) do |conn|
             conn.pipelined do |pipe|
-              ttls = minutes.each_with_object({}) { |(minute, classes), acc| write_minute(pipe, minute, classes, acc) }
+              ttls = minutes.each_with_object({}) do |(minute, classes), acc|
+                write_minute(pipe, minute, classes, acc, mid_term)
+              end
               ttls.each { |key, ttl| pipe.call('EXPIRE', key, ttl) }
             end
           end
         end
 
         # Writes one minute's classes and notes its two `j|` keys' TTLs in `ttls`.
-        def write_minute(pipe, minute, classes, ttls)
+        def write_minute(pipe, minute, classes, ttls, mid_term)
           at = ::Time.at(minute * 60).utc
           short = minute_key(at)
           keys = [short, short.chop]
           classes.each { |klass, counts| write_class(pipe, keys, at, klass, counts) }
-          ttls[keys[1]] = MID_TERM
+          ttls[keys[1]] = mid_term
           ttls[keys[0]] = SHORT_TERM
         end
 

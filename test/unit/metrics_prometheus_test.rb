@@ -48,6 +48,14 @@ class MetricsPrometheusTest < Wurk::Test::UnitCase
     assert_in_delta(3.0, families['wurk_processes'][{}], 0.001, 'the expired identity is not a process')
     assert_in_delta(6.0, families['wurk_busy'][{}])
     assert_in_delta(30.0, families['wurk_concurrency'][{}])
+    assert_in_delta 0.0, families['wurk_scheduler_lag_seconds'][{ 'set' => 'retry' }], 1.0
+    assert_in_delta(0.0, families['wurk_scheduler_lag_seconds'][{ 'set' => 'schedule' }], 0.001, 'not due yet')
+  end
+
+  def test_scheduler_lag_is_the_age_of_the_earliest_due_member
+    @redis.call('ZADD', 'retry', Time.now.to_f - 90, '{"late":1}')
+
+    assert_in_delta 90.0, parse(@collector.render)['wurk_scheduler_lag_seconds'][{ 'set' => 'retry' }], 5.0
   end
 
   def test_local_families_cover_only_this_process_group
@@ -140,7 +148,117 @@ class MetricsPrometheusTest < Wurk::Test::UnitCase
     assert_operator families['wurk_fetch_errors_total'][{}], :>=, 1
   end
 
+  def test_rtt_and_oldest_job_per_local_process
+    seed
+    now = Time.now.to_f
+    @redis.call('HSET', "#{HOST}:101:#{NONCE}", 'rtt_us', '1500')
+    work = Wurk.dump_json('queue' => 'default', 'payload' => '{"run_at":1}', 'run_at' => (now - 30).to_i)
+    @redis.call('HSET', "#{HOST}:101:#{NONCE}:work", 't1', work)
+    families = parse(@collector.render)
+
+    assert_in_delta(0.0015, families['wurk_process_redis_rtt_seconds'][{ 'pid' => '101' }])
+    assert_in_delta 30.0, families['wurk_process_oldest_job_seconds'][{ 'pid' => '101' }], 2.0
+    assert_in_delta(0.0, families['wurk_process_oldest_job_seconds'][{ 'pid' => '102' }])
+  end
+
+  def test_pss_is_read_from_proc_for_a_live_local_pid
+    skip 'no /proc smaps_rollup' unless File.readable?('/proc/self/smaps_rollup')
+
+    process("#{HOST}:#{::Process.pid}:#{NONCE}", busy: 0, beat: Time.now.to_f)
+    process("#{HOST}:999999999:#{NONCE}", busy: 0, beat: Time.now.to_f)
+    pss = parse(@collector.render)['wurk_process_pss_bytes']
+
+    assert_operator pss[{ 'pid' => ::Process.pid.to_s }], :>, 0
+    refute pss.key?({ 'pid' => '999999999' }), 'an unreadable pid is left out, not reported as 0'
+  end
+
+  def test_swarm_restart_families_only_with_a_snapshot
+    snap = Wurk::Swarm::RestartCounters::Snapshot.new({ crash: 2, recycle: 1, liveness: 0, rolling: 4 }, 3)
+    families = parse(@collector.render(swarm: snap))
+
+    assert_in_delta(2.0, families['wurk_swarm_child_restarts_total'][{ 'reason' => 'crash' }])
+    assert_in_delta(4.0, families['wurk_swarm_child_restarts_total'][{ 'reason' => 'rolling' }])
+    assert_in_delta(3.0, families['wurk_swarm_crash_streak'][{}])
+    refute parse(@collector.render).key?('wurk_swarm_crash_streak')
+  end
+
+  def test_process_counter_families
+    counters = Wurk::Metrics::ProcessCounters
+    before = parse(@collector.render)
+    counters.increment(:poison_kills)
+    counters.increment(:leader_acquired)
+    counters.increment(:client_buffer_drops, 2)
+    counters.increment(:reaper_reclaimed, 5)
+    counters.increment(:reaper_drained, 3)
+    Wurk::Scheduled.record_promotions('schedule', 4)
+    Wurk::Scheduled.record_promotions('retry', 0)
+    after = parse(@collector.render)
+
+    { 'wurk_poison_kills_total' => 1, 'wurk_leader_acquired_total' => 1,
+      'wurk_client_buffer_dropped_total' => 2 }.each do |name, delta|
+      assert_in_delta(before[name][{}] + delta, after[name][{}], 0.001, name)
+    end
+    reclaimed = %w[reaper self].map do |source|
+      after['wurk_jobs_reclaimed_total'][{ 'source' => source }] -
+        before['wurk_jobs_reclaimed_total'][{ 'source' => source }]
+    end
+
+    assert_equal [3.0, 2.0], reclaimed
+    assert_in_delta(4.0, after['wurk_scheduler_promoted_total'][{ 'set' => 'schedule' }] -
+                         before['wurk_scheduler_promoted_total'][{ 'set' => 'schedule' }])
+  end
+
+  def test_redis_pool_gauges_and_checkout_timeouts
+    pool = Wurk::RedisPool.new(size: 2, name: 'prom-probe', url: Wurk::Test.redis_url, pool_timeout: 0.01)
+    families = parse(@collector.render)
+
+    assert_in_delta(2.0, families['wurk_redis_pool_size'][{ 'pool' => 'prom-probe' }])
+    assert_in_delta(2.0, families['wurk_redis_pool_available'][{ 'pool' => 'prom-probe' }])
+    before = families['wurk_redis_pool_checkout_timeouts_total'][{ 'pool' => 'prom-probe' }]
+    starve(pool)
+    families = parse(@collector.render)
+
+    assert_in_delta(before + 2, families['wurk_redis_pool_checkout_timeouts_total'][{ 'pool' => 'prom-probe' }])
+    pool.disconnect!
+
+    refute parse(@collector.render)['wurk_redis_pool_size'].key?({ 'pool' => 'prom-probe' })
+  end
+
+  def test_job_duration_histogram_is_cumulative
+    acc = Wurk::Metrics::History::ACCUMULATOR
+    3.times { acc.add(nil, 'PromHistJob', 0, 25, true) }
+    acc.drain
+    families = parse(@collector.render)
+    buckets = families['wurk_job_duration_seconds_bucket']
+
+    assert_operator buckets[{ 'class' => 'PromHistJob', 'le' => '0.02' }], :<=,
+                    buckets[{ 'class' => 'PromHistJob', 'le' => '0.03' }]
+    assert_operator buckets[{ 'class' => 'PromHistJob', 'le' => '0.03' }], :>=, 3
+    assert_equal buckets[{ 'class' => 'PromHistJob', 'le' => '+Inf' }],
+                 families['wurk_job_duration_seconds_count'][{ 'class' => 'PromHistJob' }]
+  end
+
+  def test_duration_classes_past_the_cap_fold_into_other
+    cap = Wurk::Metrics::ProcessFamilies::HISTOGRAM_CLASSES
+    hist = Array.new(Wurk::Metrics::Histogram::SIZE, 0)
+    lifetime = (0..(cap + 1)).to_h { |i| ["K#{i}", [100 - i, 1000, hist]] }
+    kept = Wurk::Metrics::ProcessFamilies.send(:capped_durations, lifetime)
+
+    assert_equal cap + 1, kept.size
+    assert_equal (100 - cap) + (100 - cap - 1), kept['other'][0]
+  end
+
   private
+
+  def starve(pool)
+    release = Queue.new
+    holders = Array.new(pool.size) { Thread.new { pool.with { release.pop } } }
+    sleep 0.01 until pool.available.zero?
+    assert_raises(ConnectionPool::TimeoutError) { pool.with { nil } }
+  ensure
+    holders&.size&.times { release << true }
+    holders&.each(&:join)
+  end
 
   def seed
     now = Time.now.to_f
@@ -176,7 +294,8 @@ class MetricsPrometheusTest < Wurk::Test::UnitCase
 
       name, labels, value = parse_sample(line)
 
-      assert typed.key?(name), "sample #{name} has no TYPE line"
+      assert typed.key?(name) || typed[name.sub(/_(?:bucket|sum|count)\z/, '')] == 'histogram',
+             "sample #{name} has no TYPE line"
       series = (families[name] ||= {})
 
       refute series.key?(labels), "duplicate series #{line}"
@@ -191,7 +310,7 @@ class MetricsPrometheusTest < Wurk::Test::UnitCase
     assert_includes %w[HELP TYPE], kind, "bad comment #{line}"
     return unless kind == 'TYPE'
 
-    assert_includes %w[counter gauge], rest, "bad TYPE #{line}"
+    assert_includes %w[counter gauge histogram], rest, "bad TYPE #{line}"
     typed[name] = rest
   end
 

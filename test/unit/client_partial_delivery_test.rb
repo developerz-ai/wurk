@@ -207,6 +207,7 @@ class ClientPartialDeliveryTest < Wurk::Test::UnitCase
     conn = MidPushDropConn.new(raw_conn, deliver: deliver, kind: kind)
     pool = Wurk::RedisPool.new(size: 1, url: Wurk::Test.redis_url, name: 'partial')
     pool.instance_variable_set(:@pool, SingleConnPool.new(conn))
+    Wurk::Metrics::PoolRegistry.deregister(pool) # no pool for /metrics to report
     pool
   end
 

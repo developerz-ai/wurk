@@ -17,7 +17,9 @@ class ExamplesKubernetesTest < Wurk::Test::UnitCase
     used = rules.flat_map { |rule| rule.fetch('expr').scan(METRIC) }.uniq
     config = Wurk::Configuration.new
     config.logger = ::Logger.new(IO::NULL)
-    exposed = Wurk::Metrics::Prometheus.new(config).render(expected_children: 1).scan(/^# TYPE (\w+)/).flatten
+    swarm = Wurk::Swarm::RestartCounters::Snapshot.new({}, 0)
+    exposed = Wurk::Metrics::Prometheus.new(config).render(expected_children: 1, swarm: swarm)
+                                       .scan(/^# TYPE (\w+)/).flatten
 
     assert_operator used.size, :>=, 8
     assert_empty used - exposed, "not exported: #{(used - exposed).inspect}"

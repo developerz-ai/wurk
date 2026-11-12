@@ -5,6 +5,7 @@ require_relative '../keys'
 require_relative '../timer_loop'
 require_relative 'oom_drain'
 require_relative 'reliable'
+require_relative '../metrics/process_counters'
 
 module Wurk
   class Fetcher
@@ -344,6 +345,8 @@ module Wurk
       rescue StandardError => e
         handle_exception(e, context: THREAD_NAME)
         count
+      ensure
+        Metrics::ProcessCounters.increment(:reaper_drained, count) if count&.positive?
       end
 
       def acquire_lock?

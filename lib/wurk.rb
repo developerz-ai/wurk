@@ -69,7 +69,8 @@ Wurk::LazyLoader.register(Wurk::Job, Iterable: 'iterable_job')
 Wurk::LazyLoader.register(
   Wurk::Metrics,
   Query: 'metrics/query', DashboardSeries: 'metrics/dashboard_series', Rollup: 'metrics/rollup',
-  QueueRollup: 'metrics/queue_rollup', Flusher: 'metrics/flusher', Prometheus: 'metrics/prometheus'
+  QueueRollup: 'metrics/queue_rollup', Flusher: 'metrics/flusher', Prometheus: 'metrics/prometheus',
+  Exposition: 'metrics/exposition', ProcessFamilies: 'metrics/process_families'
 )
 Wurk::LazyLoader.register(
   Wurk::Fetcher,
