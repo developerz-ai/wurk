@@ -2,12 +2,13 @@
 
 require 'minitest/autorun'
 
-# Running Sidekiq and Wurk workers against one Redis at the same time is not
-# tested (audit R4: Wurk's five-segment private lists are never reclaimed by
-# stock Sidekiq; Enterprise leader election and unique locks are unexercised
-# across the two). The supported production path is the drain cutover in
-# docs/migrate-from-sidekiq.md §9. Until an integration test proves a mixed
-# fleet, no public doc may promise one, nor a rollback that skips the drain.
+# Running Sidekiq and Wurk workers against one Redis at the same time is tested
+# for stock Sidekiq 8 only (test/integration/mixed_fleet_test.rb), and even
+# there stock Sidekiq never reclaims Wurk's private lists. Sidekiq 7.x, Pro and
+# Enterprise next to Wurk are untested (audit R4: Enterprise leader election and
+# unique locks are unexercised across the two), so the drain cutover in
+# docs/migrate-from-sidekiq.md §9 stays their path. No public doc may promise a
+# mixed fleet without that scope, nor a rollback that skips the drain.
 # Reads files and touches no Redis or shared state.
 class CutoverClaimsTest < Minitest::Test
   parallelize_me!
@@ -70,6 +71,16 @@ class CutoverClaimsTest < Minitest::Test
     assert_empty offenders,
                  'a mixed Sidekiq + Wurk fleet is untested; document the drain cutover ' \
                  "(docs/migrate-from-sidekiq.md §9) instead:\n#{offenders.join("\n")}"
+  end
+
+  def test_the_rolling_cutover_note_names_its_evidence_and_scope
+    note = guide_text[/^#### Rolling cutover: stock Sidekiq 8 only\n.*?(?=^#)/m]
+
+    refute_nil note, 'the §9 rolling-cutover note is gone from the migration guide'
+    assert_includes note, 'test/integration/mixed_fleet_test.rb'
+    assert_path_exists File.join(ROOT, 'test/integration/mixed_fleet_test.rb')
+    assert_includes note, 'Sidekiq 7.x, Pro and Enterprise stay on the drain cutover'
+    assert_includes note, 'it has no reclaim'
   end
 
   def test_the_migration_guide_keeps_its_cutover_and_rollback_procedure

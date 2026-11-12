@@ -2,7 +2,7 @@
 
 The question this page answers: **will my exact setup work?**
 
-Wurk reproduces Sidekiq's public interface — the same Redis key schema, the same job JSON, the same sorted-set score formats, and every public `Wurk::*` class exposed under its `Sidekiq::*` name. Existing jobs and existing Redis data keep working on a one-line `Gemfile` swap; a live move is a drain cutover — mixed fleets are not yet tested.
+Wurk reproduces Sidekiq's public interface — the same Redis key schema, the same job JSON, the same sorted-set score formats, and every public `Wurk::*` class exposed under its `Sidekiq::*` name. Existing jobs and existing Redis data keep working on a one-line `Gemfile` swap; a live move is a drain cutover, except that a stock Sidekiq 8 app (no Pro, no Enterprise) may roll with both fleets live, under the conditions in the [migration guide](https://github.com/developerz-ai/wurk/blob/main/docs/migrate-from-sidekiq.md#rolling-cutover-stock-sidekiq-8-only).
 
 Behind that interface the runtime is Wurk's own. A small number of behaviours therefore differ **deliberately**, and this page lists the ones you can observe from your application.
 
