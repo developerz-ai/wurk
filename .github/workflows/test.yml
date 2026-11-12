@@ -652,7 +652,9 @@ jobs:
         run: BUNDLE_GEMFILE="$GITHUB_WORKSPACE/bench/vs_sidekiq/Gemfile" bundle install
       - name: mixed fleet test
         if: env.RUN == 'true'
-        run: bundle exec rake test TEST=test/integration/mixed_fleet_test.rb
+        # test:integration, not test: the `test` task first builds the dashboard SPA,
+        # which this job has no bun for and this file does not need.
+        run: bundle exec rake test:integration TEST=test/integration/mixed_fleet_test.rb
 
   # Guard against deleted/truncated spec docs (the authoritative oracles for
   # parity). This is a quick, standalone check that doesn't require Redis or Ruby.
