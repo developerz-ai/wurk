@@ -482,7 +482,7 @@ function JobMetricsModal(props: { klass: string | null; hours: number; onClose: 
 // §5.2) — kept below the mock layout so the feature isn't lost.
 function QueueLatencyHistory(props: { range: (typeof RANGES)[number] }) {
   const data = useQuery(() => ({
-    queryKey: ['queue-history-lat', props.range.bucket, props.range.window],
+    queryKey: ['queue-history', props.range.bucket, props.range.window],
     queryFn: () => getJSON<QueueHistoryResponse>(`${basePath()}/api/queue-history/${props.range.bucket}?window=${props.range.window}`),
     refetchInterval: 30000,
   }));

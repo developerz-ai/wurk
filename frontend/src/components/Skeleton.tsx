@@ -3,10 +3,9 @@ import { t } from '../i18n';
 
 // Content-shaped loading placeholders. Prefer these over a lone spinner: they
 // hint at the layout that's coming, so the swap to real data doesn't shift the
-// page. Styling + shimmer live in styles/components/_skeleton.scss; the shimmer
-// freezes to a static tint under prefers-reduced-motion (base/_motion.scss).
+// page. Styling lives in styles/components/_skeleton.scss (static, no shimmer).
 //
-// The shimmering blocks carry no information, so they're aria-hidden; wrappers
+// The placeholder blocks carry no information, so they're aria-hidden; wrappers
 // expose `role="status"` + `aria-busy` so assistive tech announces the wait.
 
 type Size = number | string;
@@ -24,7 +23,7 @@ interface SkeletonProps {
   style?: JSX.CSSProperties;
 }
 
-/** A single shimmering block. Size it via props or let it fill its container. */
+/** A single placeholder block. Size it via props or let it fill its container. */
 export function Skeleton(props: SkeletonProps) {
   return (
     <span
@@ -77,7 +76,7 @@ export function SkeletonCards(props: { count?: number }) {
 export function PageSkeleton() {
   return (
     <div role="status" aria-busy="true" aria-label={t('common.loading')}>
-      <div class="page-header" style={{ animation: 'none' }}>
+      <div class="page-header">
         <Skeleton width="2.75rem" height="2.75rem" radius="var(--radius)" />
         <div class="skeleton-stack" style={{ flex: 1, 'max-width': '18rem' }}>
           <Skeleton height="1.4rem" width="45%" />

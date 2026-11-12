@@ -19,8 +19,4 @@
   overscroll-behavior: contain;
   @include surface;
   box-shadow: var(--shadow);
-  // Gentle entrance, same fade-up as the page header (slightly delayed so the
-  // header leads and the table follows). Runs once on mount, not on refetch.
-  animation: fade-up var(--dur-page) var(--ease-standard) both;
-  animation-delay: 50ms;
 }

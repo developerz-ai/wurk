@@ -1,10 +1,9 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { renderHook, waitFor } from '@solidjs/testing-library';
 import { MemoryRouter, Route, createMemoryHistory, useLocation } from '@solidjs/router';
 import type { JSX } from 'solid-js';
 import { useSort, type Accessors } from './useSort';
 import { useSelection } from './useSelection';
-import { useCountUp } from './useCountUp';
 import { usePageParam } from './usePageParam';
 
 interface Row {
@@ -84,32 +83,6 @@ describe('useSelection', () => {
 
     result.clear();
     expect(result.count()).toBe(0);
-  });
-});
-
-describe('useCountUp', () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it('snaps straight to the target under prefers-reduced-motion', async () => {
-    vi.stubGlobal(
-      'matchMedia',
-      vi.fn().mockReturnValue({
-        matches: true,
-        addEventListener: () => {},
-        removeEventListener: () => {},
-      }),
-    );
-    const { result } = renderHook(() => useCountUp(() => 42));
-    await waitFor(() => expect(result()).toBe(42));
-  });
-
-  it('snaps (never animates) when the target is non-finite', async () => {
-    // No matchMedia stub → prefers-reduced-motion is false, so the finite guard
-    // is what short-circuits the rAF tween.
-    const { result } = renderHook(() => useCountUp(() => Number.POSITIVE_INFINITY));
-    await waitFor(() => expect(result()).toBe(Number.POSITIVE_INFINITY));
   });
 });
 

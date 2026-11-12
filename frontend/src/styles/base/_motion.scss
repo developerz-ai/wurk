@@ -8,9 +8,6 @@
 @include reduced-motion {
   // Decorative entrances + the live-dot's continuous pulse are stilled; the
   // elements stay fully visible, just without the motion.
-  .page-header,
-  .table-wrapper,
-  .search-empty,
   .toast,
   .locale-menu,
   .live-dot {
@@ -28,12 +25,6 @@
 
   .row-clickable td:last-child::after {
     transition: none;
-  }
-
-  // Skeletons stop shimmering but stay visible as static placeholders.
-  .skeleton,
-  .skeleton::after {
-    animation: none;
   }
 
   // Note: `.spinner` is deliberately NOT stilled — it's the sole feedback that
