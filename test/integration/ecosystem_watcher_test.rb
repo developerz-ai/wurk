@@ -7,106 +7,68 @@ require 'fileutils'
 require 'open3'
 require 'tmpdir'
 
-# Pins the four branches the watcher diff added so each FAILS if its branch
-# is deleted:
-#   1. fresh empty marker.txt → POST path (the diff DROPS the no-POST fresh
-#      carveout, so every release goes through curl)
-#   2. DRY_RUN=true prints "[dry-run] would file:" and POSTs none
-#   3. API_KEY unset prints 'DEVELOPERZ_API_KEY missing': a manual dispatch
-#      exits 0 and a scheduled run exits 1; the dedup+POST step (step 240 in
-#      ecosystem.yml) must not run — the per-step `if: env.API_KEY != ''`
-#      gate is what short-circuits it
-#   4. Two consecutive runs against the same releases: first files N,
-#      second files 0 (every version is already in the marker)
+# Pins the sidekiq release watcher in .github/workflows/ecosystem.yml by
+# driving the watcher's own step bodies, extracted from the YAML, in a tmpdir
+# with stub `gh` and `curl` binaries (the system `jq` and `sort` run for real).
 #
-# Mirrors test/unit/bin_check_redis_url_test.rb: drive the watcher's step
-# bodies via Open3.capture3 in a tmpdir with stub gh/curl/jq binaries,
-# asserting on stdout, exit code, stub call counts, and the marker file.
+# What is pinned, and why each one matters on the live schedule:
+#   1. An empty or absent marker SEEDS to the newest stable upstream version
+#      and files nothing. Without it, the first run files the whole history.
+#   2. Only stable versions ABOVE the high-water mark are filed, oldest first,
+#      capped at MAX_ASKS per run; the marker advances after each 2xx only.
+#   3. The POST body is exactly `POST /v1/asks`'s strict schema: `ask`,
+#      `repos`, `dedupe_key`, `evidence.urls`, nothing else (an unknown key
+#      is a 400 there).
+#   4. A non-2xx answer fails the step, prints the status and the response
+#      body, never the key, and leaves the marker where it was.
+#   5. DRY_RUN files nothing and never writes the marker.
+#   6. A missing API key fails a schedule and skips a dispatch.
 class EcosystemWatcherTest < Wurk::Test::UnitCase
   parallelize_me!
 
   ROOT = File.expand_path('../..', __dir__)
   WORKFLOW = File.join(ROOT, '.github/workflows/ecosystem.yml')
+  POST_STEP = 'list sidekiq tags and file one ask per new release'
+  API_KEY = 'test-key-must-never-be-printed'
 
-  # Four releases the stub `gh` returns as compact JSON — the shape the
-  # workflow's `gh api ... --jq '.[] | {tag:..., url:..., name:..., notes:...}'`
-  # filter produces. Each record lands on one line so `while read -r row`
-  # gets exactly one JSON object per release. The `notes` field mixes real
-  # newlines, a TAB, and a backslash so the test can prove the workflow
-  # ships the body through jq's JSON-parsing path rather than partial shell
-  # unescaping.
-  RELEASES = [
-    {
-      tag: 'v7.3.0',
-      url: 'https://github.com/sidekiq/sidekiq/releases/tag/v7.3.0',
-      name: 'Release 7.3.0',
-      notes: "## Features\n- tab\there\n- back\\slash\n\nDetails."
-    },
-    {
-      tag: 'v7.2.0',
-      url: 'https://github.com/sidekiq/sidekiq/releases/tag/v7.2.0',
-      name: 'Release 7.2.0',
-      notes: 'Plain notes for 7.2.0.'
-    },
-    # Empty `name` is the regression class for thread PRRT_kwDOSi_O686t5gFH:
-    # a release with no GitHub title would, under the old TSV path, collapse
-    # adjacent tab separators and shift `body` into the `name` slot.
-    {
-      tag: 'v7.1.3',
-      url: 'https://github.com/sidekiq/sidekiq/releases/tag/v7.1.3',
-      name: '',
-      notes: 'Notes only — no release title.'
-    },
-    # Trailing-newline fixture pins PRRT_kwDOSi_O686t9dul: a release whose
-    # `notes` ends in `\n`. Under the previous `notes=$(jq ...)` then
-    # `--arg notes "$notes"` path, command substitution stripped the
-    # trailing newline and the POST body silently arrived with the newline
-    # truncated. The current `--argjson row` path round-trips every byte
-    # of `.notes` verbatim, including the trailing `\n`. The round-trip
-    # assertion in test_post_body_preserves_notes_url_kind_and_empty_name
-    # checks `body == release[:notes]` byte-for-byte, so this fixture
-    # would fail any regression that re-introduces the command-substitution
-    # path or otherwise drops the trailing byte.
-    {
-      tag: 'v7.0.9',
-      url: 'https://github.com/sidekiq/sidekiq/releases/tag/v7.0.9',
-      name: 'Release 7.0.9',
-      notes: "Trailing-newline fixture.\n"
-    }
-  ].freeze
-  VERSIONS = RELEASES.map { |r| r[:tag].sub(/\Av/, '') }.freeze
+  # What `gh api --paginate .../tags --jq '.[].name'` prints: one tag per
+  # line, in no particular order. Betas, rcs and a junk name must be ignored,
+  # and 8.1.10 must sort above 8.1.9 (version sort, not lexical).
+  TAGS = %w[v8.1.9 v8.1.10 v8.2.0.beta1 v8.1.8 v7.3.10 v8.1.7 v8.0.0.rc1 v8.1.6 not-a-version].freeze
+  LATEST = '8.1.10'
 
-  # Stub `gh` returning the fixed release list as one compact-JSON record
-  # per line. `JSON.dump` is enabled for the embedded quotes; the shell
-  # formatters just print each record followed by `\n`.
   STUB_GH = <<~SH.freeze
     #!/usr/bin/env bash
-    printf '%s\\n' #{RELEASES.map { |r| JSON.dump(r).inspect }.join(' ')}
+    printf '%s\\n' #{TAGS.join(' ')}
   SH
 
-  # Stub `curl` appending each argv line to `$CURL_LOG`. The script pipes
-  # the `Authorization: Bearer …` header into curl's stdin via `-H @-`, and
-  # real curl READS that header from stdin — so the stub drains it too. A
-  # stub that exits without reading leaves the writer's `printf` writing
-  # into a closed pipe: it takes SIGPIPE, `set -euo pipefail` turns that
-  # into a 141 exit for the whole step, and the case fails on a verdict
-  # the watcher never produced (measured: ~3% of POSTs, and the watcher
-  # POSTs four releases per run). Only argv needs to land in the log so
-  # the test can count POSTs and read the `--data` body. Returns 0 so the
-  # script records the version in marker.txt after the curl call.
+  # Stub `curl`: appends its argv to $CURL_LOG (one arg per line), drains the
+  # header block from stdin as real curl does, writes $CURL_RESPONSE to the
+  # `-o` file and prints the HTTP code for `-w`. The POST number named by
+  # $CURL_FAIL_ON (1-based) answers 400 instead of 200.
   STUB_CURL = <<~SH
     #!/usr/bin/env bash
-    if [ ! -t 0 ]; then cat > /dev/null; fi
+    if [ ! -t 0 ]; then cat >> "$CURL_STDIN_LOG"; fi
+    out=""
+    prev=""
     for arg in "$@"; do
       echo "$arg" >> "$CURL_LOG"
+      [ "$prev" = "-o" ] && out="$arg"
+      prev="$arg"
     done
-    exit 0
+    n=$(grep -cx 'POST' "$CURL_LOG")
+    if [ "${CURL_FAIL_ON:-0}" = "$n" ]; then
+      printf '%s' '{"type":"about:blank","status":400,"detail":"invalid ask body"}' > "$out"
+      printf '400'
+    else
+      printf '%s' '{"kind":"created","ask":{"id":"rtk_1"}}' > "$out"
+      printf '200'
+    fi
   SH
 
   # Extracts the `run: |` body of the named step from the workflow YAML,
-  # dedented to column 0. Blank lines in the body are preserved; the
-  # capture terminates at the first non-empty line whose indentation is
-  # shallower than the `run:` directive's body (i.e. the next step).
+  # dedented to column 0. The capture ends at the first non-empty line whose
+  # indentation is shallower than the body's.
   def extract_run_body(step_name)
     lines = File.read(WORKFLOW).lines
     step_idx = find_step(lines, step_name)
@@ -134,7 +96,7 @@ class EcosystemWatcherTest < Wurk::Test::UnitCase
     body = []
     ((run_idx + 1)..(lines.size - 1)).each do |i|
       line = lines[i]
-      break unless run_body_line?(line, indent)
+      break unless line.strip.empty? || line.start_with?(' ' * indent)
 
       body << line
     end
@@ -142,343 +104,276 @@ class EcosystemWatcherTest < Wurk::Test::UnitCase
     body.map { |l| l.sub(/^ {#{indent}}/, '') }
   end
 
-  def run_body_line?(line, indent)
-    line.strip.empty? || line.start_with?(' ' * indent)
-  end
+  # Runs the POST step with `marker` as state/marker.txt (nil = no file).
+  # Everything is read back INSIDE the block: Dir.mktmpdir deletes the
+  # directory the moment the block returns.
+  Result = Struct.new(:out, :err, :status, :marker, :curl_log, :curl_stdin, keyword_init: true)
 
-  # Drives the dedup+POST loop in an isolated tmpdir with stub gh/curl
-  # on PATH (system `jq` is used so the `--arg notes` round-trip is
-  # genuine) and the marker pre-populated as `marker`. Returns
-  # [stdout, stderr, status, marker_text_after, curl_log_content].
-  # Curl log content (not the path) is returned because Dir.mktmpdir's block
-  # form deletes the directory the moment the block returns — every test
-  # would otherwise pass an already-deleted path to curl_post_count and silently
-  # observe 0 POSTs (regression class: "green curl log, missing assertions").
-  def run_loop(env_overrides: {}, marker: '')
+  def run_loop(marker: '', dry_run: false, fail_on: nil)
     Dir.mktmpdir('wurk-watcher-') do |tmpdir|
       prepare_loop_dir(tmpdir, marker)
-      script = File.join(tmpdir, 'watcher.sh')
-      env = loop_env(env_overrides, tmpdir)
-
-      out, err, status = Open3.capture3(env, 'bash', script, chdir: tmpdir)
-      marker_after = File.read(File.join(tmpdir, 'state/marker.txt'))
-      curl_log_after = File.read(File.join(tmpdir, 'curl.log'))
-      [out, err, status, marker_after, curl_log_after]
+      env = loop_env(tmpdir, dry_run: dry_run, fail_on: fail_on)
+      out, err, status = Open3.capture3(env, 'bash', File.join(tmpdir, 'watcher.sh'), chdir: tmpdir)
+      marker_path = File.join(tmpdir, 'state/marker.txt')
+      Result.new(
+        out: out, err: err, status: status,
+        marker: File.exist?(marker_path) ? File.read(marker_path) : nil,
+        curl_log: File.read(File.join(tmpdir, 'curl.log')),
+        curl_stdin: File.read(File.join(tmpdir, 'curl.stdin'))
+      )
     end
   end
 
   def prepare_loop_dir(tmpdir, marker)
     FileUtils.mkdir_p(File.join(tmpdir, 'state'))
-    File.write(File.join(tmpdir, 'state/marker.txt'), marker)
+    File.write(File.join(tmpdir, 'state/marker.txt'), marker) unless marker.nil?
+    File.write(File.join(tmpdir, 'curl.log'), '')
+    File.write(File.join(tmpdir, 'curl.stdin'), '')
 
     bin_dir = File.join(tmpdir, 'bin')
     Dir.mkdir(bin_dir)
-    File.write(File.join(tmpdir, 'curl.log'), '')
-
-    write_stub_binaries(bin_dir)
-    write_watcher_script(tmpdir)
-  end
-
-  def write_stub_binaries(bin_dir)
-    stubs = { 'gh' => STUB_GH, 'curl' => STUB_CURL }
-    stubs.each do |name, body|
+    { 'gh' => STUB_GH, 'curl' => STUB_CURL }.each do |name, body|
       path = File.join(bin_dir, name)
       File.write(path, body)
       File.chmod(0o755, path)
     end
+
+    # The step writes the tag list to a fixed /tmp path; give each run its own.
+    run_body = extract_run_body(POST_STEP).gsub('/tmp/sidekiq-tags.txt', File.join(tmpdir, 'tags.txt'))
+    File.write(File.join(tmpdir, 'watcher.sh'), "#!/usr/bin/env bash\n#{run_body}")
   end
 
-  def write_watcher_script(tmpdir)
-    script_body = build_watcher_script_body(tmpdir)
-    script = File.join(tmpdir, 'watcher.sh')
-    File.write(script, script_body)
-    File.chmod(0o755, script)
-  end
-
-  def build_watcher_script_body(tmpdir)
-    # The extracted `run:` body hardcodes `/tmp/releases.json` — substitute
-    # with this tmpdir's path so parallel test workers don't collide on a
-    # shared `/tmp` file (the workflow itself only ever runs one job at a
-    # time on GitHub's runner; the test runs many in parallel).
-    run_body = extract_run_body('list releases and POST one ask per unhandled release')
-    run_body = run_body.gsub('/tmp/releases.json', File.join(tmpdir, 'releases.json'))
-    "#!/usr/bin/env bash\n#{run_body}"
-  end
-
-  def loop_env(env_overrides, tmpdir)
+  def loop_env(tmpdir, dry_run:, fail_on:)
     {
       'PATH' => "#{File.join(tmpdir, 'bin')}:#{ENV.fetch('PATH', '')}",
-      'API_KEY' => env_overrides.fetch(:api_key, 'test-key'),
-      'API_URL' => env_overrides.fetch(:api_url, 'https://example.test/asks'),
-      'DRY_RUN' => env_overrides[:dry_run] ? 'true' : '',
+      'API_KEY' => API_KEY,
+      'API_URL' => 'https://example.test/v1/asks',
+      'DRY_RUN' => dry_run ? 'true' : 'false',
+      'MAX_ASKS' => '3',
       'CURL_LOG' => File.join(tmpdir, 'curl.log'),
+      'CURL_STDIN_LOG' => File.join(tmpdir, 'curl.stdin'),
+      'CURL_FAIL_ON' => fail_on&.to_s,
       'COVERAGE' => nil
     }
   end
 
+  def post_count(result)
+    result.curl_log.lines.count { |l| l.chomp == 'POST' }
+  end
+
+  # STUB_CURL logs argv one per line, so each body is the line after `--data`.
+  def post_bodies(result)
+    lines = result.curl_log.lines.map(&:chomp)
+    lines.each_index.select { |i| lines[i] == '--data' }.map { |i| JSON.parse(lines[i + 1]) }
+  end
+
+  def assert_no_key_printed(result)
+    refute_includes result.out, API_KEY, 'the API key must never reach stdout'
+    refute_includes result.err, API_KEY, 'the API key must never reach stderr'
+    refute_includes result.curl_log, API_KEY, 'the API key must never be on curl argv'
+  end
+
+  # --- seed ----------------------------------------------------------------
+
+  # The live input on the first real run: the 2026-11-11 dispatch left a
+  # `wurk-watcher-state` artifact holding a ZERO-BYTE marker.txt.
+  def test_empty_marker_seeds_to_newest_stable_version_and_files_nothing
+    result = run_loop(marker: '')
+
+    assert_predicate result.status, :success?, "seed run must exit 0 (out=#{result.out.inspect})"
+    assert_equal 0, post_count(result), 'a seed run must POST nothing'
+    assert_equal "#{LATEST}\n", result.marker, 'the seed is the newest vX.Y.Z tag, by version sort'
+    assert_includes result.out, "seeded: marker set to #{LATEST}"
+  end
+
+  def test_absent_or_blank_marker_seeds_the_same_way
+    [nil, "\n  \n"].each do |marker|
+      result = run_loop(marker: marker)
+
+      assert_predicate result.status, :success?
+      assert_equal 0, post_count(result), "marker #{marker.inspect} must seed, not file"
+      assert_equal "#{LATEST}\n", result.marker
+    end
+  end
+
+  def test_dry_run_on_empty_marker_announces_the_seed_and_writes_nothing
+    result = run_loop(marker: '', dry_run: true)
+
+    assert_predicate result.status, :success?
+    assert_includes result.out, "[dry-run] would seed marker to #{LATEST}"
+    assert_equal 0, post_count(result)
+    assert_equal '', result.marker, 'a dry run must not seed the marker'
+  end
+
+  # --- filing --------------------------------------------------------------
+
+  def test_files_only_versions_above_the_marker_oldest_first_and_advances_it
+    result = run_loop(marker: "8.1.8\n")
+
+    assert_predicate result.status, :success?, "out=#{result.out.inspect} err=#{result.err.inspect}"
+    keys = post_bodies(result).map { |b| b['dedupe_key'] }
+
+    assert_equal %w[sidekiq-release:v8.1.9 sidekiq-release:v8.1.10], keys,
+                 'betas, rcs, older lines and the marker itself are never filed'
+    assert_equal "#{LATEST}\n", result.marker
+    assert_no_key_printed(result)
+  end
+
+  # The body is the platform's strict schema and nothing more: an extra key
+  # (the old title/url/name/source/body/kind) is a 400 at `POST /v1/asks`.
+  def test_post_body_is_exactly_the_asks_schema
+    body = post_bodies(run_loop(marker: "8.1.9\n")).fetch(0)
+
+    assert_equal %w[ask dedupe_key evidence repos], body.keys.sort
+    assert_equal %w[urls], body['evidence'].keys
+    assert_equal ['developerz-ai/wurk'], body['repos']
+    assert_equal 'sidekiq-release:v8.1.10', body['dedupe_key']
+    assert_equal %w[https://github.com/sidekiq/sidekiq/blob/v8.1.10/Changes.md
+                    https://github.com/sidekiq/sidekiq/tree/v8.1.10], body['evidence']['urls']
+    assert_kind_of String, body['ask']
+    assert_includes body['ask'], 'Sidekiq v8.1.10'
+    refute_includes body['ask'], "\n", 'the ask is one paragraph'
+  end
+
+  def test_authorization_header_travels_on_stdin_only
+    result = run_loop(marker: "8.1.9\n")
+
+    assert_includes result.curl_stdin, "Authorization: Bearer #{API_KEY}"
+    assert_includes result.curl_log.lines.map(&:chomp), '@-'
+    refute_includes result.curl_log.lines.map(&:chomp), '-v'
+    assert_no_key_printed(result)
+  end
+
+  def test_a_run_files_at_most_max_asks_and_warns
+    result = run_loop(marker: "8.1.6\n")
+
+    assert_predicate result.status, :success?
+    assert_equal(%w[sidekiq-release:v8.1.7 sidekiq-release:v8.1.8 sidekiq-release:v8.1.9],
+                 post_bodies(result).map { |b| b['dedupe_key'] })
+    assert_equal "8.1.9\n", result.marker, 'the marker stops at the last version filed'
+    assert_includes result.out, '::warning::4 versions above the marker'
+  end
+
+  def test_second_run_files_nothing
+    first = run_loop(marker: "8.1.8\n")
+    second = run_loop(marker: first.marker)
+
+    assert_predicate second.status, :success?
+    assert_equal 0, post_count(second)
+    assert_equal first.marker, second.marker
+  end
+
+  # A marker written by the old watcher is a list of versions; it reads as
+  # its highest.
+  def test_legacy_list_marker_reads_as_its_highest_version
+    result = run_loop(marker: "7.3.10\n8.1.9\n8.1.10\n8.1.7\n")
+
+    assert_equal 0, post_count(result)
+    assert_equal "#{LATEST}\n", result.marker
+  end
+
+  def test_unparseable_marker_fails_rather_than_reseeding
+    result = run_loop(marker: "garbage\n")
+
+    assert_equal 1, result.status.exitstatus
+    assert_includes result.out, '::error::marker'
+    assert_equal 0, post_count(result)
+  end
+
+  def test_dry_run_with_a_marker_announces_and_posts_nothing
+    result = run_loop(marker: "8.1.9\n", dry_run: true)
+
+    assert_predicate result.status, :success?
+    assert_includes result.out, '[dry-run] would file: v8.1.10'
+    assert_equal 0, post_count(result)
+    assert_equal "8.1.9\n", result.marker
+  end
+
+  # --- failure -------------------------------------------------------------
+
+  def test_non_2xx_fails_loudly_with_status_and_body_and_keeps_the_marker
+    result = run_loop(marker: "8.1.9\n", fail_on: 1)
+
+    assert_equal 1, result.status.exitstatus
+    assert_includes result.out, 'answered HTTP 400'
+    assert_includes result.out, 'invalid ask body', 'the response body is the diagnosis; print it'
+    assert_equal "8.1.9\n", result.marker
+    assert_no_key_printed(result)
+  end
+
+  def test_failure_mid_run_keeps_the_asks_already_filed
+    result = run_loop(marker: "8.1.8\n", fail_on: 2)
+
+    assert_equal 1, result.status.exitstatus
+    assert_equal 2, post_count(result)
+    assert_equal "8.1.9\n", result.marker, 'the 2xx before the failure advanced the marker'
+  end
+
+  # --- workflow wiring -----------------------------------------------------
+
+  def watcher_job
+    YAML.load_file(WORKFLOW).fetch('jobs').fetch('watcher')
+  end
+
+  # The token is stored only in the `sidekiq-release-watcher` environment,
+  # whose branch policy admits main alone.
+  def test_watcher_job_runs_in_the_main_only_secret_environment
+    assert_equal 'sidekiq-release-watcher', watcher_job['environment']
+  end
+
+  # After a failed marker read, state/marker.txt is empty; uploading it would
+  # make the next run re-seed past every version in between.
+  def test_marker_upload_requires_a_successful_read
+    upload = watcher_job.fetch('steps').find { |s| s['uses'].to_s.start_with?('actions/upload-artifact@') }
+
+    assert_includes upload['if'], "steps.read_marker.outcome == 'success'"
+    read = watcher_job.fetch('steps').find { |s| s['name'] == 'read prior marker artifact' }
+
+    assert_equal 'read_marker', read['id']
+  end
+
+  def test_marker_steps_are_gated_on_the_api_key
+    names = ['read prior marker artifact', POST_STEP]
+    steps = watcher_job.fetch('steps').select { |s| names.include?(s['name']) }
+
+    assert_equal names.size, steps.size
+    steps.each { |s| assert_equal "env.API_KEY != ''", s['if'], "#{s['name']} must be key-gated" }
+  end
+
   # Drives the API_KEY check step. With API_KEY unset it exits 0 (skip) on a
-  # manual dispatch and 1 on a schedule; either way the dedup+POST step
-  # (which would call `gh`) must NOT run.
-  # The gh stub writes a sentinel file the test asserts does not exist.
-  # Captures `File.exist?(sentinel)` INSIDE the block — `Dir.mktmpdir` deletes
-  # its directory the moment the block returns, so any File.exist? call after
-  # the block would silently report `false` regardless of what the script did,
-  # turning the assertion into a tautology that cannot fail.
+  # manual dispatch and 1 on a schedule; the step itself never calls gh.
   def run_api_key_check(env_value, event: 'workflow_dispatch')
     Dir.mktmpdir('wurk-watcher-') do |tmpdir|
       bin_dir = File.join(tmpdir, 'bin')
       Dir.mkdir(bin_dir)
       sentinel = File.join(tmpdir, 'gh_called')
-
       gh = File.join(bin_dir, 'gh')
       File.write(gh, "#!/usr/bin/env bash\ntouch #{sentinel}\nexit 0\n")
       File.chmod(0o755, gh)
 
       script = File.join(tmpdir, 'check.sh')
-      check_body = "#!/usr/bin/env bash\n#{extract_run_body('require DEVELOPERZ_API_KEY on schedule')}"
-      File.write(script, check_body)
-      File.chmod(0o755, script)
+      File.write(script, "#!/usr/bin/env bash\n#{extract_run_body('require DEVELOPERZ_API_KEY on schedule')}")
 
-      env = {
-        'PATH' => "#{bin_dir}:#{ENV.fetch('PATH', '')}",
-        'API_KEY' => env_value,
-        'EVENT' => event,
-        'COVERAGE' => nil
-      }
-
-      out, err, status = Open3.capture3(env, 'bash', script, chdir: tmpdir)
-      gh_called = File.exist?(sentinel)
-      [out, err, status, gh_called]
+      env = { 'PATH' => "#{bin_dir}:#{ENV.fetch('PATH', '')}", 'API_KEY' => env_value,
+              'EVENT' => event, 'COVERAGE' => nil }
+      out, _err, status = Open3.capture3(env, 'bash', script, chdir: tmpdir)
+      [out, status, File.exist?(sentinel)]
     end
-  end
-
-  def curl_post_count(curl_log_content)
-    curl_log_content.lines.count { |l| l.chomp == 'POST' }
-  end
-
-  # STUB_CURL writes each argv line to the log in order, so the `--data <body>`
-  # pair sits at consecutive lines after `-H` and `@-`. Walk the log and
-  # collect every value following a literal `--data` token.
-  def curl_post_bodies(curl_log_content)
-    lines = curl_log_content.lines.map(&:chomp)
-    bodies = []
-    i = 0
-    while i < lines.size
-      if lines[i] == '--data' && i + 1 < lines.size
-        bodies << lines[i + 1]
-        i += 2
-      else
-        i += 1
-      end
-    end
-    bodies
-  end
-
-  # Branch 1: fresh empty marker.txt → POST path. Every fetched version ends
-  # up in marker.txt; zero 'seeded:' lines on stdout (the diff removed the
-  # fresh carveout that previously produced them — empty marker.txt causes
-  # grep -qxF to miss, the loop falls through to the POST branch).
-  def test_fresh_empty_marker_posts_each_release_with_zero_seeded_lines
-    out, _err, status, marker, curl_log = run_loop(marker: '')
-
-    assert_predicate status, :success?,
-                     "loop must exit 0 on a fresh marker (out=#{out.inspect})"
-
-    refute_match(/seeded:/, out,
-                 "fresh carveout is removed; 'seeded:' lines on stdout are a " \
-                 "regression (out=#{out.inspect})")
-
-    VERSIONS.each do |v|
-      assert_includes marker, "#{v}\n",
-                      "version #{v} must be recorded in marker.txt after the POST"
-    end
-
-    assert_equal VERSIONS.size, curl_post_count(curl_log),
-                 'every fetched version must trigger exactly one curl POST on a ' \
-                 "fresh marker (curl.log=#{curl_log.inspect})"
-  end
-
-  # Branch 2: DRY_RUN=true prints "[dry-run] would file:" and POSTs none,
-  # AND leaves marker.txt untouched. A dry run is a verification, not a
-  # forward step — recording unposted versions in the marker would make the
-  # next real run skip them permanently, so any version this run announces
-  # must be re-announced by the next real run too.
-  def test_dry_run_lists_without_posting_and_leaves_marker_untouched
-    out, _err, status, marker, curl_log = run_loop(marker: '', env_overrides: { dry_run: true })
-
-    assert_predicate status, :success?,
-                     "loop must exit 0 in dry-run (out=#{out.inspect})"
-
-    VERSIONS.each do |v|
-      assert_includes out, "[dry-run] would file: #{v}",
-                      "dry-run must announce version #{v} on stdout"
-    end
-
-    assert_equal 0, curl_post_count(curl_log),
-                 "dry-run must POST nothing (curl.log=#{curl_log.inspect})"
-
-    # The seed marker is empty; a dry run must NOT add anything to it.
-    assert_equal '', marker,
-                 "dry-run must NOT write to marker.txt (marker=#{marker.inspect})"
-  end
-
-  # A scheduled run is the watcher's only real trigger: without the secret it
-  # must go red, never pass green having watched nothing.
-  # The token is stored only in the `sidekiq-release-watcher` environment,
-  # whose branch policy admits main alone. Dropping the binding would leave
-  # the job reading an empty secret: every scheduled run fails.
-  def test_watcher_job_runs_in_the_main_only_secret_environment
-    job = YAML.load_file(WORKFLOW).fetch('jobs').fetch('watcher')
-
-    assert_equal 'sidekiq-release-watcher', job['environment']
   end
 
   def test_missing_api_key_fails_a_scheduled_run
-    out, _err, status, gh_called = run_api_key_check('', event: 'schedule')
+    out, status, gh_called = run_api_key_check('', event: 'schedule')
 
     assert_equal 1, status.exitstatus, "a scheduled run must fail: stdout=#{out.inspect}"
     assert_includes out, '::error::DEVELOPERZ_API_KEY missing'
-    refute gh_called, 'the check step itself never calls gh'
+    refute gh_called
   end
 
-  # Branch 3: API_KEY unset on a manual dispatch → 'DEVELOPERZ_API_KEY
-  # missing' and exits 0; the dedup+POST step (step 240) must NOT run. The
-  # per-step `if: env.API_KEY != ''` gate is what short-circuits it.
-  def test_missing_api_key_exits_zero_without_running_dedup_post
-    out, _err, status, gh_called = run_api_key_check('')
+  def test_missing_api_key_skips_a_manual_dispatch
+    out, status, gh_called = run_api_key_check('')
 
-    assert_equal 0, status.exitstatus,
-                 "step must exit 0 (skip; exit 0; ...): stdout=#{out.inspect}"
-    assert_includes out, 'DEVELOPERZ_API_KEY missing',
-                    'the message must announce the missing secret'
-
-    refute gh_called,
-           'the dedup+POST step must not run when API_KEY is unset; the ' \
-           "`if: env.API_KEY != ''` per-step gate is what short-circuits it " \
-           '(gh stub would have created the sentinel file)'
-
-    # Text check that the dedup+POST step is gated on API_KEY presence. A
-    # regression that drops the `if:` from that step would let an absent
-    # API_KEY reach `gh api ...`, POST with `Authorization: Bearer ` (an
-    # empty bearer), and turn the job red. Pin the gate in the YAML itself
-    # so the regression cannot ship even when no live watcher run is
-    # exercising it.
-    yaml = File.read(WORKFLOW)
-    # %w splits on whitespace; escape spaces so each step name is one element,
-    # not 13: the regex below matches `- name: <full name>`, which silently
-    # only ever finds the first word of each line otherwise (#history: a
-    # "prior" iteration was finding nil and turning the whole test red).
-    [
-      'read prior marker artifact',
-      'list releases and POST one ask per unhandled release'
-    ].each do |step_name|
-      step_block = yaml.match(
-        /^\s*-\s*name:\s*#{Regexp.escape(step_name)}\b.*?(?=^\s*-\s*(?:name|uses):|\z)/m
-      )
-
-      refute_nil step_block,
-                 "step `#{step_name}` must exist in #{WORKFLOW} so the gate " \
-                 'has somewhere to live'
-
-      assert_match(/\bif:\s*env\.API_KEY\s*!=\s*''/, step_block[0],
-                   "step `#{step_name}` must carry `if: env.API_KEY != ''` so " \
-                   'an absent secret short-circuits it before curl POSTs an ' \
-                   'empty bearer')
-    end
-  end
-
-  # Pin the POST body schema in the YAML itself. The real `jq` (no stub)
-  # turns `--argjson row "$row"` and the surrounding template into the
-  # JSON body that lands in the curl log, which means branches 1/2/4 cannot
-  # detect a regression that drops `kind:"parity-check"`, `body:($row.notes // "")`,
-  # or `--argjson row` from the jq template — curl would still POST, but the
-  # API would receive a body without the release notes or the parity-check
-  # identifier. The `--argjson row` form (instead of `--arg notes "$notes"`)
-  # is what preserves a release-notes value that ends in `\n`: command
-  # substitution `notes=$(jq ...)` strips trailing newlines from the
-  # captured output, so the previous `--arg notes` path silently truncated
-  # upstream notes that ended in a newline (PRRT_kwDOSi_O686t9dul). Mirror
-  # the per-step gate regex pattern used in branch 3.
-  def test_post_step_run_block_includes_kind_notes_and_notes_arg
-    yaml = File.read(WORKFLOW)
-    step_block = yaml.match(
-      /^\s*-\s*name:\s*list releases and POST one ask per unhandled release\b.*?(?=^\s*-\s*(?:name|uses):|\z)/m
-    )
-
-    refute_nil step_block,
-               'POST step must exist in ecosystem.yml so the body schema has ' \
-               'somewhere to live'
-
-    [
-      'kind:\s*"parity-check"',
-      'body:\(\$row\.notes // ""\)',
-      '--argjson row'
-    ].each do |needle|
-      assert_match(/#{needle}/, step_block[0],
-                   "POST step's run block must contain /#{needle}/ so the API " \
-                   'receives the release notes + parity-check identifier')
-    end
-  end
-
-  # Real `jq` exercises the workflow with four-field records containing
-  # escaped notes (TAB, backslash, real newline) plus a release with an
-  # empty `name`. Asserts the parsed POST body so a regression that
-  # round-trips the fields wrongly — for example, dropping `--arg notes`,
-  # swapping fields, or letting the empty name collapse into the notes
-  # slot — cannot pass unnoticed.
-  def test_post_body_preserves_notes_url_kind_and_empty_name
-    _out, _err, status, _marker, curl_log = run_loop(marker: '')
-
-    assert_predicate status, :success?, 'loop must exit 0 on a fresh marker'
-
-    bodies = curl_post_bodies(curl_log).map { |b| JSON.parse(b) }
-
-    assert_equal RELEASES.size, bodies.size,
-                 "expected one POST per release, got #{bodies.size} " \
-                 "(curl.log=#{curl_log.inspect})"
-
-    RELEASES.zip(bodies).each do |release, body|
-      expected_version = release[:tag].sub(/\Av/, '')
-
-      assert_equal "Sidekiq v#{expected_version} released", body['title'],
-                   'title must be the watcher-prefixed version'
-      assert_equal release[:url], body['url'],
-                   'url must round-trip from the upstream release'
-      assert_equal release[:name], body['name'],
-                   'name must round-trip — an empty release title lands as ' \
-                   'empty string ("name":"") in the body, NOT as null or as ' \
-                   'the release notes shifted into the name slot'
-      assert_equal release[:notes], body['body'],
-                   'body must contain the upstream release notes verbatim — ' \
-                   'tabs, backslashes, and real newlines preserved through ' \
-                   'jq --arg without shell-level unescaping'
-      assert_equal 'wurk-watcher', body['source'],
-                   'source must identify the watcher'
-      assert_equal 'parity-check', body['kind'],
-                   'kind must be the explicit identifier this watcher attaches'
-    end
-  end
-
-  # Branch 4: two consecutive runs against the same releases. The first
-  # files N, the second files 0 (every version is in the marker from the
-  # previous run, so grep -qxF hits and the loop `continue`s before POST).
-  def test_second_run_dedupes_against_marker_and_files_zero
-    out1, _err1, status1, marker1, curl_log1 = run_loop(marker: '')
-
-    assert_predicate status1, :success?, "first run must exit 0 (out=#{out1.inspect})"
-
-    assert_equal VERSIONS.size, curl_post_count(curl_log1),
-                 "first run must POST every version (#{curl_post_count(curl_log1)} POSTs observed)"
-
-    out2, _err2, status2, marker2, curl_log2 = run_loop(marker: marker1)
-
-    assert_predicate status2, :success?, "second run must exit 0 (out=#{out2.inspect})"
-
-    assert_equal 0, curl_post_count(curl_log2),
-                 'second run must POST nothing — every version is already in the ' \
-                 "marker (curl.log=#{curl_log2.inspect})"
-
-    assert_equal marker1, marker2,
-                 'marker is unchanged on the second run (all versions were skipped)'
+    assert_equal 0, status.exitstatus, "stdout=#{out.inspect}"
+    assert_includes out, 'DEVELOPERZ_API_KEY missing'
+    refute gh_called
   end
 end
