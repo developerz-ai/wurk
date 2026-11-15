@@ -34,8 +34,7 @@
 # described a lane this repo does not run.
 version: 1
 
-# THE SERVICES THIS REPO'S OWN GATE NEEDS BEFORE IT CAN GRADE A DIFF
-# (developerz-ai/developerz.ai#2918, mechanism in #2919).
+# THE SERVICES THIS REPO'S OWN GATE NEEDS BEFORE IT CAN GRADE A DIFF.
 #
 # `bin/check` refuses without a reachable Redis at `REDIS_URL` (falling back to
 # redis://localhost:6379/0 when unset; since wurk#538 it no longer pins
@@ -73,7 +72,7 @@ triage:
   # triaged, picked up from the backlog and stale-swept like anyone's; the 2026-10-14 rule that left
   # it to its author is reversed.
   # Which deployments count as "the fix was deployed" for the error-fix confirmation
-  # (developerz.ai #5657, owner ruling 2026-10-16). The default is `[production]`, and this
+  # (owner ruling 2026-10-16). The default is `[production]`, and this
   # repo never deploys to an environment by that name: its deployments are `demo` (the
   # wurk-demo app, built from `main`) and `github-pages` (the docs site). Only `demo` runs
   # the code, so only `demo` counts; a docs deploy must not confirm a fix. Read back
@@ -107,8 +106,8 @@ triage:
 
 handoff:
   # `fleet`, not `webhook`: both grant HandoffWebhook
-  # (developerz-ai/developerz.ai packages/tools/src/policy-gate.ts:83) but `fleet`
-  # needs no `webhook_ref` (packages/policy/src/validate.ts:130, dz#1026), and the
+  # (the platform's policy gate) but `fleet`
+  # needs no `webhook_ref` (the platform's policy validation), and the
   # `wh_fleet_placeholder` ref that used to sit here resolved to no row and threw
   # WebhookRefNotFoundError — the org account has zero registered webhooks, so
   # the ingest graded the WHOLE file INVALID and served defaultPolicy instead
@@ -194,7 +193,7 @@ pr:
   # An OUTSIDE PR that changes CI, release or publish automation is still declined by the
   # `non_goals` line above (security review, 2026-10-14): an auto-merged workflow edit would run
   # beside the release job's RubyGems OIDC identity. Whether an author is outside is the platform's
-  # read of their real repo permission, never `author_association` (developerz.ai #6363).
+  # read of their real repo permission, never `author_association`.
   auto_merge_scope: any
   # The `main-protection` ruleset's six, named here so the agent knows which red
   # check is the author's to fix. The ruleset is still the gate; this list is

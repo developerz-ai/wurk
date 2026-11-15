@@ -221,6 +221,11 @@ jobs:
       - name: guard manifest (docs-only change)
         if: env.GUARDS_ONLY == 'true'
         run: env -u COVERAGE bundle exec rake test:guards
+        env:
+          # The public-tree guard's private words (test/unit/public_tree_test.rb). Required on
+          # this repository's own runs, where the secret exists; forks and Dependabot get none.
+          PUBLIC_TREE_PRIVATE_WORDS: ${{ secrets.PUBLIC_TREE_PRIVATE_WORDS }}
+          PUBLIC_TREE_PRIVATE_WORDS_REQUIRED: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.actor != 'dependabot[bot]' && '1' || '' }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         if: env.RUN == 'true'
         with:
@@ -332,6 +337,11 @@ jobs:
       - name: rake test:guards
         if: env.RUN == 'true'
         run: bundle exec rake test:guards
+        env:
+          # The public-tree guard's private words (test/unit/public_tree_test.rb). Required on
+          # this repository's own runs, where the secret exists; forks and Dependabot get none.
+          PUBLIC_TREE_PRIVATE_WORDS: ${{ secrets.PUBLIC_TREE_PRIVATE_WORDS }}
+          PUBLIC_TREE_PRIVATE_WORDS_REQUIRED: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.actor != 'dependabot[bot]' && '1' || '' }}
 
   # Support-window legs the single `test` job cannot answer: the gemspec floor
   # (Ruby 3.2.x, pinned to a full patch so the leg doesn't silently move

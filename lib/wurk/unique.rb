@@ -209,7 +209,7 @@ module Wurk
     # JSON.generate writes `5.minutes` as "300", in Sidekiq as here, so the
     # server middleware and the death handler get "300" back off the queue.
     # Refusing it left every `unique_for: 5.minutes` lock held until its TTL
-    # (tesote/tesote.com#519).
+    # (reported by an adopter).
     def self.coerce_ttl(value)
       return nil if value.nil? || value == false
       # `.to_i`, not `value`: ActiveSupport::Duration overrides `is_a?(Integer)`
