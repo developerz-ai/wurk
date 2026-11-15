@@ -81,7 +81,7 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
   # not survive. That difference is this file's whole history on the platform's
   # coding boxes: the assertions above are about supervision, and a total budget
   # made every one of them a bet on how fast the host forks and boots a Ruby
-  # child (developerz-ai/developerz.ai#4386).
+  # child.
   #
   # No threads and no real sleeping: the clock is a local, so the case proves the
   # arithmetic rather than racing the scheduler it is about.
@@ -700,7 +700,7 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
   # top cause of a red baseline on the platform's coding boxes — 83 refusals
   # across 9 tasks in four days, every one on a 4-core 1.8 GHz box that also runs
   # agents, while `bin/check` on the same SHA is green on a quiet machine
-  # (developerz-ai/developerz.ai#4386, and the class in #522).
+  # (the class in #522).
   #
   # Progress is what the supervisor actually promises; elapsed wall-clock is what
   # the host happens to be doing. So a slow host makes this poll LONGER and never

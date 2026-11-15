@@ -159,7 +159,7 @@ suite starts reporting the host's load as red tests. The
 measured case is the platform's coding boxes — 4 cores at 1.80 GHz, several agent
 sessions at once, this suite taking 366-734s against 209s on a quiet machine, and
 a baseline on the unmodified checkout going red while CI on the same SHA was green
-(developerz-ai/developerz.ai#4386, measured at the old flat 4 workers). The default
+(measured at the old flat 4 workers). The default
 now resolves to 2 there; `NCPU=1` lowers it further, and that belongs in the host's
 environment rather than in this repo, which cannot see it.
 

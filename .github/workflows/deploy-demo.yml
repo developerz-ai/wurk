@@ -6,7 +6,7 @@ name: deploy-demo
 #
 # DEPLOY MODEL: this workflow only BUILDS + PUSHES the image. Infra deploys it
 # via the in-cluster ArgoCD Image Updater, which selects the newest DOCR tag
-# matching `^sha-[0-9a-f]{7}$` (newest-build strategy, infrastructure#232) and
+# matching `^sha-[0-9a-f]{7}$` (newest-build strategy) and
 # syncs automatically — CI holds NO cluster credentials (infra repo rule).
 # There is no ArgoCD step here, and no ARGOCD_* secrets.
 #
@@ -180,8 +180,8 @@ jobs:
       # mislabels the image whenever the two differ, e.g. deploying a tag.
       #
       # `short` is the deploy-critical one. Infra's Image Updater selects by
-      # `allow-tags: regexp:^sha-[0-9a-f]{7}$` (the fleet convention adopted in
-      # infrastructure#232 — immutable tags, because `latest` moves under you
+      # `allow-tags: regexp:^sha-[0-9a-f]{7}$` (the fleet convention:
+      # immutable tags, because `latest` moves under you
       # and a digest can be re-pushed). Nothing here matched that pattern, so
       # Image Updater had no candidate and the demo sat on an old digest across
       # several releases. Keep this format in lockstep with

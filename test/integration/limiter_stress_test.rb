@@ -50,7 +50,7 @@ class LimiterStressTest < Wurk::Test::UnitCase
   # MEASURE. The old assertion `over_limit == 0` — "no acquire should time out
   # with a 15s wait" — is red here BY CONSTRUCTION while the limiter is behaving
   # perfectly, which is the same reason it went red on a loaded runner with
-  # nothing held at all (wurk#522, developerz-ai/developerz.ai#4386): a wait
+  # nothing held at all (wurk#522): a wait
   # budget is a claim about the HOST's speed, not about the acquire script's
   # atomicity. What survives starvation is what this suite is for — the limit is
   # never breached, every attempt is accounted for as acquired or refused, and a
