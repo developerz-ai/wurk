@@ -27,7 +27,7 @@
 | #527 vitest 4.1.11 → 5.0.0 | BLOCKED since 2026-09-10 (head `a80803db` has no required checks = #541); first commit failed `test + coverage` + `frontend (vitest)`; major → no auto-merge | After B1: `@dependabot recreate`; confirms #541 fix (three contexts on new head). Then fix vitest 5 compat in `frontend/` (config + any API breaks) or close w/ reason + ignore rule in `.github/dependabot.yml`. |
 
 ## #488 — remaining scope
-- `.dz/maintainer/maintainer.yml:70-73`: "inert until dz#1249 and dz#1530 close" false → dated checkable statement (live as of developerz.ai `b4cfe94d76e9`, 2026-09-14; `lanes.generated.ts:121`).
+- `.dz/maintainer/maintainer.yml:70-73`: "inert until  and  close" false → dated checkable statement (live as of developerz.ai `b4cfe94d76e9`, 2026-09-14; `lanes.generated.ts:121`).
 - `:117` cites `(.maintainer.yml:10-14)` → path moved to `.dz/maintainer/maintainer.yml`.
 - `:95` "none of the three required checks can wedge a PR" → false until B1 lands; rewrite after B1 to describe the mechanism.
 - Also stale: "bin/check refuses without Redis on 127.0.0.1:6379" (since #538 probes `REDIS_URL`).

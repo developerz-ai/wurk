@@ -8,7 +8,7 @@
 | U2 | `DEVELOPERZ_API_KEY` secret for the ecosystem watcher, or accept skip-with-notice | Add secret | [`01`](01-ci-green-doc-truth.md) C2 |
 | U3 | Ship a `sidekiq` executable in the wurk gem | Yes — it is the drop-in contract; G2 guards the clash | [`04`](04-drop-in-surface.md) D1 |
 | U4 | `unique_for:` used without `unique!`: WARN only, or auto-enable | WARN in 1.x (Ent requires `unique!`; auto-enable is a divergence) | [`03`](03-boot-guards-preflight.md) G1 |
-| U5 | Default `WURK_COUNT` when unset under `wurkswarm` (today: per core; surprised sales + adopter D). Sidekiq Ent swarm default is the reference | Keep parity with Ent's default; log the effective count (G3) | [`11`](11-observability-ops.md) K3 |
+| U5 | Default `WURK_COUNT` when unset under `wurkswarm` (today: per core; surprised adopter B + adopter D). Sidekiq Ent swarm default is the reference | Keep parity with Ent's default; log the effective count (G3) | [`11`](11-observability-ops.md) K3 |
 | U6 | Embedded swarm opt-in everywhere (`WURK_EMBED=1`, Puma included) + `authoritative!` periodic default — both breaking | Next major only; 1.x gets the role log line (G3) | [`03`](03-boot-guards-preflight.md), [`11`](11-observability-ops.md) K4 |
 | U7 | Per-queue "ACK on completion" option (narrows the SIGKILL re-run window; costs a round-trip per job on those queues) | Offer opt-in if adopter F's payments queue needs it; bench first | [`04`](04-drop-in-surface.md) D8 |
 | U8 | Opt-in Redis key prefix for per-app ACL isolation — explicitly NOT wire-compatible with Sidekiq tooling | Decline unless the infra owner needs it; a logical DB / separate instance is the compatible answer | — |

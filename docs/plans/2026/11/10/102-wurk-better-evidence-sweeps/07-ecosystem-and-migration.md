@@ -2,7 +2,7 @@
 
 > Part of [`overview.md`](overview.md). Depends on: [`02`](02-boot-and-adoption-dx.md) B4–B6, B10. E2 blocked on [`12`](12-human-decisions.md) H7 (Redis dump).
 
-Test of fitness = adopter F's app (sidekiq 7.3.10 + pro 7.3.60006 + ent 7.3.40004; 171 `Sidekiq::Job`, 136 `lock:` via sidekiq-unique-jobs, cron, failures, sentry-sidekiq, OTel, skylight, rspec-sidekiq). **adopter F is read-only — never edit it.** Finding: adopter F uses almost no Pro/Ent API (`super_fetch!`, web, `sidekiqswarm`); nearly every surface resolves in wurk. The breakers are listed here. Next adopter pool (still on Sidekiq): `adopter A/proxy-manager`, `adopter A/rails-boilerplate`, `adopter A/ai-dev`, `developerz-ai/a private app`, `developerz-ai/a private app`, `developerz-ai/a private app`, `adopter D/a private app`.
+Test of fitness = adopter F's app (sidekiq 7.3.10 + pro 7.3.60006 + ent 7.3.40004; 171 `Sidekiq::Job`, 136 `lock:` via sidekiq-unique-jobs, cron, failures, sentry-sidekiq, OTel, skylight, rspec-sidekiq). **adopter F is read-only — never edit it.** Finding: adopter F uses almost no Pro/Ent API (`super_fetch!`, web, `sidekiqswarm`); nearly every surface resolves in wurk. The breakers are listed here. Next adopter pool (still on Sidekiq): the adopter's infra repository, the adopter's infra repository, the adopter's infra repository, `developerz-ai/a private app`, `developerz-ai/a private app`, `developerz-ai/a private app`, `adopter D/a private app`.
 
 **Licensed-source rule:** `a local checkout` holds licensed Pro/Ent source. Do not read it for implementation, do not copy from it. E2's key shape was observed there by the sweep; it must be re-established from a Redis dump (H7) before any code depends on it.
 

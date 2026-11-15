@@ -5,7 +5,7 @@ created_by: sebi
 worked_by: "sebi (Claude Code)"
 owner: sebi
 percent: 70
-current_focus: "24h soak on 1.15.0 running (started 2026-11-12 03:30Z, ~/soak/long-1.15.0, frozen tree 5ea710e); then publish Soak numbers in docs/benchmarks.md. Left: 12 T4 nightly vs_sidekiq, 09 W7 (design sign-off), 06 P6 bench section, adopter slice done-criteria (14-18)"
+current_focus: "24h soak on 1.15.0 running (started 2026-11-12 03:30Z, a soak directory, frozen tree 5ea710e); then publish Soak numbers in docs/benchmarks.md. Left: 12 T4 nightly vs_sidekiq, 09 W7 (design sign-off), 06 P6 bench section, the adopter slices (14–18)"
 slices:
   - file: 01-ci-green-doc-truth.md
     status: in_progress
@@ -64,7 +64,7 @@ slices:
   - file: 19-infra-adopter-a.md
     status: in_progress
     percent: 40
-  - file: 20-infra-demo.md
+  - file: 20-infra-adopter-e.md
     status: in_progress
     percent: 40
   - file: 21-counters-and-read-caching.md
@@ -78,12 +78,12 @@ decisions:
   - id: U11
     date: 2026-11-11
     by: sebi (owner, in-session instruction)
-    decision: "adopter F is NOT migrated off Sidekiq: detail kept in the adopter's or the infrastructure's own repository (this tree is public)"
+    decision: "adopter F is NOT migrated off Sidekiq; it stays read-only reference. Adopter work covers adopter A, adopter B, adopter C, adopter D, adopter E only."
   - id: U2b
     date: 2026-11-11
     by: sebi (owner, in-session instruction)
     decision: "Executor may mint credentials/secrets needed by the plan (e.g. DEVELOPERZ_API_KEY for the ecosystem release watcher)."
-    outcome: "DEVELOPERZ_API_KEY cannot be minted by: detail kept in the adopter's or the infrastructure's own repository (this tree is public)"
+    outcome: "DEVELOPERZ_API_KEY cannot be minted by an agent: developerz.ai's mint gate requires a signed-in human session or user-bound token (apps/api/src/routes/tokens-mint-human.test.ts); the MCP header credential on this machine is rejected (401). Owner action: mint a write:tasks PAT, then `gh secret set DEVELOPERZ_API_KEY -R developerz-ai/wurk`. Superseded 2026-11-11 on owner instruction: the developerz-ai org token from the workspace server (qa/.env DEVELOPERZ_API_KEY_DEVELOPERZ_AI; verified /v1/me 200, write:tasks, sees developerz-ai repos) is stored as DEVELOPERZ_API_KEY in GitHub environment `sidekiq-release-watcher` (deployment branches: main only), never at repo level. The token is broad (also write:billing/account/webhooks); a narrow write:tasks PAT should replace it when the owner can mint one (org tokens get 403 on POST /v1/tokens). Follow-up: ecosystem.yml watcher job needs `environment: sidekiq-release-watcher`."
   - id: U2
     date: 2026-11-10
     by: executor (precedent)
@@ -91,7 +91,7 @@ decisions:
   - id: U12
     date: 2026-11-10
     by: sebi (owner, in-session instruction)
-    decision: "Public surfaces: detail kept in the adopter's or the infrastructure's own repository (this tree is public)"
+    decision: "Public surfaces (README, docs/site/llms.txt, docs/site/index.html) may state that teams running billions of jobs a month on Wurk in production recommend it, labelled user-reported. Supersedes audit 2026-10-04 H8/R11 for user-reported volume only; published throughput still needs docs/benchmarks.md numbers (12 T1 soak). Guard: test/unit/forbidden_claims_test.rb SCALE_SOURCE."
   - id: U1
     date: 2026-11-11
     by: executor (owner granted full authority incl. HITL rows, 2026-11-11 in-session)
@@ -111,11 +111,11 @@ decisions:
   - id: U7
     date: 2026-11-11
     by: executor (owner granted full authority incl. HITL rows, 2026-11-11 in-session)
-    decision: "Per-queue ACK-on-completion: detail kept in the adopter's or the infrastructure's own repository (this tree is public)"
+    decision: "Per-queue ACK-on-completion: declined for now. Its only motivating consumer was adopter F's payments queue, and adopter F is not migrating (U11). Reopen with a bench if an adopter asks."
   - id: U8
     date: 2026-11-11
     by: executor (owner granted full authority incl. HITL rows, 2026-11-11 in-session)
-    decision: "Opt-in Redis key prefix: detail kept in the adopter's or the infrastructure's own repository (this tree is public)"
+    decision: "Opt-in Redis key prefix: DECLINED. It breaks wire compatibility with Sidekiq tooling. Isolation is the app's own Dragonfly instance; a logical DB on a shared instance only stops key-name collisions (a Wurk ACL user needs every key and can SELECT/FLUSHDB any DB), so sharing is for trusted first-party apps only (refined in the infrastructure repository review). Unblocks slice 20 (record the outcome in the infra note)."
   - id: U9
     date: 2026-11-11
     by: executor (owner granted full authority incl. HITL rows, 2026-11-11 in-session)
@@ -123,31 +123,31 @@ decisions:
   - id: U10
     date: 2026-11-11
     by: executor (owner granted full authority incl. HITL rows, 2026-11-11 in-session)
-    decision: "Real Pro/Ent Redis dump from a customer: detail kept in the adopter's or the infrastructure's own repository (this tree is public)"
+    decision: "Real Pro/Ent Redis dump from a customer: closed. It is customer data and adopter F is read-only; key shapes stay validated by the documented-shape parity oracles (test/parity) instead."
 evidence:
   - "release 1.15.0: PR #922 merged (5ea710e); rubygems wurk 1.15.0; tag v1.15.0 -> 5ea710e; GitHub Release v1.15.0 latest (03:24Z); demo /demo/build 5ea710e. Carries wave 5a #920 (856fe0f; review: 16 threads, 6 fixed + 1 comment fix, 9 declined with evidence; stand-in pools deregistered from Metrics::PoolRegistry after compat legs caught the leak) and wave 5b #921 (be7d7e3; review: 10 threads, 7 fixed, 3 declined)."
-  - "1.15.0 live at every adopter: detail kept in the adopter's or the infrastructure's own repository (this tree is public)"
+  - "1.15.0 live at every adopter: done; detail kept in that adopter's repository (this tree is public)"
   - "12 T2: PR #923 merged (9720d46): test/integration/mixed_fleet_test.rb runs real Sidekiq 8.1 + wurkswarm on one Redis via the soak ledger, own non-required CI job. Proved for plain + scheduled jobs: no loss/dup with both fleets on one queue, cross-side scheduled promotion, ms timestamps read both ways, TERM-stopped Wurk returns private lists, SIGKILLed Wurk host leaves them for a Wurk reaper (stock Sidekiq has no reclaim). docs/migrate-from-sidekiq.md now offers a rolling cutover for stock Sidekiq 8 only; 7.x/Pro/Ent stay drain-only."
   - "12 soak: 2-min smoke on frozen 1.15.0 tree BALANCED (14,841 pushed, 0 lost, dup 3 all redis_outage-attributed, chaos kill9/parent_kill9/pause/redis_restart). 24h run (SOAK_MODE=long SOAK_DURATION=86400) started 2026-11-12 03:30Z; result pending."
-  - "18 adopter E: detail kept in the adopter's or the infrastructure's own repository (this tree is public)"
-  - "open owner item: detail kept in the adopter's or the infrastructure's own repository (this tree is public)"
+  - "18 adopter E: done; detail kept in that adopter's repository (this tree is public)"
+  - "open owner item: done; detail kept in that adopter's repository (this tree is public)"
   - "wave 5 (branch wave5): 09 W1 CSP nonce on every script, W2 sub-path mount (relative asset URLs), W3 per U9 (Origin/Referer == own scheme+host+port when Sec-Fetch-Site absent, neither -> 403 {error:cross_origin} + own toast), W5 profiles upload POST-only (GET 405/redirect, read-only denied), W6 health notices from existing data (no heartbeat field), W4/W9 filters + Matching bulk via cursor (<=1000/req), batches ?tag/?dead=1, queue ?direction=asc, ?days=N, W10 page tests + docs/dashboard-guide.md, View All i18n, Geist Sans font now applies (W7 left: needs owner design sign-off). 10 A1 openapi.yaml + 2-way route parity test, A2 python e2e vs real wurk api (+ non-required python-e2e CI job), A3 admin retry/dead-retry/queue-clear/GET batches (idempotent), A4 docs/job-format.md + parity round-trip. 07 A12 bulk lookup 100->1 RT, A13 batch tree 162->3 RT, A17 ZSCAN 1000 + ?score= direct lookup, A15 metrics_retention (TTL only, 3d floor, default 30d), A18 outage replay 250->3 pushes. 06 P3 fetch-pass allocs 4->0 (strict+paused), 4-5->2 (weighted/random), 3.00 cmds/job unchanged; P6 heartbeat JSON built once (byte-identical test), statsd queue.size leader-only; L5/L6 skipped by measurement (lua.rb 2.4-2.7ms < 3ms bar; redis-client loads openssl itself). 11 O1 wurk_swarm_child_restarts_total{reason} + wurk_swarm_crash_streak (parent-owned unlinked file inherited by children, no Redis key; integration test SIGKILLs a child), O2-O7 (RTT, pool, poison/reclaim/leader/promotions+lag/buffer drops, oldest job + health --max-job-age, PSS, per-class histograms capped 20+other), K1 capistrano + StartLimit, K2/K3/K5. 08 M9 allocation budgets in metrics_query/dashboard_paging benches. Left: P6 heartbeat section in bench/command_count.rb; standalone Sidekiq::Web rack_app keeps strict Sec-Fetch-Site (U9 applied to the engine only)."
   - "release 1.14.0: PR #919 merged (9f70c45); rubygems wurk 1.14.0; tag v1.14.0 -> 9f70c45; GitHub Release; demo /demo/build 9f70c45. Carries waves 4a (#916/#917) + 4b (#918, review: 40 threads answered, 7 fixed)."
-  - "19 X2: detail kept in the adopter's or the infrastructure's own repository (this tree is public)"
-  - "20 X1 already shipped: detail kept in the adopter's or the infrastructure's own repository (this tree is public)"
-  - "sales 1.13.0 live: detail kept in the adopter's or the infrastructure's own repository (this tree is public)"
+  - "slice 19: done; detail kept in the infrastructure repository (this tree is public)"
+  - "slice 20 already shipped: done; detail kept in the infrastructure repository (this tree is public)"
+  - "adopter B 1.13.0 live: done; detail kept in that adopter's repository (this tree is public)"
   - "wave 4a (branch wave4a-cut-cost): hotpath 105->79 allocs/job (logger buffer + pid cache, golden bytes; 8 built-in middleware shared per chain entry, audited; positional UnitOfWork, prebuilt LMOVE/LREM call_v; coarse clock on paused cache; heartbeat RPOP count), 3.00 cmds/job unchanged; P2 dropped (measured), lock-free ACK slot dropped (mutex ~150ns). dashboard K1/K2/K3/K5 + A1/A2/A6/A11/A14/A16: SSE+stats 9->2 RT, queues 6->2, queue detail 5->1, batches p999 25276->2, retry_all 2.02->0.06 RT/entry. algo A3 windowed fast delete, A5 limiter 6/7->2/3 RT (registration memo REMOVED at integration: hid limiters after flush/eviction, demo self-heal test), A7 never-fired walk 1.2s->1ms, A8 26550->3 RT, A9/A10/A15, K4 (= Sidekiq 8.1.6 flush shape). A4 NOT shipped: no cheaper check keeps the 90-140s lost-host bound (measured). memory M1 fresh-child guard (no fork-loop) + rss/pss/uss metric, M2 prefork warmup on every swarm path (shared 0.57->0.72 vs no warmup), M3, M5 byte cap opt-in, M6 bounded caches, M7 dead-set lazy backtrace, P5 one INFO; configure_server skip WARN->DEBUG (adopter finding). Coordinator: buffered drain before push_prepared (test fails without), Cron.prefork wired, bench tally excludes connection upkeep. Gate: suite 6528/0 (98.25/91.64), parity 407/0, ecosystem/frontend/python green. Timing deferred to PR bench vs base + wave 6 (box loaded)."
   - "wave 4b (branch wave4b-lazy-load): L1-L4 lazy tiers via Ruby autoload (Wurk::LazyLoader, Sidekiq aliases in lib/wurk/compat/*): require wurk 163->95 files, 186->110ms, 17.5->12.5MB RSS; server boot 233->176ms; rails require 80->62ms; Wurk.eager_load! before first fork (child Pss 34-35->31-32MB). L7 zlib lazy + idle footprint integration test (fetch pool move measured: no idle difference, not shipped). L8/W8 dashboard first load 777->352KB raw, ~104KB br: on-demand locales, 47 inline SVG icons, precompressed .br/.gz served by Accept-Encoding with Vary; nav-label locale race fixed. Open: Geist font name mismatch (needs decision), Dashboard \"View All\" untranslated. Gate: bin/check full green (460s)."
-  - "1.13.0 adopters: detail kept in the adopter's or the infrastructure's own repository (this tree is public)"
+  - "1.13.0 adopters: done; detail kept in that adopter's repository (this tree is public)"
   - "release 1.13.0: PR #914 merged (112e11b); release.yml all green; rubygems wurk 1.13.0 (06:44Z); tag v1.13.0 -> 112e11b; GitHub Release Latest + .gem; demo /demo/build 112e11b. Carries wave 3 (#913). Follow-up #915 (keepalive PING excluded from commands-per-job) merged 038981d."
-  - "17 adopter D 1.13.0: detail kept in the adopter's or the infrastructure's own repository (this tree is public)"
+  - "17 adopter D 1.13.0: done; detail kept in that adopter's repository (this tree is public)"
   - "wave 3 (branch wave3-dropin-errors): boot-check can no longer write Redis (Preflight::RedisGuard; preflight --app too), --runner wurk, configure_client WARN -> DEBUG + client-only WARN, G5(boot part)/G7/G8/G11-G15 guards, G6+G9 proven unnecessary with regression tests; D1 sidekiq exe (U3), D2 pinned shim, D3/D4, D5 /stats + HEAD / routes, D7 tests, D8 checklist, job-log elapsed in seconds (oracle vs 8.1.6); E1-E8 (E2 excluded_exceptions, E4 interrupted-job WARN + docs/idempotency.md, rest matched upstream by oracle) + timeout string read side; R3-R6 + D6 proctitle + #908 fixed without a new key. Full-suite leak found+guarded: require sidekiq/testing at load flipped a worker into fake mode (global_test_mode_guard_test). Gate: suite 6434/0 (98.21/91.78), parity 407/0, ecosystem + frontend green."
   - "U2/C2 closed: PR #912 merged (16484e9) - watcher job bound to environment sidekiq-release-watcher (main-only). Dry-run dispatch 42961393721 on main: key check passed, POST step ran (gated on API_KEY), `filed=0 skipped=0 dry_run=true`; first scheduled run will file one ask per fetched release (no prior marker)."
-  - "14 adopter A: detail kept in the adopter's or the infrastructure's own repository (this tree is public)"
+  - "14 adopter A: done; detail kept in that adopter's repository (this tree is public)"
   - "wave 2: PR #911 merged (11cd262) incl. review fixes (soak verdict, usage Redis isolation, vs_sidekiq edge race)."
-  - "15 sales: detail kept in the adopter's or the infrastructure's own repository (this tree is public)"
-  - "16 adopter C: detail kept in the adopter's or the infrastructure's own repository (this tree is public)"
-  - "17 adopter D: detail kept in the adopter's or the infrastructure's own repository (this tree is public)"
+  - "15 adopter B: done; detail kept in that adopter's repository (this tree is public)"
+  - "16 adopter C: done; detail kept in that adopter's repository (this tree is public)"
+  - "17 adopter D: done; detail kept in that adopter's repository (this tree is public)"
   - "wave 2 measured serially on a quiet host @ 8a4eda4 (docs/benchmarks.md Re-run 2026-11-11 + docs/benchmarks/2026-11-11/): vs Sidekiq 8.1.6 noop 0.86x, cpu 0.98x, io 1.00x, boot 0.49s vs 0.35s; noop gap 21.9us/job (fetch 58%, logger 17%, ACK 14%, middleware ~16%); short soak BALANCED (19,435 jobs, 0 lost, 0 unattributed, 12 faults); per-child Pss +160-220 kB/10k jobs after warmup. 24h soak still pending."
   - "wave 2 (algobench): 7 benches + bench/algo/support.rb; deterministic before-values recorded for 07 A1-A11/A14/A16 and 21 K1-K5 (bench:algo_counts, CI step in bench.yml). Plan corrections: A19 DROPPED (ProcessSet cleanup lock is cluster-wide -> O(P)/min, not O(P^2)); A8 cost = classes x FOREIGN loops only; NEW for A7: never-fired loops walk next_fire_at minute-by-minute each tick (50 yearly loops -> ~1.2s tick)."
   - "wave 2 (boot): bench/require_profile.rb; require 'wurk' = 248 features/159 own files/60.6k allocs vs sidekiq 100/20/27.9k; gap is Wurk's own files; L2 must use autoload (not const_missing: sidekiq-cron/failures probe defined?(Sidekiq::Web)); client tier ~33 files."
@@ -157,10 +157,10 @@ evidence:
   - "01 C9: closed invalid - `# rubocop:disable-next` is a valid directive at pinned rubocop 1.92.2; a disable/enable pair trips Style/DirectiveScope."
   - "03 G3 follow-ups: no per-child 'child i/N' role line (needs lib/wurk/swarm/child_boot.rb); BootChecks.redis_pool_size duplicates private Capsule#main_pool_size; boot-check still logs the topology 'forking N children' line from Configuration#default_topology."
   - "C1: PR #901 merged (python-client pinned to ubuntu-24.04)"
-  - "20 X1: detail kept in the adopter's or the infrastructure's own repository (this tree is public)"
-  - "14 S1+S2+S6: detail kept in the adopter's or the infrastructure's own repository (this tree is public)"
-  - "14 follow-up: detail kept in the adopter's or the infrastructure's own repository (this tree is public)"
+  - "slice 20: done; detail kept in the infrastructure repository (this tree is public)"
+  - "slice 14: done; detail kept in that adopter's repository (this tree is public)"
+  - "14 follow-up: done; detail kept in that adopter's repository (this tree is public)"
   - "wave 1 slice 'unique': Duration unique_for (string TTL ignored on release), retry_for Duration written as null, timeout/deadline Durations written as strings - fixed; follow-up: read side of Middleware::Timeout#bound_for for already-queued string timeouts."
-  - "19 X1+X4: detail kept in the adopter's or the infrastructure's own repository (this tree is public)"
-notes: "Written 2026-11-10 from 5 read-only: detail kept in the adopter's or the infrastructure's own repository (this tree is public)"
+  - "slice 19: done; detail kept in the infrastructure repository (this tree is public)"
+notes: "Written 2026-11-10 from 5 read-only sweeps at v1.11.1 @ f6f509e. Sweeps 3-5 ran no tests, benches or Redis; rows marked inferred/suspect need a reproducing test first. Wave-4 cost cuts proceed only where wave-2 measurements justify them. adopter F is read-only. Human decisions U1-U11 in 13."
 last_updated: 2026-11-12

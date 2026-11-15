@@ -8,8 +8,8 @@ Make Wurk better where real use says it hurts: fix what the 5 adopter apps had t
 - Maps: `lib/CLAUDE.md` (who owns what), `test/CLAUDE.md` (layers), `.github/CLAUDE.md` (CI, bench, release), `frontend/CLAUDE.md`. Spec: `docs/target/sidekiq-{free,pro,ent}.md`. Intentional divergences: `docs/idea/parity-divergences.md`.
 - Sweeps (2026-11-10, v1.11.1 @ `f6f509e`, read-only): (1) 5 adopter apps — config, git history, logs, deploy, Sentry (adopter A org, 30 d); (2) adopter F Sidekiq surface vs Wurk; (3) core runtime; (4) dashboard / HTTP API / ecosystem / docs / CI; (5) algorithms + memory. Line refs are as of `f6f509e` — re-locate by symbol if moved.
 - Honest limits: sweeps 3–5 read code, ran no tests/benches/Redis. Rows marked "inferred"/"suspect" need the reproducing test first. Worst-case numbers in [`07`](07-algorithms.md) are arithmetic. Timings in [`06`](06-perf-hot-path-boot.md) were taken on a loaded host.
-- Healthy baseline (don't redo): 0 open issues; no TODO/FIXME in `lib/`; coverage ~98/92; adopter logs show no Wurk-originated errors (no NOSCRIPT / reclaim / heartbeat noise); Sentry has no live Wurk defect beyond SALES-APP-21 (fixed in 1.11.1); config docs match code; no forbidden "faster" claims; ACK piggyback, leader CAS, cron fire CAS, unique release verified sound.
-- Adopters: adopter B, adopter A, adopter C, adopter D, adopter E (all under `~/workspace`). adopter F = future target, **read-only**. a local checkout = licensed Pro/Ent source: reference only, copy nothing.
+- Healthy baseline (don't redo): 0 open issues; no TODO/FIXME in `lib/`; coverage ~98/92; adopter logs show no Wurk-originated errors (no NOSCRIPT / reclaim / heartbeat noise); Sentry has no live Wurk defect beyond  (fixed in 1.11.1); config docs match code; no forbidden "faster" claims; ACK piggyback, leader CAS, cron fire CAS, unique release verified sound.
+- Adopters: adopter B, adopter A, adopter C, adopter D, adopter E. adopter F = future target, **read-only**. a local checkout = licensed Pro/Ent source: reference only, copy nothing.
 - Reference patterns: boot WARN → `lib/wurk/boot_checks.rb:64-83`; preflight row → `lib/wurk/preflight/checks.rb:183-189`; single-read paging → `lib/wurk/web/paginator.rb:12-46`; atomic Lua move → `lib/wurk/lua.rb:163-170`; ecosystem harness → `test/ecosystem/README.md`; bench output format → `bench/fetch_100_queues.rb` + `bin/bench-compare`.
 - Execution: hive rules (`.claude/commands/feature.md`) — ≤4 agents per wave, only the coordinator spawns, disjoint file sets, one checkout. One PR in flight at a time (build → PR → merged → pull → clean tree → next), ≤100 files. Merge bot merges on green: review + soak before push. `lib/` edits → `bin/repin-anchors` on the PR's own tree. Release = merged `lib/wurk/version.rb` bump only (`RELEASE.md`).
 
@@ -25,7 +25,7 @@ Make Wurk better where real use says it hurts: fix what the 5 adopter apps had t
 | 7 | Deep dashboard pages cost a Redis round-trip per skipped row; fast-delete Lua copies whole queues; reaper SCANs the keyspace every 60 s + per child boot | [`07`](07-algorithms.md) A1, A3, A4 |
 | 8 | No RSS/PSS measurement, recycle path untested, no pre-fork compaction on Ruby 3.2 / railtie path, no allocator guidance | [`08`](08-memory.md) M0–M4 |
 | 9 | No committed soak/chaos or mixed-fleet proof | [`12`](12-proof-harness.md) T1–T2 |
-| 10 | 4 of 5 adopters probe workers badly or not at all; none scrapes `/metrics` | [`11`](11-observability-ops.md), [`19`](19-infra-adopter-a.md), [`20`](20-infra-demo.md) |
+| 10 | 4 of 5 adopters probe workers badly or not at all; none scrapes `/metrics` | [`11`](11-observability-ops.md), [`19`](19-infra-adopter-a.md), [`20`](20-infra-adopter-e.md) |
 
 ## Plan files (execute in order within a wave)
 1. [`01-ci-green-doc-truth.md`](01-ci-green-doc-truth.md) — red `main`, contradicting docs, stale blockers.
@@ -42,19 +42,19 @@ Make Wurk better where real use says it hurts: fix what the 5 adopter apps had t
 12. [`12-proof-harness.md`](12-proof-harness.md) — soak/chaos with jid ledger, mixed fleet, command-budget gate, anchors check.
 13. [`13-human-decisions.md`](13-human-decisions.md) — U1–U11: breaking/default/security calls only a human makes.
 14. [`14-adopter-a.md`](14-adopter-a.md) · 15. [`15-adopter-b.md`](15-adopter-b.md) · 16. [`16-adopter-c.md`](16-adopter-c.md) · 17. [`17-adopter-d.md`](17-adopter-d.md) · 18. [`18-adopter-e.md`](18-adopter-e.md) — per-repo follow-ups, each edited from its own repo.
-19. [`19-infra-adopter-a.md`](19-infra-adopter-a.md) · 20. [`20-infra-demo.md`](20-infra-demo.md) — probes, scrape + alerts.
+19. [`19-infra-adopter-a.md`](19-infra-adopter-a.md) · 20. [`20-infra-adopter-e.md`](20-infra-adopter-e.md) — probes, scrape + alerts.
 21. [`21-counters-and-read-caching.md`](21-counters-and-read-caching.md) — dashboard/API round-trip collapsing (added 2026-11-10; wave 4 B).
 
 ## Waves (≤4 agents per wave, disjoint file sets; PRs land one at a time)
 | Wave | Slices / rows | Parallel split (file sets) |
 |---|---|---|
-| 0 — today | 01 C1; 14 S1 (other repo); 19 X1, 20 X1 (other repos) | 1 agent here + the other repos independently |
+| 0 — today | 01 C1; slice 14 (other repo); slice 19 X1 (other repos) | 1 agent here + the other repos independently |
 | 1 — correctness + guards | 02 R1+R2+R6; 03 G1–G4, G10; 01 C3–C8; 12 T3+T6 | A: `lib/wurk/fetcher/`, `lua.rb`, poison pill · B: `boot_checks.rb`, `cli.rb`, `rails_boot.rb` · C: `docs/` · D: `bench/`, `.github/`, `bin/check` |
 | 2 — measure | 06 P1 + L0; 08 M0; 07 benches; 12 T1 ledger | A: `bench/vs_sidekiq*`, `bin/profile` · B: `bench/require_profile.rb` · C: `bench/rss_soak.rb`, `bench/soak/` · D: the 7 benches in 07 |
 | 3 — drop-in + errors | 04 D1–D8; 05 E1–E8; 03 G5–G15; 02 R3–R5 | A: `wurk.gemspec`, `ecosystem/`, generators · B: `lib/wurk/web/` routes, proctitle · C: `testing.rb`, `sentry.rb`, `rails_reloader.rb`, `test/parity/` · D: `preflight/`, `swarm.rb` reclaim |
 | 4 — cut cost (only rows the wave-2 numbers justify) | 06 L1+L2+L4 (one PR), P2–P6; 08 M1–M6; 07 A1–A6 | A: `lib/wurk.rb`, `compat.rb`, `cli.rb` pre-fork · B: `app/controllers/wurk/`, `batch_set.rb`, `flow_set.rb`, `job_set.rb` · C: `limiter/`, `lua/limiter_*`, `web/enterprise.rb` · D: `swarm.rb` memory, `client/buffered.rb`, caches |
 | 5 — long tail | 07 A7–A19; 09; 11; 04 D9–D13; 10 | A: `cron.rb`, `metrics/` · B: `frontend/`, dashboard controllers · C: `health`/metrics export, `examples/`, `docs/deployment.md` · D: `test/ecosystem/`, `lib/wurk/api/`, `clients/python/` |
-| 6 — proof + release + adopters | 12 T1 24h soak, T2; release; 15–18, 19 X2–X4 | soak is one agent; adopter repos one each |
+| 6 — proof + release + adopters | 12 T1 24h soak, T2; release; 15–18, slice 19 | soak is one agent; adopter repos one each |
 
 Releases: after wave 1 (patch: reclaim fix + guards), after wave 3 (minor), after wave 4/5 (minor with published numbers). Adopter slices follow the release that carries what they remove.
 
