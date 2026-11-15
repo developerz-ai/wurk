@@ -1,10 +1,10 @@
 - entry: 'Batch "fired" markers use `b-<bid>-success`/`-complete`'
-  anchor: 'lib/wurk/batch/callbacks.rb#L202-L219'
+  anchor: 'lib/wurk/batch/callbacks.rb#L246-L263'
   fragment: |-
     ok = conn.call('SET', "b-#{bid}-#{event}", '1', 'NX', 'EX', Batch::CALLBACK_NOTIFY_TTL)
     ok == 'OK'
 - entry: 'Batch "fired" markers use `b-<bid>-success`/`-complete`'
-  anchor: 'lib/wurk/batch/callbacks.rb#L325-L339'
+  anchor: 'lib/wurk/batch/callbacks.rb#L367-L381'
   fragment: |-
     callbacks_json, queue, parent_bid = Wurk.redis do |conn|
     conn.call('HMGET', "b-#{bid}", 'callbacks', 'callback_queue', 'parent_bid')
@@ -29,8 +29,8 @@
 - entry: 'Batch `b-<bid>-failinfo` is not written or imported'
   anchor: 'lib/wurk/batch/death_handler.rb#L31-L38'
   fragment: |-
-    keys: ["b-#{bid}", "b-#{bid}-jids", "b-#{bid}-died", "b-#{bid}-failed", "b-#{bid}-pkids"],
-    argv: [jid, Batch::DEFAULT_EXPIRY_SECONDS]
+    keys: ["b-#{bid}", "b-#{bid}-jids", "b-#{bid}-died", "b-#{bid}-failed", "b-#{bid}-pkids", Keys::BATCH_FIRES],
+    argv: [jid, Batch::DEFAULT_EXPIRY_SECONDS, Batch.drain_epoch, bid]
 - entry: 'Batch `b-<bid>-failinfo` is not written or imported'
   anchor: 'lib/wurk/batch.rb#L70-L109'
   fragment: |-
@@ -40,7 +40,7 @@
   fragment: |-
     @tags.each { |t| index_tag(pipe, "tags:#{t}") }
 - entry: 'Batch tags use a JSON field and reverse indexes, not `b-<bid>-tags`'
-  anchor: 'lib/wurk/batch.rb#L568-L571'
+  anchor: 'lib/wurk/batch.rb#L580-L583'
   fragment: |-
     data = fetch_hash
     load_meta(data)
@@ -70,23 +70,23 @@
     pending, live, kids = Wurk.redis do |conn|
     Wurk::Lua::Loader.eval_cached(conn, :batch_delete, keys: delete_keys(own, parent),
 - entry: 'Batch tags use a JSON field and reverse indexes, not `b-<bid>-tags`'
-  anchor: 'lib/wurk/batch/callbacks.rb#L191-L195'
+  anchor: 'lib/wurk/batch/callbacks.rb#L237-L241'
   fragment: |-
     Wurk.redis do |conn|
     conn.pipelined { |pipe| Batch.keys_for(bid).each { |key| pipe.call('EXPIRE', key, seconds) } }
 - entry: 'Batch tags use a JSON field and reverse indexes, not `b-<bid>-tags`'
-  anchor: 'lib/wurk/batch/death_handler.rb#L58-L61'
+  anchor: 'lib/wurk/batch/death_handler.rb#L59-L62'
   fragment: |-
     Wurk.redis do |conn|
     conn.pipelined do |pipe|
     Batch.keys_for(bid).each { |key| pipe.call('EXPIRE', key, Batch::DEFAULT_EXPIRY_SECONDS, 'NX') }
 - entry: 'Batch IDs are random; the legacy global `BID` counter is unused'
-  anchor: 'lib/wurk/batch.rb#L63-L66'
+  anchor: 'lib/wurk/batch.rb#L64-L67'
   fragment: |-
     # (sharded batches in Pro 8) inspect the first character.
     BID_BYTES = 10
 - entry: 'Batch IDs are random; the legacy global `BID` counter is unused'
-  anchor: 'lib/wurk/batch.rb#L171-L173'
+  anchor: 'lib/wurk/batch.rb#L183-L185'
   fragment: |-
     def initialize(bid = nil)
     @bid              = bid || SecureRandom.urlsafe_base64(BID_BYTES)

@@ -5,6 +5,7 @@ require 'securerandom'
 require_relative 'lua'
 require_relative 'batch/buffer'
 require_relative 'batch/callbacks'
+require_relative 'batch/fire_recovery'
 
 module Wurk
   # Sidekiq Pro Batches. Group jobs, attach success/complete/death callbacks,
@@ -125,11 +126,22 @@ module Wurk
 
     # BATCH_ACK_SUCCESS for `jid`, as Integers: [removed, pending, live, kids].
     # The last three are the fire-gate inputs `Callbacks.maybe_fire` takes.
+    # The fire index key rides along so the script can record the bid in the
+    # same atomic step that observes a drain (positional KEYS); the entry is
+    # what makes the fire recoverable if this process dies before firing.
     def self.ack_success(conn, bid, jid)
       Wurk::Lua::Loader.eval_cached(
         conn, :batch_ack_success,
-        keys: ["b-#{bid}", "b-#{bid}-jids", "b-#{bid}-failed", "b-#{bid}-pkids"], argv: [jid]
+        keys: ["b-#{bid}", "b-#{bid}-jids", "b-#{bid}-failed", "b-#{bid}-pkids", Keys::BATCH_FIRES],
+        argv: [jid, drain_epoch, bid]
       ).map(&:to_i)
+    end
+
+    # Score axis of the fire index (`Keys::BATCH_FIRES`): the CLOCK_REALTIME
+    # epoch the drain was observed at, so `FireRecovery` can hold entries back
+    # for its grace window and retire ones whose batch is long gone.
+    def self.drain_epoch
+      ::Process.clock_gettime(::Process::CLOCK_REALTIME)
     end
 
     # Two-axis trim of a batch index ZSET (`batches`, `dead-batches`), in the

@@ -29,9 +29,13 @@ module Wurk
     module Callbacks
       module_function
 
-      # In-process re-drive for the fire and ack paths. Nothing else re-drives
-      # a fire once the job that drained the batch has acked, so a transient
-      # Redis error there would otherwise strand the callbacks for good.
+      # In-process re-drive for the fire and ack paths, so a transient Redis
+      # error there does not strand the callbacks for good. A drained batch
+      # whose callbacks are still unenqueued is also recorded durably in
+      # `Keys::BATCH_FIRES` (by the drain-observing Lua), and `Batch::FireRecovery`
+      # is the cluster-wide re-drive behind this one — the case neither these
+      # attempts nor the acking job's process can recover from (a crash, or an
+      # outage that eats every attempt) is what only the durable entry can.
       REDRIVE_ATTEMPTS = 3
       REDRIVE_BACKOFF = 0.05
 
@@ -45,12 +49,54 @@ module Wurk
       # parent whose own jobs are done while a child batch is still running
       # waits here (kids > 0); the child's `propagate_to_parent` re-enters with
       # the parent's fresh state when it finishes.
+      #
+      # Once the fires for this drain have completed without raising, the
+      # batch's fire-index entry is cleared — the drain this call just handled
+      # is durable in the markers, so only an entry for a fire that never
+      # happened needs to survive.
       def maybe_fire(bid, pending:, live:, kids:)
         return unless live.zero? && kids.zero?
 
         fire_complete(bid)
         fire_success(bid) if pending.zero? && !subtree_dead?(bid)
+        clear_fire_entry(bid)
         propagate_to_parent(bid)
+      end
+
+      # Cluster-wide re-drive for a fire whose caller died before or during
+      # firing: the fire index (`Keys::BATCH_FIRES`) holds the bid, this
+      # re-enters `maybe_fire` with the batch's fresh state. The markers dedup,
+      # so a re-drive of an already-fired drain enqueues nothing; an entry is
+      # cleared only once its fire pass actually completed (or the batch is
+      # gone). A batch that is live again (`#jobs` reopened it, `live` > 0)
+      # keeps its entry: the drain it recorded was superseded, and its next
+      # drain re-ZADDs with a fresh score — dropping the entry here would also
+      # drop a fire that is still owed for the earlier drain.
+      def re_drive(bid)
+        state = Wurk.redis do |conn|
+          conn.pipelined do |pipe|
+            pipe.call('EXISTS', "b-#{bid}")
+            pipe.call('HMGET', "b-#{bid}", 'pending')
+            pipe.call('SCARD', "b-#{bid}-jids")
+            pipe.call('SCARD', "b-#{bid}-pkids")
+          end
+        end
+        exists, pending, live, kids = state
+        if exists.zero?
+          Wurk.redis { |conn| conn.call('ZREM', Keys::BATCH_FIRES, bid) }
+          return
+        end
+
+        maybe_fire(bid, pending: pending.first.to_i, live: live.to_i, kids: kids.to_i)
+      end
+
+      # Best-effort: a ZREM lost to a blip leaves the entry in place for
+      # `FireRecovery`, whose re-drive the markers dedup to a no-op — never a
+      # lost or doubled callback.
+      def clear_fire_entry(bid)
+        Wurk.redis { |conn| conn.call('ZREM', Keys::BATCH_FIRES, bid) }
+      rescue StandardError => e
+        Wurk.configuration.handle_exception(e, { context: "batch #{bid}: fire index clear failed", bid: bid })
       end
 
       # Yields the attempt number (0-based) and retries a StandardError up to
@@ -380,7 +426,8 @@ module Wurk
         pending, live, kids = Wurk.redis do |conn|
           Wurk::Lua::Loader.eval_cached(
             conn, :batch_kid_done,
-            keys: ["b-#{parent_bid}", "b-#{parent_bid}-jids", "b-#{parent_bid}-pkids"], argv: [bid]
+            keys: ["b-#{parent_bid}", "b-#{parent_bid}-jids", "b-#{parent_bid}-pkids", Keys::BATCH_FIRES],
+            argv: [bid, Batch.drain_epoch, parent_bid]
           )
         end
         maybe_fire(parent_bid, pending: pending.to_i, live: live.to_i, kids: kids.to_i)

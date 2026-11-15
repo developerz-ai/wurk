@@ -445,6 +445,30 @@ exist. Cleanup does not import or preserve their contents. Legacy
 (see [the divergence ledger](idea/parity-divergences.md#batch-b-bid-failinfo-is-not-written-or-imported)).
 Outside explicit deletion, Redis expires the TTL-managed pieces individually.
 
+One index is Wurk-only and outside `Batch.keys_for`: `batch:fires`
+(`Keys::BATCH_FIRES`), a ZSET whose members are bids and whose scores are the
+CLOCK_REALTIME epoch (`Batch.drain_epoch`) at which a batch's last job was
+acked out of the live set. It carries no TTL; `FireRecovery` bounds it instead
+with `ZREMRANGEBYSCORE` at `DEFAULT_EXPIRY_SECONDS`, the same window the batch
+hash lives under. The three scripts that can observe a drain —
+`batch_ack_success`, `batch_ack_complete` and `batch_kid_done` — `ZADD` the bid
+in the same atomic step, *before* the process that acked goes on to enqueue the
+batch's callbacks. If that process is killed in between (the chaos soak's
+outage), the entry is the only durable record that those callbacks are owed;
+the cluster-wide `Batch::FireRecovery` loop re-drives it from the batch's fresh
+state, and `Callbacks.maybe_fire` `ZREM`s it only once its fire pass completed.
+A batch that is merely slow clears its own entry the same way; the loop leaves
+entries inside its grace window (30s) alone.
+
+This does not widen the at-most-once contract above: a re-drive goes through
+the same `SET NX` marker keys, so a redriven drain either fires the callback
+it owed or finds the marker the dead process already wrote. An entry whose
+batch hash is gone is retired at the next sweep and enqueues nothing, and
+entries past `DEFAULT_EXPIRY_SECONDS` are dropped wholesale, so an entry can
+outlive its batch by at most that window. `:death` is deliberately not
+re-driven: `fire_death` claims its marker *before* enqueueing (at-most-once),
+and duplicating a claim whose enqueue was lost would fire `:death` twice.
+
 The two index ZSETs — `batches` (all batches, scored by creation time) and
 `dead-batches` (batches that fired `:death`, scored by death time) — are
 bounded on a second axis: member count, not just TTL. `Batch.trim_index`

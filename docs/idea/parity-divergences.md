@@ -885,8 +885,8 @@ U8 — the human-only action that obtains that dump
 a Pro batch in flight at the swap may skip its `:success` callback. Revisit
 with a dump.
 
-**Anchor:** `lib/wurk/batch/callbacks.rb` — [marker gate and writer](../../lib/wurk/batch/callbacks.rb#L202-L219),
-[callback spec reader](../../lib/wurk/batch/callbacks.rb#L325-L339),
+**Anchor:** `lib/wurk/batch/callbacks.rb` — [marker gate and writer](../../lib/wurk/batch/callbacks.rb#L246-L263),
+[callback spec reader](../../lib/wurk/batch/callbacks.rb#L367-L381),
 [Pro §2.8 batch callback-marker key types](../target/sidekiq-pro.md#28-redis-data-model-for-batches), and the parity
 oracle
 [`test_a_pro_shaped_success_marker_suppresses_the_success_callback`](../../test/parity/batch_test.rb),
@@ -951,13 +951,13 @@ cleanup does not promise preservation, import or synchronization with the
 JSON field and reverse indexes.
 
 **Anchor:** [JSON and reverse-index writers](../../lib/wurk/batch.rb#L469-L496),
-[reopen reader](../../lib/wurk/batch.rb#L568-L571),
+[reopen reader](../../lib/wurk/batch.rb#L580-L583),
 [status reader](../../lib/wurk/batch/status.rb#L80-L86),
 [reverse-index scan](../../lib/wurk/batch_set.rb#L68-L80),
 [carried-over cleanup suffixes](../../lib/wurk/batch.rb#L77-L84),
 [delete key selection](../../lib/wurk/batch/status.rb#L130-L136),
-[linger expiry](../../lib/wurk/batch/callbacks.rb#L191-L195), and
-[death NX expiry](../../lib/wurk/batch/death_handler.rb#L58-L61).
+[linger expiry](../../lib/wurk/batch/callbacks.rb#L237-L241), and
+[death NX expiry](../../lib/wurk/batch/death_handler.rb#L59-L62).
 `test/unit/batch_status_test.rb`, `test_tags_round_trips_json`, covers the
 JSON reader, not import of a Pro-shaped per-batch set.
 
@@ -981,8 +981,8 @@ BIDs monotonic. The Pro-8 model is a deliberate choice, not evidence that
 every older schema row remains supported or that the counter disappeared in
 a particular upstream release.
 
-**Anchor:** [random byte count](../../lib/wurk/batch.rb#L63-L66) and
-[batch ID generation/reopen](../../lib/wurk/batch.rb#L171-L173).
+**Anchor:** [random byte count](../../lib/wurk/batch.rb#L64-L67) and
+[batch ID generation/reopen](../../lib/wurk/batch.rb#L183-L185).
 
 ### Scope of the existing batch §2.8 oracle
 

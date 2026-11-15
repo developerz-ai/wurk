@@ -124,6 +124,20 @@ module Wurk
     # that both chose `1` address two different records.
     IDEMPOTENCY_PREFIX = 'idempotency:'
 
+    # ZSET of bids whose drain transition a batch script observed, score = the
+    # drain epoch — `batch_ack_success`, `batch_ack_complete` and
+    # `batch_kid_done` each ZADD in the same atomic step that empties the
+    # batch's last live jids and pending children. The durable half of the
+    # batch fire gate: the caller's in-process re-drive dies with its process,
+    # so `Batch::FireRecovery` re-drives entries these Lua writes left behind
+    # on a lost process (an outage eating all `Callbacks.retrying` attempts,
+    # or a kill mid-fire). Entries are cleared by `Callbacks.maybe_fire` once
+    # its fire pass completed, and retired by `FireRecovery` for a batch that
+    # no longer exists. A Wurk-only extra, like `super_fetch:reaper` —
+    # Pro's batch shapes are `b-<bid>-*`, `batches` and `dead-batches`, so
+    # nothing Pro or Sidekiq reads answers to `batch:`.
+    BATCH_FIRES = 'batch:fires'
+
     # Build a queue list key from a queue name. Centralizing the concat keeps
     # the prefix in one place even though it's a constant — third-party gems
     # that grep for `"queue:"` still find it via the constant.

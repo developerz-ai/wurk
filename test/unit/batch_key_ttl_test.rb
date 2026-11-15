@@ -32,6 +32,10 @@ class BatchKeyTtlTest < Wurk::Test::UnitCase
         conn.call('UNLINK', *Wurk::Batch.keys_for(bid))
         conn.call('ZREM', 'batches', bid)
         conn.call('ZREM', 'dead-batches', bid)
+        # A drained batch lands in the fire index (the ack scripts ZADD it in
+        # the same call that observes the drain); a test that acks the last job
+        # must drop its entry or it outlives the batch.
+        conn.call('ZREM', Wurk::Keys::BATCH_FIRES, bid)
       end
       [@queue, @cbq].each do |q|
         conn.call('DEL', "queue:#{q}")
@@ -226,8 +230,9 @@ class BatchKeyTtlTest < Wurk::Test::UnitCase
       Wurk::Lua::Loader.eval_cached(
         conn,
         :batch_ack_complete,
-        keys: ["b-#{bid}", "b-#{bid}-jids", "b-#{bid}-died", "b-#{bid}-failed", "b-#{bid}-pkids"],
-        argv: [jid, Wurk::Batch::DEFAULT_EXPIRY_SECONDS]
+        keys: ["b-#{bid}", "b-#{bid}-jids", "b-#{bid}-died", "b-#{bid}-failed", "b-#{bid}-pkids",
+               Wurk::Keys::BATCH_FIRES],
+        argv: [jid, Wurk::Batch::DEFAULT_EXPIRY_SECONDS, Wurk::Batch.drain_epoch, bid]
       )
     end
   end

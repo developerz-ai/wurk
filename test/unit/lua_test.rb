@@ -470,7 +470,9 @@ class LuaTest < Wurk::Test::UnitCase
       c.call('SADD', jids, 'A')
       c.call('SADD', failed, 'A')
 
-      Wurk::Lua::Loader.eval_cached(c, :batch_ack_success, keys: [bkey, jids, failed, "#{bkey}-pkids"], argv: ['A'])
+      Wurk::Lua::Loader.eval_cached(c, :batch_ack_success,
+                                    keys: [bkey, jids, failed, "#{bkey}-pkids", fires],
+                                    argv: ['A', drain_epoch, bkey.delete_prefix("#{@ns}:")])
 
       assert_equal '0', c.call('HGET', bkey, 'failures')
       assert_equal 0, c.call('SISMEMBER', failed, 'A')
@@ -502,7 +504,8 @@ class LuaTest < Wurk::Test::UnitCase
       c.call('SADD', jids, 'A', 'B')
 
       live, died_n, first = Wurk::Lua::Loader.eval_cached(
-        c, :batch_ack_complete, keys: [bkey, jids, died, failed, "#{bkey}-pkids"], argv: ['A', TTL]
+        c, :batch_ack_complete, keys: [bkey, jids, died, failed, "#{bkey}-pkids", fires],
+                                argv: ['A', TTL, drain_epoch, 'b-d']
       )
 
       assert_equal 1, live
@@ -515,7 +518,8 @@ class LuaTest < Wurk::Test::UnitCase
       assert_equal 0, c.call('SISMEMBER', failed, 'A')
 
       _live, _died_n, second_first = Wurk::Lua::Loader.eval_cached(
-        c, :batch_ack_complete, keys: [bkey, jids, died, failed, "#{bkey}-pkids"], argv: ['B', TTL]
+        c, :batch_ack_complete, keys: [bkey, jids, died, failed, "#{bkey}-pkids", fires],
+                                argv: ['B', TTL, drain_epoch, 'b-d']
       )
 
       assert_equal 0, second_first
@@ -534,8 +538,9 @@ class LuaTest < Wurk::Test::UnitCase
       c.call('SADD', jids, 'A')
       c.call('SADD', failed, 'A')
 
-      Wurk::Lua::Loader.eval_cached(c, :batch_ack_complete, keys: [bkey, jids, died, failed, "#{bkey}-pkids"],
-                                                            argv: ['A', TTL])
+      Wurk::Lua::Loader.eval_cached(c, :batch_ack_complete,
+                                    keys: [bkey, jids, died, failed, "#{bkey}-pkids", fires],
+                                    argv: ['A', TTL, drain_epoch, 'b-df'])
 
       assert_equal '0', c.call('HGET', bkey, 'failures')
       assert_equal 0, c.call('SISMEMBER', failed, 'A')
@@ -747,9 +752,21 @@ class LuaTest < Wurk::Test::UnitCase
     JSON.parse(conn.call('HGET', bkey, 'callbacks'))
   end
 
+  # The drain-observing scripts ZADD into the fire index in the same call; the
+  # index is namespaced here like every other key in this class so the teardown
+  # SCAN and a concurrent suite sharing the server never see this test's work.
+  def fires
+    "#{@ns}:batch:fires"
+  end
+
+  def drain_epoch
+    Wurk::Batch.drain_epoch
+  end
+
   def ack_success(conn, base, jid)
     Wurk::Lua::Loader.eval_cached(conn, :batch_ack_success,
-                                  keys: [base, "#{base}-jids", "#{base}-failed", "#{base}-pkids"], argv: [jid])
+                                  keys: [base, "#{base}-jids", "#{base}-failed", "#{base}-pkids", fires],
+                                  argv: [jid, drain_epoch, base.delete_prefix("#{@ns}:")])
   end
 
   def hold(conn, base, sentinel)
@@ -758,7 +775,8 @@ class LuaTest < Wurk::Test::UnitCase
 
   def kid_done(conn, base, child)
     Wurk::Lua::Loader.eval_cached(conn, :batch_kid_done,
-                                  keys: [base, "#{base}-jids", "#{base}-pkids"], argv: [child])
+                                  keys: [base, "#{base}-jids", "#{base}-pkids", fires],
+                                  argv: [child, drain_epoch, base.delete_prefix("#{@ns}:")])
   end
 
   def remove_jobs(conn, base, *jids)

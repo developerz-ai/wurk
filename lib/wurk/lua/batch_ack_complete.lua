@@ -7,8 +7,14 @@
 --
 -- `b-<bid>-died` is born here, so it carries the same NX expiry stamp as
 -- BATCH_PUSH.
--- KEYS = [b-<bid>, b-<bid>-jids, b-<bid>-died, b-<bid>-failed, b-<bid>-pkids]
--- ARGV = [jid, expiry_seconds]
+--
+-- When this ack leaves the batch drained (no live jids, no pending children,
+-- hash still alive) the bid goes into the fire index (KEYS[6]) atomically,
+-- same as batch_ack_success: the death path's `:complete` fire — which the
+-- caller attempts through `Callbacks.maybe_fire` — stays recoverable if the
+-- caller dies or its in-process re-drive loses the race with an outage.
+-- KEYS = [b-<bid>, b-<bid>-jids, b-<bid>-died, b-<bid>-failed, b-<bid>-pkids, fire index]
+-- ARGV = [jid, expiry_seconds, drain epoch, bid]
 -- Returns [live_jids, died_count, first_death, pending_kids, pending].
 -- `first_death` is 1 the first time *any* jid is SADDed into the died set,
 -- 0 thereafter — caller uses it to fire `:death` exactly once per batch.
@@ -24,5 +30,10 @@ local first_death = 0
 if was_pre_existing_death == 0 and died_added == 1 then
   first_death = 1
 end
-return { redis.call("scard", KEYS[2]), redis.call("scard", KEYS[3]), first_death,
-         redis.call("scard", KEYS[5]), tonumber(redis.call("hget", KEYS[1], "pending")) or 0 }
+local live = redis.call("scard", KEYS[2])
+local pending_kids = redis.call("scard", KEYS[5])
+if redis.call("exists", KEYS[1]) == 1 and live == 0 and pending_kids == 0 then
+  redis.call("zadd", KEYS[6], ARGV[3], ARGV[4])
+end
+return { live, redis.call("scard", KEYS[3]), first_death, pending_kids,
+         tonumber(redis.call("hget", KEYS[1], "pending")) or 0 }

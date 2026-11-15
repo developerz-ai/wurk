@@ -266,7 +266,8 @@ class LauncherTest < Wurk::Test::UnitCase
 
     launch(launcher, async_beat: false)
 
-    assert_equal %i[manager reaper poller leader periodic_poller metrics_rollup queue_rollup metrics_flusher], seen
+    assert_equal %i[manager reaper poller leader periodic_poller metrics_rollup queue_rollup metrics_flusher
+                    batch_fire_recovery], seen
   end
 
   def test_run_without_async_beat_does_not_spawn_heartbeat_thread
@@ -1516,7 +1517,7 @@ class LauncherTest < Wurk::Test::UnitCase
     reaper.define_singleton_method(:boot_reclaim!) { nil }
     record_stop(launcher.poller, :start, seen, :poller)
     record_stop(launcher.instance_variable_get(:@leader), :start, seen, :leader)
-    %i[periodic_poller metrics_rollup queue_rollup metrics_flusher].each do |name|
+    %i[periodic_poller metrics_rollup queue_rollup metrics_flusher batch_fire_recovery].each do |name|
       record_stop(launcher.public_send(name), :start, seen, name)
     end
     seen
@@ -1529,7 +1530,7 @@ class LauncherTest < Wurk::Test::UnitCase
   # The periodic loops stop side by side, so that one stuck loop can't keep another
   # from hearing the stop. All that is ordered is what follows them.
   def assert_teardown_order(rest, seen)
-    loops = %i[metrics_flusher periodic_poller metrics_rollup queue_rollup reaper]
+    loops = %i[metrics_flusher periodic_poller metrics_rollup queue_rollup batch_fire_recovery reaper]
 
     assert_equal loops.sort, seen.first(loops.size).sort
     assert_equal rest, seen.drop(loops.size)
@@ -1537,7 +1538,7 @@ class LauncherTest < Wurk::Test::UnitCase
 
   def record_teardown(launcher)
     seen = []
-    %i[metrics_flusher periodic_poller metrics_rollup queue_rollup].each do |name|
+    %i[metrics_flusher periodic_poller metrics_rollup queue_rollup batch_fire_recovery].each do |name|
       record_stop(launcher.public_send(name), :terminate, seen, name)
     end
     record_stop(launcher.instance_variable_get(:@reaper), :stop, seen, :reaper)
@@ -1628,6 +1629,7 @@ class LauncherTest < Wurk::Test::UnitCase
   def nil_out_loops(launcher)
     launcher.poller = launcher.periodic_poller = launcher.metrics_rollup = nil
     launcher.queue_rollup = launcher.metrics_flusher = launcher.history = nil
+    launcher.batch_fire_recovery = nil
   end
 
   # The poller is the first thing #run starts, so nothing else comes up before

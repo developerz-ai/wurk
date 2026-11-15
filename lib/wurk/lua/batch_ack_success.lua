@@ -9,6 +9,13 @@
 -- markers absorb the repeat. A missing `b-<bid>` reports live = -1 so a
 -- straggler acking into a deleted or expired batch can never fire it.
 --
+-- The one caller that observes the drain also records the bid in the fire
+-- index (KEYS[5], Batch::FireRecovery's work list) in the same atomic step:
+-- the enqueue of the callbacks happens later, on the caller, so an entry
+-- that outlives a lost caller is what lets a stranded fire be re-driven
+-- cluster-wide. A caller that dies before firing is the reason the index
+-- exists; the markers make the eventual re-fire a no-op.
+--
 -- Pro Batch: ACK a job that completed successfully. SREM from the live
 -- jids set and decrement pending iff the jid was a member (idempotent
 -- against double-success on a flaky retry). A success also clears any
@@ -16,8 +23,8 @@
 -- passed), decrementing `failures` so it converges to the count of jobs
 -- *still* failing — Sidekiq Pro semantics, spec §2.5. Also releases the
 -- `#jobs` block hold (Batch#jobs), which is a member of the live set too.
--- KEYS = [b-<bid>, b-<bid>-jids, b-<bid>-failed, b-<bid>-pkids]
--- ARGV = [jid]
+-- KEYS = [b-<bid>, b-<bid>-jids, b-<bid>-failed, b-<bid>-pkids, fire index]
+-- ARGV = [jid, drain epoch, bid]
 -- Returns [removed (1/0), pending, live_jids, pending_kids].
 if redis.call("exists", KEYS[1]) == 0 then
   return { redis.call("srem", KEYS[2], ARGV[1]), 0, -1, -1 }
@@ -32,4 +39,9 @@ if removed == 1 then
 else
   pending = tonumber(redis.call("hget", KEYS[1], "pending")) or 0
 end
-return { removed, pending, redis.call("scard", KEYS[2]), redis.call("scard", KEYS[4]) }
+local live = redis.call("scard", KEYS[2])
+local kids = redis.call("scard", KEYS[4])
+if removed == 1 and live == 0 and kids == 0 then
+  redis.call("zadd", KEYS[5], ARGV[2], ARGV[3])
+end
+return { removed, pending, live, kids }

@@ -62,7 +62,7 @@ module Wurk
     KILL_JOIN = 0.25
 
     attr_accessor :managers, :poller, :periodic_poller, :metrics_rollup, :queue_rollup, :metrics_flusher, :history,
-                  :queue_consumers
+                  :queue_consumers, :batch_fire_recovery
 
     def initialize(config, embedded: false)
       @config = config
@@ -362,7 +362,8 @@ module Wurk
     # rest.
     def start_periodic_components
       [@poller, @leader, @periodic_poller, @metrics_rollup,
-       @queue_rollup, @queue_consumers, @metrics_flusher, @history].compact.each(&:start)
+       @queue_rollup, @queue_consumers, @metrics_flusher, @history,
+       @batch_fire_recovery].compact.each(&:start)
     end
 
     # One thread each, because each of these signals its loop first and then waits
@@ -370,7 +371,7 @@ module Wurk
     # hears the stop whatever another is stuck on. Returns the threads.
     def stop_periodic_components
       stops = [@metrics_flusher, @periodic_poller, @metrics_rollup, @queue_rollup, @queue_consumers,
-               @history].compact.map { |t| [t.class, -> { t.terminate }] }
+               @history, @batch_fire_recovery].compact.map { |t| [t.class, -> { t.terminate }] }
       stops << ['reaper', -> { @reaper.stop }] if @reaper
       stops.map do |label, stop|
         Thread.new { teardown_step(label, &stop) }.tap { |thread| thread.report_on_exception = false }
@@ -551,6 +552,10 @@ module Wurk
     #   queue_consumers   leader only warns about queues nothing subscribes to
     #   metrics_flusher   NOT leader-gated: the counters it drains exist only in
     #                     this process's memory, so every process flushes its own
+    #   batch_fire_recovery every process; the fire index (`Keys::BATCH_FIRES`)
+    #                     plus its sweep lock make the re-drive work shared, and
+    #                     every process running it is the point — the one that
+    #                     survives an outage is the one that un-strands a fire
     #   history           Ent §5 snapshotter, leader-gated, opt-in via
     #                     `config.retain_history`
     def build_loops
@@ -562,6 +567,7 @@ module Wurk
       @queue_rollup = Wurk::Metrics::QueueRollup.new(@config)
       @queue_consumers = Wurk::QueueConsumers::Watch.new(@config)
       @metrics_flusher = Wurk::Metrics::Flusher.new(@config)
+      @batch_fire_recovery = Wurk::Batch::FireRecovery.new(@config)
       @history = Wurk::History.new(@config) if @config.history_enabled?
     end
 

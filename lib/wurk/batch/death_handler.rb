@@ -33,8 +33,9 @@ module Wurk
           Wurk::Lua::Loader.eval_cached(
             conn,
             :batch_ack_complete,
-            keys: ["b-#{bid}", "b-#{bid}-jids", "b-#{bid}-died", "b-#{bid}-failed", "b-#{bid}-pkids"],
-            argv: [jid, Batch::DEFAULT_EXPIRY_SECONDS]
+            keys: ["b-#{bid}", "b-#{bid}-jids", "b-#{bid}-died", "b-#{bid}-failed", "b-#{bid}-pkids",
+                   Keys::BATCH_FIRES],
+            argv: [jid, Batch::DEFAULT_EXPIRY_SECONDS, Batch.drain_epoch, bid]
           )
         end.map(&:to_i)
 
