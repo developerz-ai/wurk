@@ -83,7 +83,7 @@ decisions:
     date: 2026-11-11
     by: sebi (owner, in-session instruction)
     decision: "Executor may mint credentials/secrets needed by the plan (e.g. DEVELOPERZ_API_KEY for the ecosystem release watcher)."
-    outcome: "DEVELOPERZ_API_KEY cannot be minted by an agent: the platform requires a signed-in human or a user-bound token. Superseded 2026-11-11 on owner instruction: an owner-provided token is stored as the DEVELOPERZ_API_KEY repository secret."
+    outcome: "DEVELOPERZ_API_KEY cannot be minted by an agent: the platform requires a signed-in human or a user-bound token. Superseded 2026-11-11 on owner instruction: an owner-provided token is the DEVELOPERZ_API_KEY secret of the main-only `sidekiq-release-watcher` environment, never a repository-level secret."
   - id: U2
     date: 2026-11-10
     by: executor (precedent)
