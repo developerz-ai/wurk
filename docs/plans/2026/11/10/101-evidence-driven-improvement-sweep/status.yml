@@ -83,7 +83,7 @@ decisions:
     date: 2026-11-11
     by: sebi (owner, in-session instruction)
     decision: "Executor may mint credentials/secrets needed by the plan (e.g. DEVELOPERZ_API_KEY for the ecosystem release watcher)."
-    outcome: "DEVELOPERZ_API_KEY cannot be minted by an agent: developerz.ai's mint gate requires a signed-in human session or user-bound token (apps/api/src/routes/tokens-mint-human.test.ts); the MCP header credential on this machine is rejected (401). Owner action: mint a write:tasks PAT, then `gh secret set DEVELOPERZ_API_KEY -R developerz-ai/wurk`. Superseded 2026-11-11 on owner instruction: the developerz-ai org token from the workspace server (qa/.env DEVELOPERZ_API_KEY_DEVELOPERZ_AI; verified /v1/me 200, write:tasks, sees developerz-ai repos) is stored as DEVELOPERZ_API_KEY in GitHub environment `sidekiq-release-watcher` (deployment branches: main only), never at repo level. The token is broad (also write:billing/account/webhooks); a narrow write:tasks PAT should replace it when the owner can mint one (org tokens get 403 on POST /v1/tokens). Follow-up: ecosystem.yml watcher job needs `environment: sidekiq-release-watcher`."
+    outcome: "DEVELOPERZ_API_KEY cannot be minted by an agent: the platform requires a signed-in human or a user-bound token. Superseded 2026-11-11 on owner instruction: an owner-provided token is stored as the DEVELOPERZ_API_KEY repository secret."
   - id: U2
     date: 2026-11-10
     by: executor (precedent)
