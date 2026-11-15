@@ -1,31 +1,31 @@
 # Evidence-driven improvement sweep (adopters · drop-in · perf · algorithms · memory)
 
 ## Goal
-Make Wurk better where real use says it hurts: fix what the 5 adopter apps had to work around, close the gaps that block treasury's Sidekiq 7.3 + Pro + Ent swap, and cut measured cost in the hot path, boot/load time, O(N) Redis work and memory — every claim backed by a test, an oracle or a named bench.
+Make Wurk better where real use says it hurts: fix what the 5 adopter apps had to work around, close the gaps that block adopter F's Sidekiq 7.3 + Pro + Ent swap, and cut measured cost in the hot path, boot/load time, O(N) Redis work and memory — every claim backed by a test, an oracle or a named bench.
 
 ## Context
 - Ruby ≥ 3.2, Redis ≥ 7 (Lua), Rails engine + SolidJS/bun dashboard, Minitest on real Redis. Root `CLAUDE.md` invariants bind every slice: Redis keys / job JSON / score formats never move; `Sidekiq::*` aliases never break; per-fork Redis pool; boot ordering; no worktrees; never DB 0 / `FLUSHALL` / `SCRIPT FLUSH`.
 - Maps: `lib/CLAUDE.md` (who owns what), `test/CLAUDE.md` (layers), `.github/CLAUDE.md` (CI, bench, release), `frontend/CLAUDE.md`. Spec: `docs/target/sidekiq-{free,pro,ent}.md`. Intentional divergences: `docs/idea/parity-divergences.md`.
-- Sweeps (2026-11-10, v1.11.1 @ `f6f509e`, read-only): (1) 5 adopter apps — config, git history, logs, deploy, Sentry (tesote org, 30 d); (2) treasury Sidekiq surface vs Wurk; (3) core runtime; (4) dashboard / HTTP API / ecosystem / docs / CI; (5) algorithms + memory. Line refs are as of `f6f509e` — re-locate by symbol if moved.
+- Sweeps (2026-11-10, v1.11.1 @ `f6f509e`, read-only): (1) 5 adopter apps — config, git history, logs, deploy, Sentry (adopter A org, 30 d); (2) adopter F Sidekiq surface vs Wurk; (3) core runtime; (4) dashboard / HTTP API / ecosystem / docs / CI; (5) algorithms + memory. Line refs are as of `f6f509e` — re-locate by symbol if moved.
 - Honest limits: sweeps 3–5 read code, ran no tests/benches/Redis. Rows marked "inferred"/"suspect" need the reproducing test first. Worst-case numbers in [`07`](07-algorithms.md) are arithmetic. Timings in [`06`](06-perf-hot-path-boot.md) were taken on a loaded host.
 - Healthy baseline (don't redo): 0 open issues; no TODO/FIXME in `lib/`; coverage ~98/92; adopter logs show no Wurk-originated errors (no NOSCRIPT / reclaim / heartbeat noise); Sentry has no live Wurk defect beyond SALES-APP-21 (fixed in 1.11.1); config docs match code; no forbidden "faster" claims; ACK piggyback, leader CAS, cron fire CAS, unique release verified sound.
-- Adopters: `tesote/sales`, `tesote/tesote.com`, `tesote/gringotts-wizarding-bank`, `hiscore/hiscore.ro`, `developerz-ai/legaldiligencemedellin.com` (all under `~/workspace`). `tesote/treasury` = future target, **read-only**. `tesote/sidekiq` = licensed Pro/Ent source: reference only, copy nothing.
+- Adopters: adopter B, adopter A, adopter C, adopter D, adopter E (all under `~/workspace`). adopter F = future target, **read-only**. a local checkout = licensed Pro/Ent source: reference only, copy nothing.
 - Reference patterns: boot WARN → `lib/wurk/boot_checks.rb:64-83`; preflight row → `lib/wurk/preflight/checks.rb:183-189`; single-read paging → `lib/wurk/web/paginator.rb:12-46`; atomic Lua move → `lib/wurk/lua.rb:163-170`; ecosystem harness → `test/ecosystem/README.md`; bench output format → `bench/fetch_100_queues.rb` + `bin/bench-compare`.
 - Execution: hive rules (`.claude/commands/feature.md`) — ≤4 agents per wave, only the coordinator spawns, disjoint file sets, one checkout. One PR in flight at a time (build → PR → merged → pull → clean tree → next), ≤100 files. Merge bot merges on green: review + soak before push. `lib/` edits → `bin/repin-anchors` on the PR's own tree. Release = merged `lib/wurk/version.rb` bump only (`RELEASE.md`).
 
 ## Headline (what the evidence says matters most)
 | # | Finding | Slice |
 |---|---|---|
-| 1 | **Live in tesote.com:** `unique_for:` with no `unique!` → dedup never ran; Wurk gives no warning | [`14`](14-adopter-tesote-com.md) S1, [`03`](03-boot-guards-preflight.md) G1 |
+| 1 | **Live in adopter A:** `unique_for:` with no `unique!` → dedup never ran; Wurk gives no warning | [`14`](14-adopter-a.md) S1, [`03`](03-boot-guards-preflight.md) G1 |
 | 2 | Poison-pill check runs after the job is back on the public queue → 4th run + death handlers fire mid-run when a worker is parked | [`02`](02-reclaim-correctness.md) R1 |
 | 3 | `main` red since 2026-11-07 (Python 3.9 leg) | [`01`](01-ci-green-doc-truth.md) C1 |
 | 4 | Worker boot path ≠ web/test path → prod crash loops in 5/5 adopters, CI green each time | [`03`](03-boot-guards-preflight.md) G10 |
-| 5 | Treasury swap is not one line: `bundle exec sidekiq` missing, shim floats on `main`, `failed_at` read as seconds, `connection_pool` pin | [`04`](04-drop-in-surface.md) D1–D2, [`03`](03-boot-guards-preflight.md) G11–G12 |
+| 5 | adopter F swap is not one line: `bundle exec sidekiq` missing, shim floats on `main`, `failed_at` read as seconds, `connection_pool` pin | [`04`](04-drop-in-surface.md) D1–D2, [`03`](03-boot-guards-preflight.md) G11–G12 |
 | 6 | `require "wurk"` loads everything everywhere (404 features, ~15 MB, no `autoload`); noop CPU gap vs Sidekiq never decomposed | [`06`](06-perf-hot-path-boot.md) L0–L4, P1 |
 | 7 | Deep dashboard pages cost a Redis round-trip per skipped row; fast-delete Lua copies whole queues; reaper SCANs the keyspace every 60 s + per child boot | [`07`](07-algorithms.md) A1, A3, A4 |
 | 8 | No RSS/PSS measurement, recycle path untested, no pre-fork compaction on Ruby 3.2 / railtie path, no allocator guidance | [`08`](08-memory.md) M0–M4 |
 | 9 | No committed soak/chaos or mixed-fleet proof | [`12`](12-proof-harness.md) T1–T2 |
-| 10 | 4 of 5 adopters probe workers badly or not at all; none scrapes `/metrics` | [`11`](11-observability-ops.md), [`19`](19-infra-tesote.md), [`20`](20-infra-developerz.md) |
+| 10 | 4 of 5 adopters probe workers badly or not at all; none scrapes `/metrics` | [`11`](11-observability-ops.md), [`19`](19-infra-adopter-a.md), [`20`](20-infra-demo.md) |
 
 ## Plan files (execute in order within a wave)
 1. [`01-ci-green-doc-truth.md`](01-ci-green-doc-truth.md) — red `main`, contradicting docs, stale blockers.
@@ -41,8 +41,8 @@ Make Wurk better where real use says it hurts: fix what the 5 adopter apps had t
 11. [`11-observability-ops.md`](11-observability-ops.md) — missing metrics, systemd/k8s/capistrano kit, sizing table, periodic toggles, upgrade notes.
 12. [`12-proof-harness.md`](12-proof-harness.md) — soak/chaos with jid ledger, mixed fleet, command-budget gate, anchors check.
 13. [`13-human-decisions.md`](13-human-decisions.md) — U1–U11: breaking/default/security calls only a human makes.
-14. [`14-adopter-tesote-com.md`](14-adopter-tesote-com.md) · 15. [`15-adopter-sales.md`](15-adopter-sales.md) · 16. [`16-adopter-gringotts.md`](16-adopter-gringotts.md) · 17. [`17-adopter-hiscore.md`](17-adopter-hiscore.md) · 18. [`18-adopter-legald.md`](18-adopter-legald.md) — per-repo follow-ups, each edited from its own repo.
-19. [`19-infra-tesote.md`](19-infra-tesote.md) · 20. [`20-infra-developerz.md`](20-infra-developerz.md) — probes, scrape + alerts.
+14. [`14-adopter-a.md`](14-adopter-a.md) · 15. [`15-adopter-b.md`](15-adopter-b.md) · 16. [`16-adopter-c.md`](16-adopter-c.md) · 17. [`17-adopter-d.md`](17-adopter-d.md) · 18. [`18-adopter-e.md`](18-adopter-e.md) — per-repo follow-ups, each edited from its own repo.
+19. [`19-infra-adopter-a.md`](19-infra-adopter-a.md) · 20. [`20-infra-demo.md`](20-infra-demo.md) — probes, scrape + alerts.
 21. [`21-counters-and-read-caching.md`](21-counters-and-read-caching.md) — dashboard/API round-trip collapsing (added 2026-11-10; wave 4 B).
 
 ## Waves (≤4 agents per wave, disjoint file sets; PRs land one at a time)
@@ -62,11 +62,11 @@ Releases: after wave 1 (patch: reclaim fix + guards), after wave 3 (minor), afte
 - `main` green; `bin/check full` green; coverage ≥90/90; `bin/rake test:parity` + `test:ecosystem` green.
 - 02: poison race test fails on `f6f509e`, passes after; ≤1 keyspace SCAN pass per rolling restart.
 - 03: every G-row has a test that fails without its guard; `wurk boot-check` runs in Wurk CI against `test/dummy` and in ≥3 adopter CIs.
-- 04: treasury's plugin set + pinned shim resolves in a scratch app and boot-checks clean; doc 14 has pin + status for all 7 gems.
+- 04: adopter F's plugin set + pinned shim resolves in a scratch app and boot-checks clean; doc 14 has pin + status for all 7 gems.
 - 06–08: `docs/benchmarks.md` carries the CPU frame table, require profile (client vs server tier), per-child Rss/Pss + slope, Redis bytes/job per feature, feature/dashboard command costs — before and after. Commands per job did not rise. No "faster" claim unless those numbers support it.
 - 07: page 999 costs page 0's round-trips; no Lua reads `0 -1` of a public queue; concurrent limiter ≤2 round-trips/job.
 - 12: 24h soak — 0 lost jids, every duplicate attributed to a documented window, flat PSS + key-count slopes; mixed-fleet verdict written into the migration guide.
-- Adopters: tesote.com dedup live; no `ps | grep` worker probes; each removed workaround names the Wurk version that retired it.
+- Adopters: adopter A dedup live; no `ps | grep` worker probes; each removed workaround names the Wurk version that retired it.
 - 13: every U-row has a dated decision in `status.yml`.
 
 ## Risks / open questions
@@ -77,5 +77,5 @@ Releases: after wave 1 (patch: reclaim fix + guards), after wave 3 (minor), afte
 - **Upstream unknowns** to settle by oracle, not opinion: does stock Sidekiq report job errors to `Rails.error` per attempt (05 E1); unique under `Testing` (E5); proctitle format (04 D6); Pro `delete_by_class` chunking (A3); Ent limiter register-on-construct (A5).
 - **Breaking defaults** (embedded opt-in, `authoritative!`, `WURK_COUNT`, key prefix, `sidekiq` exe) wait on [`13`](13-human-decisions.md).
 - Inferred, not observed: CSP + sub-path breakage (09 W1/W2), PID-reuse stranding (02 R4), `api_only` auth, per-row Redis memory estimates (08 M8).
-- Not covered by any sweep: production pods/Redis, hiscore Bugsnag + legald GlitchTip events, batches/encryption/iterable internals in depth, Rails 8.1 continuations — the soak (12 T1) is the backstop.
+- Not covered by any sweep: production pods/Redis, adopter D Bugsnag + adopter E GlitchTip events, batches/encryption/iterable internals in depth, Rails 8.1 continuations — the soak (12 T1) is the backstop.
 - Carry-over: real Pro/Ent Redis dump from the customer (U10) still outstanding.
