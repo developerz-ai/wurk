@@ -36,8 +36,9 @@ class PublicTreeTest < Minitest::Test
   # A GitHub reference to an org repository: after `github.com/`, or bare. A registry path
   # (`registry.example.com/<org>/<image>`) is an image, not a repository.
   ORG_REPO = %r{(?:github\.com/|(?<![\w./-]))developerz-ai/([\w.-]+)}i
-  # A bare tracker reference to one of the org's private repositories, `name#12` or `name #12`.
-  PRIVATE_TRACKERS = %w[infrastructure developerz.ai].freeze
+  # A bare tracker reference to one of the org's private repositories, `name#12` or `name #12`;
+  # `dz` is the platform tracker's shorthand.
+  PRIVATE_TRACKERS = %w[infrastructure developerz.ai dz].freeze
   BARE_TRACKER = %r{(?<![\w./-])(?:#{PRIVATE_TRACKERS.map { |n| Regexp.escape(n) }.join('|')}) ?#\d}i
   # CI's and the systemd example's generic service users are nobody's machine.
   HOME_PATH = %r{(?:^|[^\w.-])/(?:home|Users)/(?!runner\b|user\b|app\b|deploy\b)[\w.-]+}
@@ -135,6 +136,8 @@ class PublicTreeTest < Minitest::Test
     assert_equal ['private repository'], self.class.violations('a.md', "https://github.com/#{org}/vault", [])
     assert_equal ['private repository'], self.class.violations('a.md', "(#{DOMAIN} #6363)", [])
     assert_equal ['private repository'], self.class.violations('a.md', "tags, #{%w[infra structure].join}#232", [])
+    assert_equal ['private repository'], self.class.violations('a.md', "(validate.rb:130, #{%w[d z].join}#1026)", [])
+    assert_empty self.class.violations('a.md', 'adz#12, dz-12', [])
     assert_empty self.class.violations('a.md', "#{org}/wurk#12, github.com/#{org}/ultimate", [])
     assert_empty self.class.violations('a.md', "registry.example.com/#{org}/vault-demo:sha-1", [])
     assert_empty self.class.violations('a.md', 'the infrastructure (#12)', [])

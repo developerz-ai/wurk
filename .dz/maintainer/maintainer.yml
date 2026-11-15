@@ -14,8 +14,8 @@
 # asks reporters for repro) and, once a task is ready, dispatches coding to the
 # fleet (handoff.mode: fleet). Auto-merge is ON as of 2026-09-01 — see the pr:
 # block for the history and for what stands behind it. It is NOT this file: the
-# live `main-protection` ruleset now carries a required_status_checks rule
-# (dz#2798), so CI green is enforced by the repo, not by a line in here. That
+# live `main-protection` ruleset now carries a required_status_checks rule,
+# so CI green is enforced by the repo, not by a line in here. That
 # sentence has been rewritten twice for the same reason and the reason is worth
 # keeping: a note here claiming what protects `main` goes stale the moment
 # someone edits the ruleset, and a stale one reads as a guarantee. Read the
@@ -117,7 +117,7 @@ handoff:
   # (2026-09-14) it is an attached lane, registered at
   # apps/worker/src/wiring/lanes.generated.ts:121, and it fired 814 times
   # fleet-wide in the 30 days to 2026-09-14, 8 of them on this repo. A previous
-  # version of this comment said it "stays inert until dz#1249 and dz#1530
+  # version of this comment said it "stays inert until two platform changes
   # close"; that was false. Re-check against developerz.ai main before relying
   # on either the date or the counts. Enrolling wurk was authorized by Ivan
   # (ivndev001) 2026-08-21 on wurk#445.
@@ -139,7 +139,7 @@ pr:
   # checks. That is no longer true, and leaving the old sentence here would be a
   # comment asserting a state the repo no longer has.
   #
-  # WHAT IS BEHIND IT NOW (dz#2798, ruleset 20556704, updated 2026-09-01T05:12Z,
+  # WHAT IS BEHIND IT NOW (ruleset 20556704, updated 2026-09-01T05:12Z,
   # read back before this change): a `required_status_checks` rule requiring
   # `test + coverage (latest ruby/rails)`, `lint (rubocop)` and `parity (oracle)`,
   # since grown to the six listed under `required_checks` below.
