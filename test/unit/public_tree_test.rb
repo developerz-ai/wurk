@@ -136,7 +136,7 @@ class PublicTreeTest < Minitest::Test
     assert_equal ['private repository'], self.class.violations('a.md', "https://github.com/#{org}/vault", [])
     assert_equal ['private repository'], self.class.violations('a.md', "(#{DOMAIN} #6363)", [])
     assert_equal ['private repository'], self.class.violations('a.md', "tags, #{%w[infra structure].join}#232", [])
-    assert_equal ['private repository'], self.class.violations('a.md', "(validate.rb:130, #{%w[d z].join}#1026)", [])
+    assert_equal ['private repository'], self.class.violations('a.md', "(a.rb:1, #{%w[d z].join}#12)", [])
     assert_empty self.class.violations('a.md', 'adz#12, dz-12', [])
     assert_empty self.class.violations('a.md', "#{org}/wurk#12, github.com/#{org}/ultimate", [])
     assert_empty self.class.violations('a.md', "registry.example.com/#{org}/vault-demo:sha-1", [])
