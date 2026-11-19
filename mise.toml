@@ -13,5 +13,5 @@
 # unpinned-toolchain failure this file exists to prevent.
 [tools]
 ruby = "4.0.10"
-bun = "1.4.3"
+bun = "1.4.4"
 node = "24"
