@@ -94,7 +94,7 @@ module Wurk
         @lock.synchronize do
           own, other = index == :queue ? [@by_queue, @by_class] : [@by_class, @by_queue]
           list = own[key]
-          list.each { |job| drop(other, job) }
+          drop_all(other, list)
           ARRAY_CLEAR.bind_call(list)
         end
       end
@@ -133,6 +133,14 @@ module Wurk
       # was filed under need not match its own `queue` / `class` fields.
       def drop(index, job)
         index.each_value { |list| list.delete_if { |j| j.equal?(job) } }
+      end
+
+      # #drop for many jobs in one pass over each list, not one per job.
+      def drop_all(index, jobs)
+        return if jobs.empty?
+
+        gone = ::Set.new.compare_by_identity.merge(jobs)
+        index.each_value { |list| list.delete_if { |j| gone.include?(j) } }
       end
     end
   end

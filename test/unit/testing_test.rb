@@ -207,6 +207,17 @@ class TestingModesTest < Wurk::Test::UnitCase
     assert_equal 0, Wurk::Worker.drain_all
   end
 
+  # Two equal jobs are still two entries: clearing the class drops both from
+  # the queue index, not one.
+  def test_class_clear_drops_equal_jobs_from_the_queue
+    job = { 'class' => FakeJob.name, 'queue' => 'testq', 'jid' => 'same', 'args' => [] }
+    Wurk::Queues.push('testq', FakeJob.name, job.dup)
+    Wurk::Queues.push('testq', FakeJob.name, job.dup)
+    FakeJob.jobs.clear
+
+    assert_empty Wurk::Queues['testq']
+  end
+
   def test_queues_index_returns_a_live_reference
     Wurk::Testing.fake! { FakeJob.perform_async(1) }
     Wurk::Queues['testq'].clear

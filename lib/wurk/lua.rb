@@ -94,26 +94,32 @@ module Wurk
           init = e + 1
         end
       end
-      local function depth(job, stop)
+      -- Nesting depth just before `stop`. Resumes where the previous call
+      -- stopped, so the candidates of one payload, asked in order, cost one
+      -- pass over it rather than one each.
+      local function depth_scanner(job)
         local d, i = 0, 1
-        while true do
-          local p = string.find(job, '[{}%[%]"]', i)
-          if not p or p >= stop then return d end
-          local c = string.byte(job, p)
-          i = p + 1
-          if c == 34 then
-            repeat
-              local e = string.find(job, '["\\\\]', i)
-              i = e + (string.byte(job, e) == 92 and 2 or 1)
-            until string.byte(job, e) == 34
-          elseif c == 123 or c == 91 then d = d + 1 else d = d - 1 end
+        return function(stop)
+          while true do
+            local p = string.find(job, '[{}%[%]"]', i)
+            if not p or p >= stop then return d end
+            local c = string.byte(job, p)
+            i = p + 1
+            if c == 34 then
+              repeat
+                local e = string.find(job, '["\\\\]', i)
+                i = e + (string.byte(job, e) == 92 and 2 or 1)
+              until string.byte(job, e) == 34
+            elseif c == 123 or c == 91 then d = d + 1 else d = d - 1 end
+          end
         end
       end
       local function restamp(job, has)
         if not has then return (string.gsub(job, '^{', '{"enqueued_at":' .. ARGV[3] .. ',', 1)) end
         local p, e = next_key(job, 1)
         if p and next_key(job, e + 1) then
-          while p and depth(job, p + 1) ~= 1 do p, e = next_key(job, e + 1) end
+          local depth = depth_scanner(job)
+          while p and depth(p + 1) ~= 1 do p, e = next_key(job, e + 1) end
         end
         if not p then return job end
         local _, last, colon = string.find(job, '^(%s*:%s*)%-?%d[%d.eE+-]*', e + 1)

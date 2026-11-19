@@ -69,11 +69,9 @@ module Wurk
     def self.store_requeue?(jid)
       @store_requeues_lock.synchronize do
         count = @store_requeues.delete(jid).to_i + 1
-        next false if count > STORE_REQUEUE_LIMIT
-
         @store_requeues.shift while @store_requeues.size >= STORE_REQUEUE_JIDS
         @store_requeues[jid] = count
-        true
+        count <= STORE_REQUEUE_LIMIT
       end
     end
 

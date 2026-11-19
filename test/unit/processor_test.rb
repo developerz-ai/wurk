@@ -699,6 +699,15 @@ class ProcessorTest < Wurk::Test::UnitCase
     assert_equal 4, klass.sink.size
     assert_equal [[payload['jid'], RedisClient::CannotConnectError]], deaths
     assert_equal 0, llen(@public_queue)
+
+    # The limit holds per jid for the process: the same job back (say from
+    # the retry set) does not get a fresh set of requeues.
+    @pool.with { |c| c.call('LPUSH', @public_queue, Wurk.dump_json(payload)) }
+    @processor.process_one
+    settle_acks
+
+    assert_equal 2, deaths.size
+    assert_equal 0, llen(@public_queue)
   end
 
   # The same outage before `perform` ran is the job failing to run: the retry
