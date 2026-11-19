@@ -31,6 +31,11 @@
     color: var(--text-muted);
   }
 
+  // Standalone use outside the .health-notices stack (components/RefreshError.tsx).
+  &.refresh-error {
+    margin-bottom: to-rem(16);
+  }
+
   &__link {
     margin-inline-start: auto;
     white-space: nowrap;

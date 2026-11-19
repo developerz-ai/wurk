@@ -218,6 +218,29 @@ describe('Extension', () => {
     expect(root.querySelector('style')).toBe(baseline);
   });
 
+  // sidekiq-failures and Sidekiq's own views put several named submit buttons
+  // in one form and branch on which name arrived (`params['delete']`).
+  it.each(['GET', 'POST'])('sends the clicked submit button with a %s form', async (method) => {
+    const fetchMock = mockFetch(
+      registeredMeta,
+      `<form method="${method}" action="/wurk/ext/demo_locks/locks"><input name="key" value="k1"><input type="submit" name="retry" value="Retry Now"><input type="submit" name="delete" value="Delete"></form>`,
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    renderAt('/ext/locks');
+    await waitFor(() => expect(shadow().querySelector('form')).toBeTruthy());
+    fetchMock.mockImplementation(async () => response('<p>Done</p>'));
+    shadow().querySelector<HTMLInputElement>('input[name="delete"]')!.click();
+    await waitFor(() => expect(staticText('Done')).toBeInTheDocument());
+    const call = fetchMock.mock.calls.at(-1)! as unknown as [string, RequestInit];
+    if (method === 'GET') {
+      expect(call[0]).toBe('/wurk/ext/demo_locks/locks?key=k1&delete=Delete');
+    } else {
+      const body = call[1].body as FormData;
+      expect(body.get('delete')).toBe('Delete');
+      expect(body.has('retry')).toBe(false);
+    }
+  });
+
   it('shows loading outside the shadow tree, then renders a 404 body', async () => {
     const pending = deferredResponse();
     const fetchMock = mockFetch(registeredMeta, '');

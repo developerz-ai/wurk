@@ -92,7 +92,10 @@ module Wurk
     # Removes a single job from a queue by jid — one Lua round-trip
     # (Fast::QueueExt#delete_job) instead of a paged find_job walk.
     def delete_queue_job
-      removed = ::Wurk::Queue.new(params[:name].to_s).delete_job(params[:jid].to_s)
+      jid = params[:jid].to_s
+      return render(json: { error: 'jid required' }, status: :bad_request) if jid.empty?
+
+      removed = ::Wurk::Queue.new(params[:name].to_s).delete_job(jid)
       return render(json: { error: 'unknown job' }, status: :not_found) if removed.nil?
 
       render json: { ok: true, deleted: true }

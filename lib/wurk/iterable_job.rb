@@ -7,7 +7,8 @@ require_relative 'iterable_job/active_record_enumerator'
 
 module Wurk
   # Iterable jobs split long-running work into small, idempotent chunks.
-  # Override `#build_enumerator` (yielding `[item, new_cursor]` pairs) and
+  # Override `#build_enumerator` (yielding `[item, cursor]` pairs, the cursor
+  # being where a resume starts in order to run that item) and
   # `#each_iteration(item, *args)`; the framework drives the loop, persists
   # the cursor, and resumes after interruption.
   #
@@ -61,8 +62,9 @@ module Wurk
       base.singleton_class.prepend(MethodAddedGuard)
     end
 
-    # User overrides — must return an Enumerator yielding `[item, new_cursor]`
-    # pairs. The cursor must round-trip through JSON.
+    # User overrides — must return an Enumerator yielding `[item, cursor]`
+    # pairs, `cursor` being the value that makes a rebuilt enumerator start at
+    # `item`. The cursor must round-trip through JSON.
     def build_enumerator(*, cursor:)
       _ = cursor
       raise NotImplementedError, "#{self.class} must override #build_enumerator"
@@ -204,24 +206,48 @@ module Wurk
       end
     end
 
+    # The cursor an enumerator yields with an item is that item's own position,
+    # where a resume has to start to run it: `array_enumerator` yields the
+    # index and drops that many on resume. So it is recorded before the item
+    # runs, as Sidekiq does (job/iterable.rb `@_cursor = cursor`). An interrupt
+    # noticed between items then resumes at the first item not yet run, and an
+    # item that raises is the one the retry starts with. Recording it after the
+    # item instead re-ran the last completed item on every resume.
     def run_iterations(args)
       enum = build_enumerator(*args, cursor: @cursor)
-      enum.each do |item, new_cursor|
+      enum.each do |item, item_cursor|
         return :cancelled if cancelled?
 
+        @cursor = item_cursor
+        @current_object = item
         # Cooperative shutdown. `interrupted?` (Wurk::Worker) is true once the
         # owning Processor is stopping — quiet, TERM, or a rolling restart.
         # Without this the loop would run until hard_shutdown raises
-        # Wurk::Shutdown (an Interrupt, not a RuntimeError), which skips the
-        # rescue below and loses everything since the last periodic flush.
+        # Wurk::Shutdown, with nothing saved since the last periodic flush.
         raise Interrupted if interrupted?
 
-        @current_object = item
-        around_iteration { each_iteration(item, *args) }
-        @cursor = new_cursor
         maybe_flush_state
+        run_iteration(item, args)
       end
       :completed
+    end
+
+    # Any exit from an iteration saves the cursor of the item in flight, so the
+    # retry (or the resume after a hard shutdown, hence Exception) starts there
+    # rather than at the last periodic flush. A save that fails too must not
+    # replace the job's own error: a Wurk::Shutdown turned into a Redis error
+    # would be booked as a retry.
+    def run_iteration(item, args)
+      around_iteration { each_iteration(item, *args) }
+    rescue Interrupted
+      raise
+    rescue Exception => e # rubocop:disable Lint/RescueException
+      begin
+        flush_state
+      rescue StandardError => flush_error
+        Wurk.configuration.handle_exception(flush_error, { context: 'iterable job state save', jid: jid })
+      end
+      raise e
     end
 
     def finalize_complete

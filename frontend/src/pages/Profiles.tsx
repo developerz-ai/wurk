@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/solid-query';
 import { onMount, For, Switch, Match, Show } from 'solid-js';
 import { SkeletonTable } from '../components/Skeleton';
+import { RefreshError } from '../components/RefreshError';
 import { t } from '../i18n';
 import { absoluteTime, formatNumber, hoverTime } from '../utils';
 import { timeZone } from '../tz';
@@ -45,7 +46,7 @@ export default function Profiles() {
       {/* Only gate on shape, not isError — with refetchInterval polling, a transient
           background refetch failure flips isError true while the last good payload
           is still cached. Showing the error state then would blank the page on
-          every blip; falling through keeps stale data visible until the next poll. */}
+          every blip; falling through keeps stale data visible, under RefreshError. */}
       <Match when={!Array.isArray(q.data)}>
         <div class="obs"><div class="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div></div>
       </Match>
@@ -59,6 +60,7 @@ export default function Profiles() {
               </div>
               <span class="obs-chip obs-chip--active">{formatNumber(data().length)}</span>
             </div>
+            <RefreshError when={q.isError} />
 
             <Show
               when={data().length > 0}

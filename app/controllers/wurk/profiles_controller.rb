@@ -19,8 +19,17 @@ module Wurk
   # other mutation, and read-only mode refuses it (#101 W5).
   #
   # `:key` is "<token>-<jid>". The JSON list lives at /api/profiles.
+  #
+  # `:key` is request input that is otherwise used verbatim as a Redis key, so
+  # every action first requires it to be a member of the `profiles` ZSET
+  # (where both Wurk and Sidekiq register each stored profile). Without that,
+  # a non-HASH key WRONGTYPEs into a false "redis_unavailable" 503, and any
+  # HASH with a `data` field could be shipped to the profiler and have a `sid`
+  # written into it.
   class ProfilesController < ApplicationController
     include SameOriginGuard
+
+    before_action :require_listed_profile
 
     def data
       blob = profile_blob(params[:key])
@@ -35,7 +44,6 @@ module Wurk
 
       sid = cached_sid(params[:key])
       return redirect_to_profile(sid) if sid
-      return head(:not_found) unless profile_exists?(params[:key])
 
       response.headers['Allow'] = 'POST'
       head :method_not_allowed
@@ -57,7 +65,12 @@ module Wurk
       redirect_to(format(::Wurk::Web.config.profile_view_url, sid), allow_other_host: true)
     end
 
-    def profile_exists?(key) = ::Wurk.redis { |c| c.call('EXISTS', key) }.positive?
+    # The member's score is its expiry, the same instant the HASH's TTL lapses;
+    # ProfileSet purges expired members lazily, so a past score is gone too.
+    def require_listed_profile
+      expires_at = ::Wurk.redis { |c| c.call('ZSCORE', ::Wurk::Keys::PROFILES, params[:key].to_s) }
+      head(:not_found) unless expires_at && Float(expires_at) > ::Time.now.to_f
+    end
 
     def cached_sid(key) = ::Wurk.redis { |c| c.call('HGET', key, 'sid') }
 

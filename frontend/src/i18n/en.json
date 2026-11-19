@@ -125,7 +125,9 @@
     "no_running": "No jobs currently running on this process",
     "leader": "Leader",
     "leader_title": "This process holds the cluster leader lock",
-    "heartbeat_ok": "Heartbeat OK"
+    "heartbeat_ok": "Heartbeat OK",
+    "quiet": "Quiet",
+    "embedded": "Embedded"
   },
   "cron": {
     "history_title": "Execution history",
@@ -220,6 +222,7 @@
   "common": {
     "loading": "Loading…",
     "error": "Error loading data",
+    "refresh_failed": "Couldn't refresh. Showing the last data loaded.",
     "empty": "No items",
     "page": "Page",
     "of": "of",

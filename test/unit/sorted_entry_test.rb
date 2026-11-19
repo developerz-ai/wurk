@@ -162,6 +162,16 @@ class SortedEntryTest < Wurk::Test::UnitCase
     assert_equal([entry.value], @pool.with { |c| c.call('ZRANGE', @parent.name, 0, -1) })
   end
 
+  # With reliable_push! an open outage circuit takes a push into memory. The
+  # entry is already out of its set by then, so a crash would lose the job.
+  def test_retry_behind_an_open_reliable_push_circuit_reaches_redis
+    assert_pushes_past_an_open_circuit(&:retry)
+  end
+
+  def test_add_to_queue_behind_an_open_reliable_push_circuit_reaches_redis
+    assert_pushes_past_an_open_circuit(&:add_to_queue)
+  end
+
   # --- add_to_queue ------------------------------------------------------
 
   def test_add_to_queue_removes_and_pushes_to_queue
@@ -302,6 +312,21 @@ class SortedEntryTest < Wurk::Test::UnitCase
       'jid' => SecureRandom.hex(12),
       'created_at' => Time.now.to_f
     }.merge(extra)
+  end
+
+  def assert_pushes_past_an_open_circuit
+    queue = unique_queue
+    entry = add_entry(score: 5.0, item: base_item('queue' => queue))
+    Wurk::Client.reliable_push!
+    Wurk::Client::Buffered.reset!
+    Wurk::Client::Buffered.circuit.trip(@pool)
+
+    yield entry
+
+    assert_equal 0, Wurk::Client::Buffered.buffer_size
+    assert_equal(1, @pool.with { |c| c.call('LLEN', "queue:#{queue}") })
+  ensure
+    Wurk::Client::Buffered.reset!
   end
 
   def unique_queue

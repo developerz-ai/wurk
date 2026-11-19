@@ -47,10 +47,15 @@ module Wurk
     # the opening brace when absent (schedule members are stored stripped of it,
     # via Client#push_scheduled). cjson.decode is still called -- but only to
     # read the `queue` string and test for a top-level `enqueued_at`, never to
-    # re-serialize, so a lossy decode never reaches the payload. (Residual: a
-    # retry member whose user args embed a numeric key literally named
-    # `enqueued_at` ahead of the top-level one patches the arg instead --
-    # vanishingly rare, and still strictly safer than round-tripping every arg.)
+    # re-serialize, so a lossy decode never reaches the payload.
+    #
+    # An arg can hold a hash with its own `enqueued_at` key, ahead of the
+    # top-level one, and key order is the producer's (a stock Sidekiq client
+    # orders its own). `next_key` finds every `enqueued_at` *key* -- an
+    # unescaped quote right after `{` or `,` can only open one, never sit inside
+    # a string -- and when there is more than one, `depth` counts brackets
+    # outside strings to take the one at depth 1. A job has one such key nearly
+    # always, so the scan is the rare path.
     # A member that is not a JSON object naming a string `queue` (garbage bytes,
     # a bare scalar, a nil/numeric queue) can never be promoted. Raising on it
     # would abort the script at the same lowest-scored member on every sweep —
@@ -77,16 +82,58 @@ module Wurk
     # which serializes every script and cost about 3x script throughput.
     RELIABLE_SCHEDULE_PROMOTE = <<~LUA
       --!df flags=allow-undeclared-keys
+      local function is_space(b) return b == 32 or b == 9 or b == 10 or b == 13 end
+      local function next_key(job, init)
+        while true do
+          local s, e = string.find(job, '"enqueued_at"', init, true)
+          if not s then return nil end
+          local j = s - 1
+          while is_space(string.byte(job, j)) do j = j - 1 end
+          local b = string.byte(job, j)
+          if (b == 123 or b == 44) and string.find(job, '^%s*:', e + 1) then return j, e end
+          init = e + 1
+        end
+      end
+      -- Nesting depth just before `stop`. Resumes where the previous call
+      -- stopped, so the candidates of one payload, asked in order, cost one
+      -- pass over it rather than one each.
+      local function depth_scanner(job)
+        local d, i = 0, 1
+        return function(stop)
+          while true do
+            local p = string.find(job, '[{}%[%]"]', i)
+            if not p or p >= stop then return d end
+            local c = string.byte(job, p)
+            i = p + 1
+            if c == 34 then
+              repeat
+                local e = string.find(job, '["\\\\]', i)
+                i = e + (string.byte(job, e) == 92 and 2 or 1)
+              until string.byte(job, e) == 34
+            elseif c == 123 or c == 91 then d = d + 1 else d = d - 1 end
+          end
+        end
+      end
+      local function restamp(job, has)
+        if not has then return (string.gsub(job, '^{', '{"enqueued_at":' .. ARGV[3] .. ',', 1)) end
+        local p, e = next_key(job, 1)
+        if p and next_key(job, e + 1) then
+          local depth = depth_scanner(job)
+          while p and depth(p + 1) ~= 1 do p, e = next_key(job, e + 1) end
+        end
+        if not p then return job end
+        local _, last, colon = string.find(job, '^(%s*:%s*)%-?%d[%d.eE+-]*', e + 1)
+        if not last then return job end
+        return string.sub(job, 1, e) .. colon .. ARGV[3] .. string.sub(job, last + 1)
+      end
       local jobs = redis.call("zrangebyscore", KEYS[1], "-inf", ARGV[1], "LIMIT", 0, tonumber(ARGV[4]))
       for i = 1, #jobs do
         local job = jobs[i]
         local ok, decoded = pcall(cjson.decode, job)
         local q = ok and type(decoded) == "table" and decoded["queue"]
         if type(q) == "string" then
-          local pat, rep = '"enqueued_at":%-?%d[%d.eE+-]*', '"enqueued_at":' .. ARGV[3]
-          if decoded["enqueued_at"] == nil then pat, rep = "^{", "{" .. rep .. "," end
           redis.call("sadd", KEYS[2], q)
-          redis.call("lpush", ARGV[2] .. q, (string.gsub(job, pat, rep, 1)))
+          redis.call("lpush", ARGV[2] .. q, restamp(job, decoded["enqueued_at"] ~= nil))
         else
           redis.call("zadd", KEYS[3], ARGV[1], job)
         end

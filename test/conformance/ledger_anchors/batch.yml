@@ -1,10 +1,10 @@
 - entry: 'Batch "fired" markers use `b-<bid>-success`/`-complete`'
-  anchor: 'lib/wurk/batch/callbacks.rb#L202-L219'
+  anchor: 'lib/wurk/batch/callbacks.rb#L282-L299'
   fragment: |-
     ok = conn.call('SET', "b-#{bid}-#{event}", '1', 'NX', 'EX', Batch::CALLBACK_NOTIFY_TTL)
     ok == 'OK'
 - entry: 'Batch "fired" markers use `b-<bid>-success`/`-complete`'
-  anchor: 'lib/wurk/batch/callbacks.rb#L325-L339'
+  anchor: 'lib/wurk/batch/callbacks.rb#L405-L419'
   fragment: |-
     callbacks_json, queue, parent_bid = Wurk.redis do |conn|
     conn.call('HMGET', "b-#{bid}", 'callbacks', 'callback_queue', 'parent_bid')
@@ -16,7 +16,7 @@
     []
     end
 - entry: 'Batch `b-<bid>-failinfo` is not written or imported'
-  anchor: 'lib/wurk/batch/server_middleware.rb#L121-L130'
+  anchor: 'lib/wurk/batch/server_middleware.rb#L125-L134'
   fragment: |-
     keys: ["b-#{bid}", "b-#{bid}-failed"],
     argv: [jid, Batch::DEFAULT_EXPIRY_SECONDS]
@@ -27,7 +27,7 @@
     redis.call("hincrby", KEYS[1], "failures", 1)
     end
 - entry: 'Batch `b-<bid>-failinfo` is not written or imported'
-  anchor: 'lib/wurk/batch/death_handler.rb#L31-L38'
+  anchor: 'lib/wurk/batch/death_handler.rb#L32-L39'
   fragment: |-
     keys: ["b-#{bid}", "b-#{bid}-jids", "b-#{bid}-died", "b-#{bid}-failed", "b-#{bid}-pkids"],
     argv: [jid, Batch::DEFAULT_EXPIRY_SECONDS]
@@ -70,12 +70,12 @@
     pending, live, kids = Wurk.redis do |conn|
     Wurk::Lua::Loader.eval_cached(conn, :batch_delete, keys: delete_keys(own, parent),
 - entry: 'Batch tags use a JSON field and reverse indexes, not `b-<bid>-tags`'
-  anchor: 'lib/wurk/batch/callbacks.rb#L191-L195'
+  anchor: 'lib/wurk/batch/callbacks.rb#L273-L277'
   fragment: |-
     Wurk.redis do |conn|
     conn.pipelined { |pipe| Batch.keys_for(bid).each { |key| pipe.call('EXPIRE', key, seconds) } }
 - entry: 'Batch tags use a JSON field and reverse indexes, not `b-<bid>-tags`'
-  anchor: 'lib/wurk/batch/death_handler.rb#L58-L61'
+  anchor: 'lib/wurk/batch/death_handler.rb#L60-L63'
   fragment: |-
     Wurk.redis do |conn|
     conn.pipelined do |pipe|

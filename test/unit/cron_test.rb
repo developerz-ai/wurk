@@ -431,6 +431,39 @@ class CronTest < Wurk::Test::UnitCase
     assert_equal [['nightly'], 'low'], [lp.args, lp.queue]
   end
 
+  # `tz:` used to land in the options only, so the loop fired on UTC.
+  def test_module_register_honours_tz
+    lp = Wurk::Cron.register('nightly', '0 4 * * *', 'CronTest::BarWorker', [@suffix], tz: 'Asia/Tokyo')
+    @lids << lp.lid
+    stored = Wurk::Cron::LoopSet.new.fetch(lp.lid)
+    utc = Wurk::Cron::Loop.new(schedule: '0 4 * * *', klass: 'CronTest::BarWorker')
+    from = ::Time.utc(2026, 1, 10, 12).to_i
+
+    assert_equal %w[Asia/Tokyo Asia/Tokyo], [lp.tz, stored.tz]
+    assert_equal ::Time.utc(2026, 1, 10, 19).to_i, stored.next_fire_at(from)
+    refute_equal utc.next_fire_at(from), stored.next_fire_at(from)
+  end
+
+  # The lid has always hashed `tz` here; moving it would orphan the old loop.
+  def test_module_register_keeps_its_lid_with_tz
+    lp = Wurk::Cron.register(nil, '0 4 * * *', 'CronTest::BarWorker', [@suffix], tz: 'Asia/Tokyo')
+    @lids << lp.lid
+
+    assert_equal Wurk::Cron.lid('0 4 * * *', 'CronTest::BarWorker', { 'tz' => 'Asia/Tokyo', 'args' => [@suffix] }),
+                 lp.lid
+  end
+
+  def test_re_registering_with_the_same_tz_keeps_the_next_fire_mark
+    klass = "CronTest::SameZone#{@suffix}"
+    lp = Wurk::Cron::Manager.new.register('0 4 * * *', klass, tz: 'Asia/Tokyo')
+    @lids << lp.lid
+    seed_mark(lp.lid, 'nf', 12_345)
+
+    Wurk::Cron::Manager.new.register('0 4 * * *', klass, tz: 'Asia/Tokyo')
+
+    assert_equal '12345', loop_hash(lp.lid)['nf']
+  end
+
   # ---- LoopSet --------------------------------------------------------
 
   def test_loop_set_each_yields_registered_loops
@@ -1421,6 +1454,39 @@ class CronTest < Wurk::Test::UnitCase
 
     assert_nil poller.send(:skip_missed, lp, now - (Wurk::Cron::MISSED_TICK_THRESHOLD + 60), now)
     assert_match(/missed tick.*not backfilled/, io.string)
+  end
+
+  # A production every-minute loop three minutes late logged one line and no
+  # count. The line now says how many occurrences the marks advanced past.
+  def test_skip_missed_counts_the_dropped_occurrences
+    cfg = Wurk::Configuration.new
+    io = StringIO.new
+    cfg.logger = Logger.new(io)
+    poller = Wurk::Cron::Poller.new(cfg)
+    lp = Wurk::Cron::Loop.new(schedule: '* * * * *', klass: 'CronTest::Missed')
+    minute = (::Time.now.to_i / 60) * 60
+
+    poller.send(:skip_missed, lp, minute - 180, minute + 5, minute)
+    poller.send(:skip_missed, lp, minute - 180, minute + 5)
+    poller.send(:skip_missed, lp, minute - (60 * 5_000), minute)
+
+    assert_equal %w[3 4 1000+], io.string.scan(/drift=\d+s skipped=(\S+) /).flatten
+  end
+
+  def test_a_late_tick_logs_how_many_occurrences_it_skipped
+    queue = "cron-late-#{@suffix}"
+    lp = register_loop("CronTest::Late#{@suffix}", queue: queue)
+    seed_mark(lp.lid, 'nf', ((::Time.now.to_i / 60) * 60) - 180)
+    io = StringIO.new
+    log = Logger.new(io)
+    poller = build_leader_poller
+    poller.define_singleton_method(:logger) { log }
+
+    poller.tick
+
+    assert_match(/missed tick.*skipped=[34] /, io.string)
+  ensure
+    cleanup_queue(queue)
   end
 
   def test_missed_threshold_never_drops_below_a_tick_and_a_half

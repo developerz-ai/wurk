@@ -17,6 +17,9 @@ class BatchFireGateTest < Wurk::Test::UnitCase
   # Reentrant: a stub can be installed inside an error-handler swap.
   GLOBAL_LOCK = Monitor.new
 
+  # More consecutive failures than the quick re-drive absorbs.
+  OUTAGE_FAILURES = Wurk::Batch::Callbacks::REDRIVE_ATTEMPTS + 2
+
   def setup
     super
     @pool       = Wurk.configuration.redis_pool
@@ -184,6 +187,113 @@ class BatchFireGateTest < Wurk::Test::UnitCase
     with_stub(Wurk::Batch::Callbacks, :maybe_fire, flaky) { ack_success(batch.bid, jid_for(@queue, batch.bid)) }
 
     assert_equal 1, callbacks_fired(batch.bid, 'success')
+  end
+
+  # --- a store outage between the ack and the fire -------------------------
+  #
+  # The ack landed, so the batch is drained in Redis; the job is about to be
+  # ACKed off its private list, after which nothing re-drives the fire. A Redis
+  # restart outlasts the three quick re-drives (a LOADING reply fails all of
+  # them inside 150ms), so the fire has to wait the outage out rather than
+  # report it and let the callbacks go.
+
+  def test_fire_waits_out_a_store_that_is_loading
+    assert_fire_survives(::RedisClient::CommandError.new('LOADING Redis is loading the dataset in memory'))
+  end
+
+  def test_fire_waits_out_a_store_that_refuses_connections
+    assert_fire_survives(::RedisClient::CannotConnectError.new('Connection refused'))
+  end
+
+  # The outage as the callback enqueue sees it: every push fails, which
+  # reaches the re-drive as a CallbackEnqueueError.
+  def test_fire_waits_out_an_outage_that_fails_the_callback_enqueue
+    batch = new_batch(complete: 'C', success: 'S')
+    batch.jobs { perform_one }
+    jid = jid_for(@queue, batch.bid)
+    outage = OUTAGE_FAILURES
+    refusing = lambda do |orig, item|
+      next orig.call(item) unless item['args'].first == batch.bid && outage.positive?
+
+      outage -= 1
+      raise ::RedisClient::CannotConnectError, 'Connection refused'
+    end
+
+    with_error_handler(->(*) {}) do
+      with_stub(Wurk::Client, :push, refusing) { middleware.call(nil, { 'bid' => batch.bid, 'jid' => jid }, @queue) {} }
+    end
+
+    assert_equal 1, callbacks_fired(batch.bid, 'complete')
+    assert_equal 1, callbacks_fired(batch.bid, 'success')
+  end
+
+  # A re-drive after a partial enqueue pushes only the callbacks that failed:
+  # one that landed on the first attempt is not pushed again.
+  def test_a_partial_callback_enqueue_redrives_only_the_failed_ones
+    batch = new_batch(success: 'First')
+    batch.on(:success, 'Second')
+    batch.jobs { perform_one }
+    jid = jid_for(@queue, batch.bid)
+    failed = false
+    flaky = lambda do |orig, item|
+      next orig.call(item) unless item['args'][1] == 'Second' && !failed
+
+      failed = true
+      raise ::RedisClient::CannotConnectError, 'Connection refused'
+    end
+
+    with_error_handler(->(*) {}) do
+      with_stub(Wurk::Client, :push, flaky) { middleware.call(nil, { 'bid' => batch.bid, 'jid' => jid }, @queue) {} }
+    end
+
+    assert_equal %w[First Second], callback_jobs(batch.bid).map { |j| j['args'][1] }.sort
+  end
+
+  def test_success_ack_waits_out_a_store_outage_instead_of_failing_the_job
+    batch = new_batch(success: 'S')
+    batch.jobs { perform_one }
+    jid = jid_for(@queue, batch.bid)
+    outage = OUTAGE_FAILURES
+    refusing = lambda do |orig, conn, bid, acked|
+      next orig.call(conn, bid, acked) unless bid == batch.bid && outage.positive?
+
+      outage -= 1
+      # A timeout, not a refused connection: the pool replays that one itself.
+      raise ::RedisClient::ReadTimeoutError, 'timed out'
+    end
+
+    with_stub(Wurk::Batch, :ack_success, refusing) do
+      middleware.call(nil, { 'bid' => batch.bid, 'jid' => jid }, @queue) {}
+    end
+
+    assert_equal 1, callbacks_fired(batch.bid, 'success')
+  end
+
+  # The wait is bounded: a store that never comes back is reported, as before.
+  def test_outage_wait_gives_up_past_its_budget
+    calls = 0
+
+    assert_raises(::RedisClient::CannotConnectError) do
+      Wurk::Batch::Callbacks.retrying(outage_budget: 0.4) do
+        calls += 1
+        raise ::RedisClient::CannotConnectError, 'Connection refused'
+      end
+    end
+    assert_operator calls, :>, Wurk::Batch::Callbacks::REDRIVE_ATTEMPTS
+  end
+
+  # Only a store that is not serving earns the wait. Anything else — a bug, a
+  # refused command — would fail the same way for the whole budget.
+  def test_other_errors_keep_the_short_redrive
+    calls = 0
+
+    assert_raises(RuntimeError) do
+      Wurk::Batch::Callbacks.retrying(outage_budget: 60) do
+        calls += 1
+        raise 'not an outage'
+      end
+    end
+    assert_equal Wurk::Batch::Callbacks::REDRIVE_ATTEMPTS, calls
   end
 
   def test_job_failure_is_still_recorded_and_raised
@@ -447,6 +557,33 @@ class BatchFireGateTest < Wurk::Test::UnitCase
 
   def callbacks_fired(bid, event)
     callback_jobs(bid).count { |j| j['args'][2] == event }
+  end
+
+  # Runs the batch's last job with the fire failing `OUTAGE_FAILURES` times in
+  # a row, as it does across a store restart, then asserts nothing was lost
+  # and nothing was reported.
+  def assert_fire_survives(error)
+    batch = new_batch(complete: 'C', success: 'S')
+    batch.jobs { perform_one }
+    jid = jid_for(@queue, batch.bid)
+    outage = OUTAGE_FAILURES
+    reported = []
+    down = lambda do |orig, bid, **kw|
+      next orig.call(bid, **kw) unless bid == batch.bid && outage.positive?
+
+      outage -= 1
+      raise error
+    end
+
+    with_error_handler(->(ex, _ctx, _cfg) { reported << ex }) do
+      with_stub(Wurk::Batch::Callbacks, :maybe_fire, down) do
+        middleware.call(nil, { 'bid' => batch.bid, 'jid' => jid }, @queue) {}
+      end
+    end
+
+    assert_empty reported
+    assert_equal 1, callbacks_fired(batch.bid, 'complete')
+    assert_equal 1, callbacks_fired(batch.bid, 'success')
   end
 
   def with_error_handler(handler)

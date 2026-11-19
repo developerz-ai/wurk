@@ -16,7 +16,7 @@ class InterruptRepushIterableWorker
 
   def build_enumerator(*_args, cursor:)
     start = cursor || 0
-    Enumerator.new { |y| start.upto(0) { |i| y << [i, i + 1] } }
+    Enumerator.new { |y| start.upto(0) { |i| y << [i, i] } }
   end
 
   def each_iteration(_item, redis_url, armed_key, done_key)

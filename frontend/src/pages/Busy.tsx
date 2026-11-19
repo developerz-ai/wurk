@@ -1,10 +1,13 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/solid-query';
 import { createSignal, onMount, For, Show, Switch, Match, type JSX } from 'solid-js';
+import { RefreshError } from '../components/RefreshError';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
 import Modal from '../components/Modal';
+import { activatable } from '../components/activatable';
 import { ArgsValue } from '../components/ArgsValue';
 import { relativeTime, hoverTime, formatKb, formatDuration, formatArgs, nowSeconds, truncate } from '../utils';
+import { liveTick } from '../tick';
 import { useMeta } from '../hooks/useMeta';
 import { SkeletonCards } from '../components/Skeleton';
 import { basePath } from '../basePath';
@@ -256,7 +259,9 @@ export default function Busy() {
           <SkeletonCards count={6} />
         </div>
       </Match>
-      <Match when={query.isError || !query.data}>
+      {/* Gate on the payload, not isError: a failed background poll flips isError
+          while the last good payload is still cached. RefreshError says so inline. */}
+      <Match when={!query.data}>
         <div class="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>
       </Match>
       <Match when={query.data}>
@@ -290,6 +295,7 @@ export default function Busy() {
                 </Show>
               </div>
             </PageHeader>
+            <RefreshError when={query.isError} />
 
             <Show when={data().length > 0} fallback={<div class="empty-state">{t('common.empty')}</div>}>
               <For each={hosts()}>
@@ -306,12 +312,18 @@ export default function Busy() {
                       <For each={group.processes}>
                         {(proc) => {
                           const utilization = proc.concurrency > 0 ? (proc.busy / proc.concurrency) * 100 : 0;
-                          const isRecent = nowSeconds() - proc.beat < 30;
+                          // Re-judged on the shared tick: a process that stops
+                          // beating keeps its last `beat`, so the poll hands back
+                          // an unchanged row and nothing else would re-run this.
+                          const isRecent = () => {
+                            liveTick();
+                            return nowSeconds() - proc.beat < 30;
+                          };
 
                           return (
                             <div
                               class="card row-clickable"
-                              onClick={() => proc.identity && setSelected(proc.identity)}
+                              {...activatable(() => proc.identity && setSelected(proc.identity))}
                             >
                               <div style={{ display: 'flex', 'justify-content': 'space-between', 'align-items': 'flex-start', 'margin-bottom': '0.75rem' }}>
                                 <div>
@@ -322,15 +334,15 @@ export default function Busy() {
                                   </div>
                                 </div>
                                 <div style={{ display: 'flex', gap: '0.375rem' }}>
-                                  <Show when={isRecent}><span class="live-dot" title={t('busy.heartbeat_ok')} /></Show>
+                                  <Show when={isRecent()}><span class="live-dot" title={t('busy.heartbeat_ok')} /></Show>
                                   <Show when={proc.leader}>
                                     <span class="badge badge-accent" title={t('busy.leader_title')}>
                                       <Icon name="crown" style={{ 'margin-right': '0.3rem' }} />
                                       {t('busy.leader')}
                                     </span>
                                   </Show>
-                                  <Show when={proc.quiet}><span class="badge badge-warning">Quiet</span></Show>
-                                  <Show when={proc.embedded}><span class="badge badge-muted">embedded</span></Show>
+                                  <Show when={proc.quiet}><span class="badge badge-warning">{t('busy.quiet')}</span></Show>
+                                  <Show when={proc.embedded}><span class="badge badge-muted">{t('busy.embedded')}</span></Show>
                                 </div>
                               </div>
 
@@ -345,7 +357,7 @@ export default function Busy() {
                                 </div>
                                 <div>
                                   <div style={statLabelStyle}>{t('busy.heartbeat')}</div>
-                                  <div style={{ 'font-size': '13px', color: isRecent ? 'var(--success)' : 'var(--danger)' }}>
+                                  <div style={{ 'font-size': '13px', color: isRecent() ? 'var(--success)' : 'var(--danger)' }}>
                                     {relativeTime(proc.beat)}
                                   </div>
                                 </div>

@@ -203,6 +203,16 @@ class ConfigurationTest < Wurk::Test::UnitCase
     assert_equal 13, @config.default_capsule.concurrency
   end
 
+  # Upstream coerces with Integer(), so `config.concurrency = ENV['X']` works;
+  # a String kept as-is broke total_concurrency and every pool size after it.
+  def test_concurrency_setter_coerces_a_numeric_string
+    @config.concurrency = '7'
+
+    assert_equal 7, @config.concurrency
+    assert_equal 7, @config.total_concurrency
+    assert_raises(ArgumentError) { @config.concurrency = 'seven' }
+  end
+
   def test_queues_shortcut_round_trips
     @config.queues = %w[high default low]
 
@@ -960,6 +970,16 @@ class ConfigurationTest < Wurk::Test::UnitCase
     @config.logger = custom
 
     assert_same custom, @config.logger
+  end
+
+  # Upstream: `Sidekiq.logger = nil` silences the existing logger (FATAL)
+  # rather than dropping it; suites use it to keep test output quiet.
+  def test_logger_setter_nil_silences_the_logger
+    logger = @config.logger
+    @config.logger = nil
+
+    assert_same logger, @config.logger
+    assert_equal ::Logger::FATAL, @config.logger.level
   end
 
   # --- handle_exception --------------------------------------------------

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen } from '@solidjs/testing-library';
+import { render, screen, waitFor } from '@solidjs/testing-library';
 import { QueryClient, QueryClientProvider } from '@tanstack/solid-query';
 import { MemoryRouter, Route, createMemoryHistory } from '@solidjs/router';
 import Dashboard, { rangeIndexForDays } from './Dashboard';
@@ -13,8 +13,9 @@ vi.mock('../components/charts', () => ({
 }));
 
 // No EventSource in jsdom, and the live stream is not what is under test.
+const sse = vi.hoisted(() => ({ stats: null as unknown, statsAt: 0, connected: false }));
 vi.mock('../hooks/useSSE', () => ({
-  useSSE: () => ({ stats: () => null, connected: () => false }),
+  useSSE: () => ({ stats: () => sse.stats, statsAt: () => sse.statsAt, connected: () => sse.connected }),
 }));
 
 const STATS = { processed: 1200, failed: 12, enqueued: 3, busy: 1, scheduled: 4, retries: 0, dead: 2, latency: 0.4, processes: 2, queues: [] };
@@ -76,6 +77,35 @@ describe('Dashboard heading', () => {
       expect(container.querySelector('h1')?.textContent).toBe('Dashboard');
     });
   }
+});
+
+// Nav holds the stream open for the app's lifetime, so its last snapshot
+// outlives a dropped connection; the dashboard then polls /api/stats.
+describe('Dashboard stats after the live stream drops', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    Object.assign(sse, { stats: null, statsAt: 0, connected: false });
+  });
+
+  it('shows the polled numbers over a snapshot the stream left behind', async () => {
+    Object.assign(sse, { stats: { ...STATS, processed: 111 }, statsAt: Date.now() - 60_000, connected: false });
+    stubFetch((url) => (url.pathname.includes('/api/history/') ? HISTORY : url.pathname.endsWith('/api/stats') ? STATS : []));
+    renderPage('/', '/', Dashboard);
+
+    expect(await screen.findByText('1,200')).toBeInTheDocument();
+    expect(screen.queryByText('111')).toBeNull();
+  });
+
+  it('keeps the live snapshot while it is newer than the last poll', async () => {
+    Object.assign(sse, { stats: { ...STATS, processed: 111 }, statsAt: Date.now() + 60_000, connected: false });
+    const fetchMock = stubFetch((url) => (url.pathname.includes('/api/history/') ? HISTORY : url.pathname.endsWith('/api/stats') ? STATS : []));
+    renderPage('/', '/', Dashboard);
+
+    expect(await screen.findByText('111')).toBeInTheDocument();
+    await waitFor(() => expect(requests(fetchMock).some(({ url }) => url.pathname.endsWith('/api/stats'))).toBe(true));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByText('1,200')).toBeNull();
+  });
 });
 
 describe('Sidekiq Web ?days=N', () => {

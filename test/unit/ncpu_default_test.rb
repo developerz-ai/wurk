@@ -6,7 +6,7 @@ require 'etc'
 # The parallel worker default must never put a worker on every core. This
 # suite's integration layer waits on real timeouts, so an oversubscribed machine
 # fails on wall clock rather than on assertions, which reads as a flaky suite
-# instead of a loaded one (dz#4386: a flat default of 4 on 4-core fleet boxes).
+# instead of a loaded one (a flat default of 4 on 4-core fleet boxes).
 #
 # The rule is tested as a FUNCTION OF THE CORE COUNT, because that is the only
 # way to state what it does on machines this one is not. Asserting

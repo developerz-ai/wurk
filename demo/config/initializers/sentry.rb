@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# Error reporting for the public demo (developerz-ai/infrastructure#502).
+# Error reporting for the public demo.
 #
 # On only when the deployment asks for it AND gives us somewhere to report to:
 # WURK_DEMO_REPORT_ERRORS=1 plus SENTRY_DSN. The flag alone would boot the SDK

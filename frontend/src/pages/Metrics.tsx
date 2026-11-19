@@ -235,6 +235,21 @@ export default function Metrics() {
   const jobsTotal = createMemo(() => allJobs().reduce((s, j) => s + j.count, 0));
   const jobs = createMemo(() => allJobs().slice(0, 6));
 
+  // A count the server never sent is unknown, not zero: "0 processed, no
+  // workers" during an API outage reads as a dead fleet.
+  const stat = (key: 'processed' | 'failed' | 'processes') => {
+    const n = statsQuery.data?.[key];
+    return typeof n === 'number' ? formatNumber(n) : '—';
+  };
+  // Same for the panels: a failed load with nothing cached is an error, and
+  // only a successful empty answer is "no data".
+  const failed = (q: { isError: boolean; data: unknown }) => q.isError && q.data === undefined;
+  const loadError = (height: number) => (
+    <div class="empty-state" style={{ height: `${height}px`, display: 'grid', 'place-items': 'center', color: 'var(--danger)' }}>
+      {t('common.error')}
+    </div>
+  );
+
   return (
     <div class="obs">
       <PageHeader icon="chart-line" title={t('nav.metrics')} summary={t('summaries.metrics')} />
@@ -263,7 +278,7 @@ export default function Metrics() {
             <Icon name="circle-check" class="obs-metric__icon" />
           </div>
           <span class="obs-metric__value">
-            {formatNumber(statsQuery.data?.processed ?? 0)}
+            {stat('processed')}
             <Delta pct={deltaPct(fullSeries(), 'processed')} goodWhenUp />
           </span>
           <span class="obs-metric__sub">{t('metrics.across_all_queues')}</span>
@@ -274,7 +289,7 @@ export default function Metrics() {
             <Icon name="triangle-exclamation" class="obs-metric__icon" />
           </div>
           <span class="obs-metric__value">
-            {formatNumber(statsQuery.data?.failed ?? 0)}
+            {stat('failed')}
             <Delta pct={deltaPct(fullSeries(), 'failed')} goodWhenUp={false} />
           </span>
           <span class="obs-metric__sub">{t('metrics.total_failures')}</span>
@@ -292,8 +307,10 @@ export default function Metrics() {
             <span class="obs-mono">{t('metrics.active_workers')}</span>
             <Icon name="gears" class="obs-metric__icon" />
           </div>
-          <span class="obs-metric__value">{formatNumber(statsQuery.data?.processes ?? 0)}</span>
-          <span class="obs-metric__sub">{(statsQuery.data?.processes ?? 0) > 0 ? t('metrics.stable') : t('metrics.no_workers')}</span>
+          <span class="obs-metric__value">{stat('processes')}</span>
+          <span class="obs-metric__sub">
+            {typeof statsQuery.data?.processes !== 'number' ? '' : statsQuery.data.processes > 0 ? t('metrics.stable') : t('metrics.no_workers')}
+          </span>
         </div>
       </div>
 
@@ -313,9 +330,11 @@ export default function Metrics() {
             <Show
               when={hasThroughput()}
               fallback={
-                <div class="empty-state" style={{ height: '300px', display: 'grid', 'place-items': 'center' }}>
-                  {t('dashboard.no_history')}
-                </div>
+                <Show when={!failed(historyQuery)} fallback={loadError(300)}>
+                  <div class="empty-state" style={{ height: '300px', display: 'grid', 'place-items': 'center' }}>
+                    {t('dashboard.no_history')}
+                  </div>
+                </Show>
               }
             >
               <AreaChart
@@ -345,9 +364,11 @@ export default function Metrics() {
               <Show
                 when={depthRows().length > 0}
                 fallback={
-                  <div class="empty-state" style={{ height: '240px', display: 'grid', 'place-items': 'center' }}>
-                    {t('metrics.no_queue_history')}
-                  </div>
+                  <Show when={!failed(queueQuery)} fallback={loadError(240)}>
+                    <div class="empty-state" style={{ height: '240px', display: 'grid', 'place-items': 'center' }}>
+                      {t('metrics.no_queue_history')}
+                    </div>
+                  </Show>
                 }
               >
                 <BarChart
@@ -372,7 +393,14 @@ export default function Metrics() {
             <h2 class="obs-table__title" style={{ 'font-size': '18px' }}>{t('metrics.top_job_types')}</h2>
           </div>
           <Show when={!metricsQuery.isPending} fallback={<ChartLoader height={240} />}>
-            <Show when={jobs().length > 0} fallback={<div class="obs-empty">{t('common.empty')}</div>}>
+            <Show
+              when={jobs().length > 0}
+              fallback={
+                <Show when={!failed(metricsQuery)} fallback={loadError(240)}>
+                  <div class="obs-empty">{t('common.empty')}</div>
+                </Show>
+              }
+            >
               <div class="obs-tablescroll">
                 <table>
                   <thead>

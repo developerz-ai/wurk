@@ -122,11 +122,16 @@ module Wurk
       # are up (so a self-TERM can't race launcher.run). A parent that died
       # during boot is still caught immediately: the watchdog's first getppid
       # check sees the reparent and drains at once.
+      #
+      # A start_quiet launcher is quieted before it runs, not after: its
+      # processors start fetching the moment the managers start, so a quiet
+      # landing after `run` let every job claimed in between run mid-maintenance.
+      # Quieted first, each processor exits before its first fetch.
       def run_launcher
         launcher = Wurk::Launcher.new(@config)
         install_signal_handlers(launcher)
-        launcher.run
         launcher.quiet if @start_quiet
+        launcher.run
         arm_orphan_guard
         @dispatcher.join
       end

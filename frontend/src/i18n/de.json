@@ -125,7 +125,9 @@
     "no_running": "Auf diesem Prozess laufen derzeit keine Jobs",
     "leader": "Leader",
     "leader_title": "Dieser Prozess hält die Cluster-Leader-Sperre",
-    "heartbeat_ok": "Heartbeat OK"
+    "heartbeat_ok": "Heartbeat OK",
+    "quiet": "Ruhig",
+    "embedded": "Eingebettet"
   },
   "cron": {
     "history_title": "Ausführungsverlauf",
@@ -220,6 +222,7 @@
   "common": {
     "loading": "Lädt…",
     "error": "Fehler beim Laden",
+    "refresh_failed": "Aktualisierung fehlgeschlagen. Angezeigt werden die zuletzt geladenen Daten.",
     "empty": "Keine Einträge",
     "page": "Seite",
     "of": "von",

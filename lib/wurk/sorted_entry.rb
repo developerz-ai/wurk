@@ -63,7 +63,7 @@ module Wurk
     # add_to_queue does not touch `retry_count`.
     def add_to_queue
       remove_job do |message|
-        Client.new.push(Wurk.load_json(message))
+        push_to_redis(Wurk.load_json(message))
       end
     end
 
@@ -75,7 +75,7 @@ module Wurk
       remove_job do |message|
         job = Wurk.load_json(message)
         job['retry_count'] = job['retry_count'].to_i - 1 if job['retry_count']
-        Client.new.push(job)
+        push_to_redis(job)
       end
     end
 
@@ -108,6 +108,14 @@ module Wurk
     end
 
     private
+
+    # Unbuffered, because the entry is already out of its set: with
+    # `reliable_push!` an open outage circuit would otherwise take the push into
+    # memory and return, and a crash would lose the only copy. Raising instead
+    # lets #remove_job put the entry back.
+    def push_to_redis(job)
+      Client::Buffered.unbuffered { Client.new.push(job) }
+    end
 
     # Pulls the message out of Redis, yields its raw JSON for the caller's
     # re-enqueue work, and returns the parsed hash. A String because that is the

@@ -126,8 +126,11 @@ describe('useSSE', () => {
     await waitFor(() => expect(StubEventSource.instances).toHaveLength(1));
     const es = StubEventSource.instances[0];
 
+    const before = Date.now();
     es.emit('stats', { data: JSON.stringify(SNAPSHOT) });
     expect(result.stats()).toEqual(SNAPSHOT);
+    // Stamped on the client clock, for consumers weighing it against a poll.
+    expect(result.statsAt()).toBeGreaterThanOrEqual(before);
   });
 
   it('swallows a malformed "stats" payload instead of throwing', async () => {

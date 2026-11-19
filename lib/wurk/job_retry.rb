@@ -38,6 +38,14 @@ module Wurk
     # short-circuits processing (e.g. interrupt-handler re-pushed the job).
     class Skip < Handled; end
 
+    # Raised by Processor when Redis stopped answering after `perform` had
+    # returned: the job did its work and only the bookkeeping behind it (a
+    # batch ack, a status row) failed. Counted as a failure it would be retried
+    # with a stale count or, on a last attempt, killed, and a batch would mark
+    # itself dead over a job that succeeded. Both guards let it through to the
+    # Processor, which puts the job back to run again. `cause` is the Redis error.
+    class StoreUnavailableAfterPerform < ::StandardError; end
+
     def initialize(capsule)
       @capsule = capsule
       @config = capsule
@@ -50,7 +58,7 @@ module Wurk
     # bubbles up so the swarm can drain.
     def global(jobstr, queue)
       yield
-    rescue Handled, Wurk::Shutdown
+    rescue Handled, Wurk::Shutdown, StoreUnavailableAfterPerform
       raise
     rescue Exception => e # rubocop:disable Lint/RescueException
       raise Wurk::Shutdown if exception_caused_by_shutdown?(e)
@@ -71,7 +79,7 @@ module Wurk
     # circuit `global`'s rescue.
     def local(jobinst, jobstr, queue)
       yield
-    rescue Handled, Wurk::Shutdown
+    rescue Handled, Wurk::Shutdown, StoreUnavailableAfterPerform
       raise
     rescue Exception => e # rubocop:disable Lint/RescueException
       raise Wurk::Shutdown if exception_caused_by_shutdown?(e)

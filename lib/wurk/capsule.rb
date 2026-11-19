@@ -21,6 +21,20 @@ module Wurk
     # Sidekiq delegates the same accessor (capsule.rb:30).
     def thread_priority = @config.thread_priority
 
+    # Hash-style options live on the Configuration; Sidekiq delegates these
+    # too (capsule.rb:30), and fetchers and gems handed a capsule read them.
+    def [](key) = @config[key]
+
+    def []=(key, val)
+      @config[key] = val
+    end
+
+    def fetch(*, &) = @config.fetch(*, &)
+    def key?(key) = @config.key?(key)
+    alias has_key? key?
+    def merge!(other) = @config.merge!(other)
+    def dig(*keys) = @config.dig(*keys)
+
     def initialize(name, config)
       @name = name.to_s
       @config = config

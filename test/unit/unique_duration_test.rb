@@ -13,7 +13,7 @@ require 'active_job/queue_adapters/wurk_adapter'
 # the string "300" — the same bytes Sidekiq writes — so every reader after the
 # push sees a numeric string, not a number. These run the declaration through
 # a real push, a real Processor and real Redis so the release is asserted on
-# the payload as it comes back off the queue (tesote/tesote.com#519).
+# the payload as it comes back off the queue.
 class UniqueDurationTest < Wurk::Test::UnitCase
   module Log
     MUTEX = Mutex.new

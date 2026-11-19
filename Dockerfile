@@ -18,7 +18,7 @@ COPY lib/wurk/version.rb ./lib/wurk/version.rb
 RUN cd frontend && bun run build   # → /src/vendor/assets/dashboard
 
 # ---- Stage 2: Ruby runtime ----
-FROM ruby:3.4-slim-bookworm
+FROM ruby:4.0.10-slim-bookworm
 # RAILS_ENV=production; the runtime must supply a real SECRET_KEY_BASE (k8s
 # secret — see docs/demo-deploy.md). Read-only + demo mode are baked in.
 ENV RAILS_ENV=production \

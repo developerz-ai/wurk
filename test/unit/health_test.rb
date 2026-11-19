@@ -188,6 +188,25 @@ class HealthTest < Wurk::Test::UnitCase
     refute_predicate second, :retrying?, 'stop cancels the retry poll'
   end
 
+  def test_busy_port_logs_info_in_a_swarm_and_warn_alone
+    launcher = FakeLauncher.new(config: FakeConfig.new)
+    @server = build_server(launcher)
+    @server.start
+    { nil => 'WARN', 1 => 'WARN', 3 => 'INFO' }.each do |fleet, level|
+      io = StringIO.new
+      config = FakeConfig.new(logger: ::Logger.new(io))
+      Wurk::Health.fleet_size = fleet
+      second = Wurk::Health::Server.new(FakeLauncher.new(config:), port: @server.port, bind: '127.0.0.1',
+                                                                   retry_interval: 0.05)
+      second.start
+      second.stop
+
+      assert_match(/#{level} .*port #{@server.port} in use/, io.string, "fleet_size=#{fleet.inspect}")
+    end
+  ensure
+    Wurk::Health.fleet_size = nil
+  end
+
   # A second start on a live instance must be a no-op. Without the guard it
   # re-binds the same port, hits EADDRINUSE, nulls @server/@thread, and leaks
   # the original listener so stop can never close it.

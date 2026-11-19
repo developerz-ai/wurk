@@ -167,7 +167,7 @@ module Wurk
     # with the server's own fork/signal supervision. Detect the common three.
     def preforking_web_server?
       return true if defined?(::PhusionPassenger)
-      return true if defined?(::Unicorn)
+      return true if unicorn_server?
 
       puma_cluster?
     end

@@ -50,7 +50,9 @@ end                                          # back to the global mode
 ```
 
 `Sidekiq.testing!(:fake)` / `Sidekiq.testing!(:inline) { … }` is the same entry
-point under the modern name; it defaults to `:fake` when called with no argument.
+point under the modern name; it defaults to `:fake` when called with no argument,
+and raises `Unknown testing mode: …` for anything but `:fake`, `:inline` or
+`:disable`.
 
 Two things to know about the block form:
 
@@ -81,7 +83,7 @@ Defined on every class that includes `Sidekiq::Job`:
 
 | Method | Semantics |
 |---|---|
-| `MyJob.jobs` | Array of payload hashes for this class, across every queue |
+| `MyJob.jobs` | The **live** array of payload hashes for this class, across every queue. It keeps counting after later pushes, so RSpec's `change(MyJob.jobs, :size)` works, and `.clear` on it mutates the store |
 | `MyJob.clear` | Remove this class's fake jobs (leaves other classes alone) |
 | `MyJob.drain` | Run **and remove** every fake job for this class — including ones enqueued mid-drain. Returns the count processed |
 | `MyJob.perform_one` | Run and remove the first fake job for this class. Raises `Sidekiq::EmptyQueueError` if there are none. Returns the job's `perform` value |
@@ -122,7 +124,7 @@ A payload is the wire hash, so assert on it with string keys: `"class"`,
 | `Sidekiq::Queues["default"]` | The **live** array for that queue — `.clear` on it mutates the store |
 | `Sidekiq::Queues.jobs` | Every payload, flattened |
 | `Sidekiq::Queues.jobs_by_queue` | Live `queue => [jobs]` hash |
-| `Sidekiq::Queues.jobs_by_class` | `class name => [jobs]` (alias `jobs_by_worker`) |
+| `Sidekiq::Queues.jobs_by_class` | Live `class name => [jobs]` hash (alias `jobs_by_worker`) |
 | `Sidekiq::Queues.push(queue, klass, job)` | Append a payload by hand |
 | `Sidekiq::Queues.delete_for(jid, queue, klass)` | Drop one payload by jid |
 | `Sidekiq::Queues.clear_for(queue, klass)` | Drop one class's payloads from one queue |
@@ -217,7 +219,8 @@ block — RSpec's example object responds to `call`.
 absolute epoch-seconds `at` and put it on the payload. An interval below
 `1_000_000_000` is seconds-from-now; at or above, it's an absolute timestamp. If
 the resulting time is **not in the future**, `at` is dropped and the job enqueues
-immediately — so `set(wait: 0)` is an ordinary push in every mode.
+immediately — so `set(wait: 0)` is an ordinary push in every mode. A `nil`
+`wait` or `wait_until` means no delay, and `wait_until` wins when both are given.
 
 **In `:fake` mode there is no separate scheduled set.** The payload lands in the
 same in-memory queue array as an immediate job, distinguished only by its `"at"`

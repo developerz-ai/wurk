@@ -8,7 +8,48 @@ module Wurk
     # Raised by `Callbacks.enqueue_callbacks` once every callback for the event
     # has been attempted and at least one could not be enqueued, so the caller
     # leaves the event's dedup marker unwritten and the next fire retries it.
-    class CallbackEnqueueError < StandardError; end
+    #
+    # `store_not_serving?` is true when a store that was not serving caused one
+    # of those failures, which is what `Callbacks.retrying` waits out.
+    class CallbackEnqueueError < StandardError
+      def initialize(message = nil, store_not_serving: false)
+        super(message)
+        @store_not_serving = store_not_serving
+      end
+
+      def store_not_serving? = @store_not_serving
+    end
+
+    # The callbacks one re-drive (Callbacks.retrying) has already enqueued, so
+    # a retry after a partial enqueue does not push the ones that landed again.
+    # Thread-local and scoped to the outermost re-drive.
+    module PushedCallbacks
+      KEY = :wurk_batch_callbacks_pushed
+
+      module_function
+
+      def tracking
+        owner = Thread.current[KEY].nil?
+        Thread.current[KEY] ||= Set.new
+        yield
+      ensure
+        Thread.current[KEY] = nil if owner
+      end
+
+      # Yields each item this re-drive has not landed yet; the block returns
+      # the push's error or nil. Returns the errors.
+      def push_each(bid, event, items)
+        pushed = Thread.current[KEY]
+        items.each_with_index.filter_map do |item, index|
+          key = [bid, event, index]
+          next if pushed&.include?(key)
+
+          error = yield item
+          pushed << key if pushed && error.nil?
+          error
+        end
+      end
+    end
 
     # Fires batch callbacks (`:success`, `:complete`, `:death`) by enqueuing
     # them as ordinary jobs on the batch's `callback_queue`.
@@ -35,6 +76,25 @@ module Wurk
       REDRIVE_ATTEMPTS = 3
       REDRIVE_BACKOFF = 0.05
 
+      # How long a worker-side ack or fire waits out a store that is not
+      # serving, in seconds. The quick re-drive above covers a blip; a Redis
+      # restart does not fit in it — a server loading its dataset answers
+      # LOADING at once, so all three attempts fail inside 150ms. Giving up
+      # there is the one exit that loses callbacks: the job returns, is ACKed
+      # off its private list, and nothing fires the drained batch again. Waiting
+      # is safe on every other exit — a process killed or shut down mid-wait
+      # leaves the job in its private list, and the reclaimed re-run re-drives
+      # the fire — and costs nothing, since the thread could not fetch or ACK
+      # without the store either. Bounded so a store that never comes back
+      # is still reported rather than parking the thread for good.
+      STORE_OUTAGE_BUDGET = 300
+      STORE_OUTAGE_BACKOFF = 1.0
+
+      # A command the server refused because it is not serving yet, as opposed
+      # to one it refused on its merits. Out-of-memory is deliberately absent:
+      # nothing bounds how long it lasts.
+      STORE_NOT_SERVING = /\A(?:LOADING|BUSY|CLUSTERDOWN|MASTERDOWN|READONLY|TRYAGAIN)\b/
+
       # Runs on the post-state of a batch script that moved a member out of the
       # live jids or pending-children set (see the gate note heading
       # lua/batch_ack_success.lua). Fires `:complete` once both sets are empty, and
@@ -57,18 +117,40 @@ module Wurk
       # REDRIVE_ATTEMPTS times in total, re-raising the last one. Every block
       # handed to it is idempotent: the ack scripts are SREM/SADD-guarded and
       # the fires are marker-guarded.
-      def retrying(attempts: REDRIVE_ATTEMPTS)
+      #
+      # With an `outage_budget`, failures caused by a store that is not serving
+      # are retried until that many seconds have passed, and do not count
+      # against REDRIVE_ATTEMPTS (see STORE_OUTAGE_BUDGET).
+      #
+      # A retry after a partial enqueue pushes only the callbacks that failed
+      # (PushedCallbacks).
+      def retrying(attempts: REDRIVE_ATTEMPTS, outage_budget: 0)
         attempt = 0
-        begin
+        counted = 0
+        deadline = monotonic + outage_budget
+        PushedCallbacks.tracking do
           yield attempt
-        rescue StandardError
+        rescue StandardError => e
           attempt += 1
-          raise if attempt >= attempts
+          outage = outage_budget.positive? && store_not_serving?(e)
+          counted += 1 unless outage
+          raise if outage ? monotonic >= deadline : counted >= attempts
 
-          sleep(REDRIVE_BACKOFF * attempt)
+          sleep(outage ? [REDRIVE_BACKOFF * attempt, STORE_OUTAGE_BACKOFF].min : REDRIVE_BACKOFF * counted)
           retry
         end
       end
+
+      def store_not_serving?(error)
+        case error
+        when CallbackEnqueueError then error.store_not_serving?
+        when ::RedisClient::ConnectionError, ::ConnectionPool::TimeoutError then true
+        when ::RedisClient::CommandError then STORE_NOT_SERVING.match?(error.message.to_s)
+        else false
+        end
+      end
+
+      def monotonic = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
 
       # Fired from Wurk::Batch::DeathHandler whenever a death makes the died
       # set go non-empty: the first death, or the first re-death after every
@@ -300,10 +382,12 @@ module Wurk
       # Each failure reaches the error handlers; once all were attempted, any
       # failure raises so the caller does not write the event's marker.
       def enqueue_callbacks(bid, event)
-        failed = callback_items(bid, event).count { |item| !push_callback(bid, event, item) }
-        return if failed.zero?
+        items = callback_items(bid, event)
+        errors = PushedCallbacks.push_each(bid, event, items) { |item| push_callback(bid, event, item) }
+        return if errors.empty?
 
-        raise CallbackEnqueueError, "batch #{bid}: #{failed} #{event} callback(s) failed to enqueue"
+        raise CallbackEnqueueError.new("batch #{bid}: #{errors.size} #{event} callback(s) failed to enqueue",
+                                       store_not_serving: errors.any? { |error| store_not_serving?(error) })
       end
 
       def callback_items(bid, event)
@@ -318,15 +402,15 @@ module Wurk
         end
       end
 
-      # True when the callback job was enqueued.
+      # The error that kept the callback job from being enqueued, or nil.
       def push_callback(bid, event, item)
         Batch.with_thread_batch(nil, nil) { Wurk::Client.push(item) }
-        true
+        nil
       rescue StandardError => e
         Wurk.configuration.handle_exception(
           e, { context: "batch #{bid}: #{event} callback #{item['args'][1].inspect} enqueue failed", bid: bid }
         )
-        false
+        e
       end
 
       def callback_specs_for(bid)

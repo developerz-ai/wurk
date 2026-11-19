@@ -10,7 +10,9 @@ module Wurk
     #
     # One registered class → job hash key `"cattr"`.
     # Multiple → `"cattr"`, `"cattr_1"`, `"cattr_2"`, … (keys mirror Sidekiq's
-    # naming exactly: wire-compat sacred).
+    # naming exactly: wire-compat sacred). The value is Sidekiq's too:
+    # `ActiveJob::Arguments.serialize(attributes)`, so a record (GlobalID),
+    # Symbol or Time comes back as itself, and a job Sidekiq enqueued restores.
     #
     # Classes are kept by name and resolved per job, as a String registered from
     # an initializer has to be. It also means a class object passed here doesn't
@@ -28,8 +30,14 @@ module Wurk
           classes = Array(klass_or_array).map { |klass| reference_for(klass) }
           raise ArgumentError, 'persist requires at least one CurrentAttributes class' if classes.empty?
 
+          serializer
+
+          # Load ahead of Save, as upstream: on a fresh push the job has no
+          # `cattr` yet, so Load restores nothing and Save writes it. The other
+          # way round, Load deserialized what Save had just written on every
+          # enqueue, a GlobalID lookup per record attribute.
+          config.client_middleware.prepend(Load, classes)
           config.client_middleware.add(Save, classes)
-          config.client_middleware.add(Load, classes)
           # Outermost, so every other server middleware sees the job's attributes.
           config.server_middleware.prepend(Load, classes)
         end
@@ -49,17 +57,38 @@ module Wurk
           index.zero? ? PERSISTENT_KEY : "#{PERSISTENT_KEY}_#{index}"
         end
 
-        # AS::CurrentAttributes#attributes returns a HashWithIndifferentAccess;
-        # we coerce to a plain Hash so JSON encoding is predictable. `.dup` so
-        # the snapshot is a detached copy — Load holds onto the pre-job state
-        # and must not see it mutated when it restores the job's attributes,
-        # and Save must not alias live attributes into the persisted job hash.
+        # Loaded on first use rather than with this file: ActiveJob's
+        # serializers need the host's ActiveSupport, which a Rails app has
+        # loaded by the time an initializer calls #persist.
+        def serializer
+          @serializer ||= begin
+            require 'active_job'
+            ::ActiveJob::Arguments
+          end
+        end
+
+        # A detached copy: Load holds onto the pre-job state and must not see
+        # it mutated when it restores the job's attributes.
         def snapshot(klass)
           klass.attributes.to_h.dup
         end
 
+        def dump(attrs) = serializer.serialize(attrs)
+
+        # The attributes the job carries for the Nth class, or nil. Also reads
+        # the plain Hash Wurk wrote before it matched upstream.
+        def load(job, index)
+          value = job[key_for(index)]
+          value && serializer.deserialize(value).to_h
+        end
+
+        # An attribute the class no longer defines is skipped, as upstream
+        # does: a deploy that drops one must not fail the jobs already queued.
         def restore(klass, attrs)
-          attrs&.each { |name, value| klass.public_send("#{name}=", value) }
+          attrs&.each do |name, value|
+            setter = "#{name}="
+            klass.public_send(setter, value) if klass.respond_to?(setter)
+          end
         end
       end
 
@@ -75,8 +104,8 @@ module Wurk
 
         def call(_job_class, job, _queue, _redis_pool)
           @classes.each_with_index do |reference, idx|
-            attrs = CurrentAttributes.snapshot(CurrentAttributes.resolve(reference))
-            job[CurrentAttributes.key_for(idx)] ||= attrs unless attrs.empty?
+            attrs = CurrentAttributes.resolve(reference).attributes
+            job[CurrentAttributes.key_for(idx)] ||= CurrentAttributes.dump(attrs) unless attrs.empty?
           end
           yield
         end
@@ -105,7 +134,7 @@ module Wurk
           classes = @classes.map { |reference| CurrentAttributes.resolve(reference) }
           previous = classes.map { |klass| CurrentAttributes.snapshot(klass) }
           classes.each_with_index do |klass, idx|
-            CurrentAttributes.restore(klass, job[CurrentAttributes.key_for(idx)])
+            CurrentAttributes.restore(klass, CurrentAttributes.load(job, idx))
           end
           yield
         ensure

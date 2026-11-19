@@ -105,8 +105,8 @@ Sidekiq has no equivalent for any of these — they aren't parity, they're new s
 | **[Debounce, throttle-to-slot & collapse](docs/unique-jobs.md)** | `collapse: { policy: :debounce }` coalesces bursts into one job (last payload wins); `collapse: { policy: :throttle }` admits one job per fixed time slot | Burst coalescing — every enqueue in the window runs standalone again |
 | **[Per-job timeouts & deadlines](docs/retries.md)** | `timeout:` bounds one attempt, `deadline:` bounds the whole job from enqueue, enforced by a lightweight per-capsule watchdog thread (no thread-per-job) | Runaway/stuck jobs run unbounded except for `shutdown_timeout` |
 | **[Global per-queue concurrency caps](docs/rate-limiting.md)** | `config.global_concurrency = { critical: 20 }` caps in-flight jobs for a queue across the whole cluster, folded into the fetch pipeline | The cluster-wide cap; only per-key `Limiter`s remain |
-| **Worker topology DSL** | Declare which queues/classes a given fleet role runs, in code instead of ad hoc `-q` flags | The declarative topology; fall back to CLI queue flags |
-| **[Kubernetes probes](#kubernetes-metrics--tracing)** | `config.health_check` opens a thin `/live`/`/ready` HTTP listener, self-electing across a swarm's children | The built-in probe listener; roll your own liveness check |
+| **Worker topology DSL** | `config.topology` declares how many processes of each kind the swarm forks, with each kind's queues and concurrency, in code instead of ad hoc `-q` flags | The declarative topology; fall back to CLI queue flags |
+| **[Kubernetes probes](#kubernetes-metrics--tracing)** | `config.health_check` opens a thin `/live`/`/ready`/`/metrics` HTTP listener, self-electing across a swarm's children | The built-in probe listener; roll your own liveness check |
 | **Dashboard theme, locale & timezone** | Light/dark/system theme, per-visitor locale override, and a 400-zone timezone picker for every timestamp in the SPA | Nothing server-side — this is dashboard-only |
 
 AI dashboard panes — anomaly detection, natural-language queries, error triage, and capacity forecasting — are **planned, not shipped**: they're [roadmap M5](docs/idea/13-roadmap.md#m5--ai-dashboard), after the M4.5 extras above.
@@ -258,10 +258,11 @@ end
 
 | Path | Meaning |
 |---|---|
-| `/live` | 200 while the Launcher is running; 503 once `stop`/`quiet` is called. |
+| `/live` | 200 until the process is shutting down; 503 once `stop` is called. A quiet process stays 200, so quieting a pod does not get it restarted. |
+| `/metrics` | Prometheus text exposition; `metrics: false` turns it into a 404. |
 | `/ready` | 200 only when Redis is reachable **and** the heartbeat fired within `ready_window` (default 30s); 503 otherwise. |
 
-Knobs: `health_check(port:, bind: "0.0.0.0", ready_window: 30)`. In swarm mode one child owns the port; the others poll every 5s and take it over if the owner dies, so probes survive a child restart — a pod never fails a probe just because a worker recycled.
+Knobs: `health_check(port:, bind: "0.0.0.0", ready_window: 30, metrics: true, min_ready: nil)`, or `WURK_HEALTH_PORT` to turn it on from the environment. In swarm mode one child owns the port; the others poll every 5s and take it over if the owner dies, so probes survive a child restart — a pod never fails a probe just because a worker recycled.
 
 **Getting the numbers out.** Point these at whatever you already run:
 
@@ -273,7 +274,7 @@ Knobs: `health_check(port:, bind: "0.0.0.0", ready_window: 30)`. In swarm mode o
 | Queue/job/swarm state for external scrapers and autoscalers | Bearer-token `/v1` JSON API, mountable standalone or via `wurk api` | [api-http](docs/api-http.md) |
 | Errors | Built-in Sentry reporting, terminal failures only, no job args | [sentry](docs/sentry.md) |
 
-There is no native Prometheus `/metrics` endpoint — the StatsD export or the `/v1` API is the current path into a Prometheus/Grafana stack.
+For Prometheus, scrape `GET /metrics` on the probe port ([metrics](docs/metrics.md)); the StatsD export and the `/v1` API are the other paths into a Prometheus/Grafana stack.
 
 **Backpressure at fleet scale.** `config.global_concurrency = { critical: 20 }` caps in-flight jobs for a queue across every pod, folded into the fetch pipeline rather than bolted on as a middleware sleep — see [rate limiting](docs/rate-limiting.md).
 
@@ -305,7 +306,7 @@ Wurk is MIT and stays that way. If what you need is a commercial support contrac
 
 `bundle install && restart`. The worker command stays as it was: Wurk ships `sidekiq` and `sidekiqswarm` executables, so `bundle exec sidekiq -C config/sidekiq.yml` in a Procfile or manifest keeps working. Wurk reads and writes the same Redis schema, so there is no data migration: Wurk picks up the queues, schedules, retries, batches and periodic loops Sidekiq left behind. Running Sidekiq and Wurk workers against one Redis *at the same time* is tested for stock Sidekiq 8 only, which may roll from one to the other under the conditions the guide lists; for a Sidekiq 7.x, Pro or Enterprise app a live production move is a **drain cutover** (stop Sidekiq's workers, confirm nothing is in flight, start Wurk), with a matching rollback. The [production cutover](https://github.com/developerz-ai/wurk/blob/main/docs/migrate-from-sidekiq.md#9-production-cutover) section has every step and command. The upstream suites of sidekiq-cron, sidekiq-unique-jobs, sidekiq-failures and sentry-sidekiq run against Wurk in the [`ecosystem` CI job](https://github.com/developerz-ai/wurk/blob/main/.github/workflows/ecosystem.yml) (see [`test/ecosystem/`](https://github.com/developerz-ai/wurk/tree/main/test/ecosystem)). sidekiq-scheduler, sidekiq-status and sidekiq-throttled are target additions tracked in [docs/idea/14-ecosystem-compat.md](https://github.com/developerz-ai/wurk/blob/main/docs/idea/14-ecosystem-compat.md).
 
-**Keeping a `sidekiq-*` add-on gem?** Those gems declare `add_dependency "sidekiq"`, which would reinstall real Sidekiq next to Wurk. Satisfy it with Wurk's git-only [`sidekiq` shim gem](https://github.com/developerz-ai/wurk/tree/main/ecosystem/sidekiq-shim) instead, pinned to the tag of the Wurk release you run: `gem "sidekiq", github: "developerz-ai/wurk", tag: "v1.15.1", glob: "ecosystem/sidekiq-shim/*.gemspec"`. Only sidekiq-cron, sidekiq-unique-jobs, sidekiq-failures and sentry-sidekiq are exercised that way, by the `ecosystem` workflow; treat the others as untested.
+**Keeping a `sidekiq-*` add-on gem?** Those gems declare `add_dependency "sidekiq"`, which would reinstall real Sidekiq next to Wurk. Satisfy it with Wurk's git-only [`sidekiq` shim gem](https://github.com/developerz-ai/wurk/tree/main/ecosystem/sidekiq-shim) instead, pinned to the tag of the Wurk release you run: `gem "sidekiq", github: "developerz-ai/wurk", tag: "v1.16.0", glob: "ecosystem/sidekiq-shim/*.gemspec"`. Only sidekiq-cron, sidekiq-unique-jobs, sidekiq-failures and sentry-sidekiq are exercised that way, by the `ecosystem` workflow; treat the others as untested.
 
 Full walkthrough — config side-by-side, the Redis key/`sidekiq_options` mapping, known incompatibilities, moving sidekiq-cron schedules over (`rake wurk:import:cron`), and the production cutover and rollback playbook: **[docs/migrate-from-sidekiq.md](https://github.com/developerz-ai/wurk/blob/main/docs/migrate-from-sidekiq.md)**. On the night, keep the **[incident runbook](https://github.com/developerz-ai/wurk/blob/main/docs/runbook.md)** open.
 
@@ -335,6 +336,15 @@ TypeScript end to end, MIT, and as measured about its own claims as this file is
 | a breaking change | a human decides; a change that breaks the drop-in Sidekiq contract is declined, since a revert cannot take that promise back |
 
 Releases follow the work, not a calendar. A weekday checkup asks whether a shipping fix has merged and nobody has released it. When one has, the bot files a release request, its coding fleet opens the `Wurk::VERSION` bump PR, and merging that PR publishes the gem ([RELEASE.md](RELEASE.md)). The bot's policy is committed in [`.dz/maintainer/maintainer.yml`](.dz/maintainer/maintainer.yml).
+
+## Stargazers
+
+<a href="https://star-history.com/#developerz-ai/wurk&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=developerz-ai/wurk&type=Date&theme=dark">
+    <img alt="GitHub stars of developerz-ai/wurk over time" src="https://api.star-history.com/svg?repos=developerz-ai/wurk&type=Date" width="100%">
+  </picture>
+</a>
 
 ## Contributing
 

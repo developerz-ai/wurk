@@ -7,7 +7,8 @@ module Wurk
     # Activated globally — `Wurk::Client.reliable_push!`. Buffer is
     # per-process, in-memory only; crash = lost. Does NOT cover batch
     # creation or batch-context pushes (`bid` on payload): BATCH_PUSH has
-    # atomic counter side-effects we can't safely replay.
+    # atomic counter side-effects we can't safely replay. Nor a batch's
+    # callback job (see BATCH_CALLBACK_CLASS).
     #
     # A failed push opens a circuit for that Redis: later pushes buffer without
     # touching the socket, so one caller pays the connection backoff and the rest
@@ -30,6 +31,19 @@ module Wurk
       # Payloads per replayed raw_push. A backlog reaches Redis in about
       # N / REPLAY_SLICE calls, each one pipeline per queue.
       REPLAY_SLICE = 100
+      # A batch fire writes the event's dedup marker once the callback push
+      # returns, so a callback job held only in memory would be lost on a crash
+      # with nothing left to fire it again. It has no `bid` when nothing above
+      # it is a batch (and `:death` never has one), so it is named here: its
+      # push raises instead, and Batch::Callbacks waits the outage out with the
+      # marker unwritten.
+      BATCH_CALLBACK_CLASS = 'Wurk::Batch::CallbackJob'
+      # Error replies that are about the entry's own data, so a replay drops
+      # that entry instead of holding every push behind it. A list of what is
+      # known to be the entry's fault, not of server states: an unrecognised
+      # reply (a Dragonfly or Valkey `ERR …`, a cluster `MOVED`) keeps the
+      # entries and raises, as before, rather than dropping jobs for good.
+      ENTRY_ERROR_CODES = %w[WRONGTYPE].freeze
 
       # A clean exit tries to deliver what is still in memory, but never holds the
       # process up for longer than this: a hung Redis would otherwise stall shutdown.
@@ -192,6 +206,11 @@ module Wurk
           @installed == true
         end
 
+        # Whether a payload may wait out an outage in memory at all.
+        def bufferable?(payload)
+          !payload['bid'] && payload['class'] != BATCH_CALLBACK_CLASS
+        end
+
         def buffer_cap
           @buffer_cap ||= DEFAULT_BUFFER_CAP
         end
@@ -315,8 +334,10 @@ module Wurk
         # `client` is the one whose push failed; every payload is tagged with
         # the Redis that client was writing to (see Origin).
         def enbuffer(payloads, client:)
-          entries = entries_for(payloads, client)
+          # Ahead of entries_for, which serializes and can raise: the ensure
+          # reports against these caps whichever way this exits.
           caps = [buffer_cap, buffer_bytes_cap]
+          entries = entries_for(payloads, client)
           mode = overflow_mode
           undelivered = buffer_mutex.synchronize do
             mode == :raise ? append_within_capacity(entries, *caps) : append_dropping_oldest(entries, *caps)
@@ -539,9 +560,9 @@ module Wurk
         def replay_all(client, target)
           drained = 0
           until (entries = take_all(target)).empty?
-            landed = replay_entries(client, entries)
+            landed, stalled = replay_entries(client, entries)
             drained += landed
-            next if landed == entries.size
+            next unless stalled
 
             trip!(target)
             return drained
@@ -553,7 +574,15 @@ module Wurk
         # An app's own drainer keeps its interval; only the absence of one makes
         # this implicit, which is what stops `reset_after_fork!` re-arming it in
         # children that never pushed.
+        #
+        # A drainer's own failed replay trips the circuit too, and asks for
+        # nothing: either it is the live drainer, or a stop is joining it while
+        # holding the install lock. Taking the lock there stalled that stop for
+        # the whole join timeout, and once the stop dropped it, the tick found
+        # no drainer and started a new one behind the stop's back.
         def ensure_drainer
+          return if Thread.current[Drainer::THREAD_KEY]
+
           install_mutex.synchronize do
             next if @drainer&.running?
 
@@ -585,11 +614,16 @@ module Wurk
           buffer_mutex.synchronize { buffer.map { |entry| entry.origin.resolve } }.uniq(&:object_id)
         end
 
-        # Replays `entries` slice by slice and returns how many reached Redis.
-        # On the first slice that does not fully land, what did not land and
-        # every later slice go back at the absolute head of the buffer, in
-        # order: same-origin order is all that matters (other entries go to
-        # another server).
+        # Replays `entries` slice by slice and returns [how many reached Redis,
+        # whether the replay stalled]. On the first slice that does not fully
+        # land, what did not land and every later slice go back at the absolute
+        # head of the buffer, in order: same-origin order is all that matters
+        # (other entries go to another server).
+        #
+        # A slice that Redis refused over one entry's own data (a WRONGTYPE on
+        # its queue key) is replayed entry by entry instead, so the refused one
+        # is set aside and the rest land: left in the buffer, it would refuse
+        # again on every replay and hold every push to this Redis hostage.
         #
         # A slice is a run of immediate or of scheduled payloads, because
         # Client#atomic_push routes a whole call by its first payload.
@@ -598,15 +632,77 @@ module Wurk
           remaining = entries
           replay_slices(entries).each do |slice|
             remaining = remaining.drop(slice.size)
-            undelivered, error = replay(client, slice)
-            landed += slice.size - undelivered.size
+            undelivered, error, count = replay_slice(client, slice)
+            landed += count
             next if undelivered.empty? && error.nil?
 
-            return give_back(client, undelivered + remaining, error, landed)
+            return [give_back(client, undelivered + remaining, error, landed), true]
           end
-          landed
+          [landed, false]
         ensure
           replay_settled(entries.size)
+        end
+
+        # An error the payloads in the push caused rather than the server's
+        # state: a refusal of its data, or one that could not be serialized.
+        def entry_error?(error)
+          case error
+          when RedisClient::CommandError then ENTRY_ERROR_CODES.include?(error_code(error))
+          when JSON::JSONError, EncodingError then true
+          else false
+          end
+        end
+
+        # `code` is unset on an error built from a bare message; Redis puts the
+        # code first there too.
+        def error_code(error)
+          (error.code || error.message.split(' ', 2).first).to_s
+        end
+
+        # [entries that did not land, the error to stop on or nil, how many
+        # landed].
+        def replay_slice(client, slice)
+          undelivered, error = replay(client, slice)
+          return [undelivered, error, slice.size - undelivered.size] unless entry_error?(error)
+
+          report_entry_error(error, nil) if undelivered.empty?
+          rest, error, dropped = replay_each(client, undelivered)
+          [rest, error, slice.size - rest.size - dropped]
+        end
+
+        # One entry per raw_push, after a slice failed on an entry error.
+        # Returns [entries still to go back, the error that stopped it or nil,
+        # how many were dropped]. An entry refused on its own data is reported
+        # and dropped; a connection or server-state failure stops here as the
+        # slice would have. An entry that landed while a later command of its
+        # push failed (its status row) is reported but counts as landed.
+        def replay_each(client, entries)
+          dropped = 0
+          entries.each_with_index do |entry, index|
+            undelivered, error = replay(client, [entry])
+            next if error.nil? && undelivered.empty?
+            return [entries.drop(index + 1 - undelivered.size), error, dropped] unless entry_error?(error)
+
+            report_entry_error(error, undelivered.first&.payload)
+            dropped += undelivered.size
+          end
+          [[], nil, dropped]
+        end
+
+        # Through the error handlers, so it reaches whatever an app watches; a
+        # dropped job also gets its own ERROR line, since it will never run.
+        def report_entry_error(error, dropped_payload)
+          config = Wurk.configuration
+          context = { context: 'reliable_push replay' }
+          if dropped_payload
+            jid = dropped_payload['jid']
+            context.merge!(jid: jid, class: dropped_payload['class'], queue: dropped_payload['queue'])
+            config.logger.error do
+              "reliable_push: Redis refused buffered #{dropped_payload['class']} jid=#{jid} " \
+                "(#{error.class}: #{error.message}); dropping it, it will never run"
+            end
+          end
+          config.handle_exception(error, context)
         end
 
         def replay_slices(entries)
@@ -756,6 +852,8 @@ module Wurk
       class Drainer
         DEFAULT_INTERVAL = 2.0
         STOP_JOIN_TIMEOUT = 5.0
+        # Marks a drainer's own thread; see Buffered.ensure_drainer.
+        THREAD_KEY = :wurk_reliable_push_drainer
         # While a circuit is open, pushes are only in memory, so finding out that
         # Redis is back quickly matters more than the interval an idle drainer keeps.
         PROBE_PAUSE = 0.25
@@ -783,6 +881,7 @@ module Wurk
             @done = false
             @thread = Thread.new do
               Thread.current.name = 'wurk-reliable_push-drainer'
+              Thread.current[THREAD_KEY] = true
               run
             end
           end
@@ -885,19 +984,19 @@ module Wurk
         # of the set and still counts.
         def buffer_undelivered(payloads)
           Buffered.trip!(pool)
-          bidless, batched = undelivered(payloads).partition { |p| !p['bid'] }
-          enbuffer_bidless(bidless, batched)
-          raise unless batched.empty?
+          bufferable, held = undelivered(payloads).partition { |p| Buffered.bufferable?(p) }
+          enbuffer_bufferable(bufferable, held)
+          raise unless held.empty?
 
-          bidless
+          bufferable
         end
 
-        # Batched payloads never buffer, so they still take the real attempt and
-        # report its outcome to the caller.
+        # Batched payloads and batch callbacks never buffer, so they still take
+        # the real attempt and report its outcome to the caller.
         def circuit_open_for?(payloads)
           return false if Thread.current[Buffered::DRAINING_KEY] || Buffered.unbuffered?
 
-          Buffered.circuit.open?(pool) && payloads.none? { |p| p['bid'] }
+          Buffered.circuit.open?(pool) && payloads.all? { |p| Buffered.bufferable?(p) }
         end
 
         def buffer_without_trying(payloads)
@@ -919,16 +1018,16 @@ module Wurk
 
         # Bare `raise` re-raises whatever `$!` holds: the connection error from
         # the caller's rescue, or the Overflow once we're inside this one.
-        def enbuffer_bidless(bidless, batched)
-          Buffered.enbuffer(bidless, client: self) if bidless.any?
+        def enbuffer_bufferable(bufferable, held)
+          Buffered.enbuffer(bufferable, client: self) if bufferable.any?
         rescue Buffered::Overflow => e
           # An overflow pre-empts the caller's connection-error re-raise, which
-          # would strand the batched payloads silently — they never buffer. One
+          # would strand the held payloads silently — they never buffer. One
           # exception, every payload that failed to get through; `cause` stays
           # the connection error rather than the folded-in Overflow.
-          raise if batched.empty?
+          raise if held.empty?
 
-          raise Buffered::Overflow, e.payloads + batched, cause: e.cause
+          raise Buffered::Overflow, e.payloads + held, cause: e.cause
         end
       end
 

@@ -209,7 +209,7 @@ module Wurk
     # JSON.generate writes `5.minutes` as "300", in Sidekiq as here, so the
     # server middleware and the death handler get "300" back off the queue.
     # Refusing it left every `unique_for: 5.minutes` lock held until its TTL
-    # (tesote/tesote.com#519).
+    # (reported by an adopter).
     def self.coerce_ttl(value)
       return nil if value.nil? || value == false
       # `.to_i`, not `value`: ActiveSupport::Duration overrides `is_a?(Integer)`
@@ -310,23 +310,49 @@ module Wurk
         delay.positive? ? base + delay : base
       end
 
-      def acquire_or_drop(pool, job, key, ttl)
+      def acquire_or_drop(pool, job, key, ttl, &)
+        case claim(pool, job, key, ttl)
+        when :acquired then push_or_release(pool, key, job['jid'], &)
+        when :held then yield
+        end
+      end
+
+      # :acquired when this push took the lock, :held when the job's own jid
+      # already holds it, nil for a duplicate.
+      def claim(pool, job, key, ttl)
         pool.with do |conn|
-          return yield if conn.call('SET', key, job['jid'], 'NX', 'EX', ttl) == 'OK'
+          next :acquired if conn.call('SET', key, job['jid'], 'NX', 'EX', ttl) == 'OK'
 
           holder = conn.call('GET', key)
           # The job's own jid holding the lock is a re-push, not a duplicate:
           # scheduled/retry promotion re-runs this chain while the
           # enqueue-time lock is still live (§3.4/§3.7) — dropping here would
           # silently lose the job.
-          return yield if holder == job['jid']
+          next :held if holder == job['jid']
           # nil holder: the lock expired between the failed SET NX and the
           # GET — re-acquire instead of dropping.
-          return yield if holder.nil? && conn.call('SET', key, job['jid'], 'NX', 'EX', ttl) == 'OK'
+          next :acquired if holder.nil? && conn.call('SET', key, job['jid'], 'NX', 'EX', ttl) == 'OK'
 
           log_duplicate(job, holder)
+          nil
         end
-        nil
+      end
+
+      # The lock is taken before the rest of the chain runs. When a later
+      # middleware halts the push or raises, no job exists to release it, and
+      # every enqueue of the same args would be dropped as a duplicate until
+      # the TTL. Only a lock this call took is handed back: a re-push finding
+      # its own jid leaves the original enqueue's lock alone.
+      def push_or_release(pool, key, jid)
+        pushed = yield
+      ensure
+        release(pool, key, jid) unless pushed
+      end
+
+      def release(pool, key, jid)
+        pool.with { |conn| Wurk::Unique.release_if_owner(conn, key, jid) }
+      rescue StandardError => e
+        Wurk.logger&.warn { "Wurk::Unique release failed: #{e.class}: #{e.message}" }
       end
 
       def log_duplicate(job, holder)

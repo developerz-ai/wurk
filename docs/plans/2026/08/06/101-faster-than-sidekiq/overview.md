@@ -8,7 +8,7 @@ Close the wurk-vs-Sidekiq gap (noop 0.45×, io 0.66–0.74×, cpu 0.81–0.86×,
 
 - Ruby gem, Sidekiq drop-in. **Wire-compat is sacred** — no Redis key / JSON field / score format changes (`CLAUDE.md`). Parity tests (`test/parity/`) are oracles. Coverage gate ≥90% line+branch on `lib/`. Reliable BLMOVE fetch is the default — no basic-fetch mode.
 - **The headline number is fetch-side only.** `bench/vs_sidekiq.rb:117-128` pre-RPUSHes payloads; enqueue cost is off the clock. Enqueue work moves only `rake bench` (regression gate), not the ratio.
-- Stock Sidekiq 8.1.2 source for reference: `~/workspace/developerz-ai/venom.is/rails/vendor/bundle/ruby/3.4.0/gems/sidekiq-8.1.2` (bench Gemfile pins `>= 8.0`, no lockfile). Its per-job Redis cost is **one BRPOP, zero ack, zero stat writes** — stats flush per 10s heartbeat (`launcher.rb:118-139` there).
+- Stock Sidekiq 8.1.2 source for reference: the public `sidekiq` 8.1.2 gem (bench Gemfile pins `>= 8.0`, no lockfile). Its per-job Redis cost is **one BRPOP, zero ack, zero stat writes** — stats flush per 10s heartbeat (`launcher.rb:118-139` there).
 - Prior audit: `docs/plans/2026/07/31/101-leak-logic-perf-fixes/` is 82% done; its slice `08-perf-quick-wins.md` (items P1–P13) is 0% and is **absorbed by this plan** — P-numbers are cross-referenced in the slices here. Executor may mark that slice superseded in its status.yml.
 - The >5% bench regression gate (`bin/bench-compare`) has **no CI workflow** — deleted in #296 (`f9b60e2`). CLAUDE.md:97 and `docs/benchmarks.md:9` are stale on this. Restore before landing perf commits so deltas are attributed per commit.
 

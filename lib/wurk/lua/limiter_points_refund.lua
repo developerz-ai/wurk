@@ -9,7 +9,9 @@ local key = KEYS[1]
 local delta = tonumber(ARGV[1])
 local cap = tonumber(ARGV[2])
 local ttl = tonumber(ARGV[3])
-local current = tonumber(redis.call('HGET', key, 'points') or '0')
+-- A missing key is a full bucket, as limiter_points_acquire.lua reads it: the
+-- state was reset, or expired, while the caller's block was still running.
+local current = tonumber(redis.call('HGET', key, 'points') or cap)
 local new_val = current + delta
 if new_val < 0 then new_val = 0 end
 if new_val > cap then new_val = cap end

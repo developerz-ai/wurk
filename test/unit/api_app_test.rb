@@ -4,6 +4,7 @@ require_relative '../test_helper'
 require 'wurk/api/app'
 require 'stringio'
 require 'logger'
+require 'socket'
 
 # Slice 07 — the Wurk::API Rack app skeleton: versioned under /v1, mount-
 # agnostic (every emitted URL derives from SCRIPT_NAME), RFC-9457-shaped
@@ -155,6 +156,36 @@ class ApiAppTest < Wurk::Test::UnitCase
     assert_includes log, 'GET /wurk/api/v1'
   end
 
+  # A Redis that cannot be reached is an outage the client should wait out,
+  # not a server bug: 503 + Retry-After, the slug the dashboard already uses.
+  def test_redis_outage_is_a_retryable_503
+    status, headers, body = RedisApp.new(config: config).call(env_for('GET', '/v1/down'))
+
+    assert_equal 503, status
+    assert_equal 'application/problem+json', headers['content-type']
+    assert_equal Wurk::API::App::REDIS_RETRY_AFTER.to_s, headers['retry-after']
+    payload = JSON.parse(body.join)
+
+    assert_equal 'redis_unavailable', payload['type']
+    assert_equal Wurk::API::App::REDIS_RETRY_AFTER, payload['retry_after']
+  end
+
+  def test_pool_checkout_timeout_is_a_retryable_503
+    status, _headers, body = RedisApp.new(config: config).call(env_for('GET', '/v1/pool'))
+
+    assert_equal 503, status
+    assert_equal 'redis_unavailable', JSON.parse(body.join)['type']
+  end
+
+  # Redis answered, and the answer was an error: that is not an outage, and a
+  # client retrying a WRONGTYPE forever would never succeed.
+  def test_redis_command_error_stays_a_500
+    status, _headers, body = RedisApp.new(config: config).call(env_for('GET', '/v1/wrongtype'))
+
+    assert_equal 500, status
+    assert_equal 'internal_error', JSON.parse(body.join)['type']
+  end
+
   # `mount Wurk::API => …` and `run Wurk::API` both go through this entry, which
   # reads the process-wide config — hence the global-state mutex and the
   # deregistration in `ensure`.
@@ -197,6 +228,40 @@ class ApiAppTest < Wurk::Test::UnitCase
 
     def draw(router)
       router.get('/', scope: Wurk::API::Auth::ANY) { raise 'kaboom' }
+    end
+  end
+
+  # Real Redis failures, not stand-ins: a dial to a port nothing listens on,
+  # a pool with no free connection, and a WRONGTYPE from the test server.
+  class RedisApp < Wurk::API::App
+    private
+
+    def draw(router)
+      router.get('/down', scope: :read) do
+        RedisClient.config(port: closed_port, connect_timeout: 0.2).new_client.call('PING')
+      end
+      router.get('/pool', scope: :read) { exhausted_pool }
+      router.get('/wrongtype', scope: :read) do
+        RedisClient.config(url: Wurk::Test.redis_url).new_client.then do |redis|
+          redis.call('SET', 'api-app-test:string', 'x')
+          redis.call('LPUSH', 'api-app-test:string', 'y')
+        end
+      end
+    end
+
+    def closed_port
+      server = TCPServer.new('127.0.0.1', 0)
+      server.addr[1].tap { server.close }
+    end
+
+    def exhausted_pool
+      pool = ConnectionPool.new(size: 1, timeout: 0.05) { Object.new }
+      pool.with do
+        Thread.new do
+          Thread.current.report_on_exception = false
+          pool.with { nil }
+        end.value
+      end
     end
   end
 

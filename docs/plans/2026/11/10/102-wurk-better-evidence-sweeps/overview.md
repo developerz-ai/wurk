@@ -1,15 +1,15 @@
 # Make Wurk better — adopter evidence + perf / memory / algorithm / structure sweeps
 
 ## Goal
-Turn what five production adopters, one pending 7.x Pro/Ent migration (treasury), and seven read-only sweeps of the repo revealed into fixes: close the job-safety hole, delete the boilerplate every adopter re-invented, remove scaling cliffs, bound memory, and add the proof (soak, scale benches, budgets) that keeps it that way.
+Turn what five production adopters, one pending 7.x Pro/Ent migration (adopter F), and seven read-only sweeps of the repo revealed into fixes: close the job-safety hole, delete the boilerplate every adopter re-invented, remove scaling cliffs, bound memory, and add the proof (soak, scale benches, budgets) that keeps it that way.
 
 ## Context
 - **Overlap:** [`../101-evidence-driven-improvement-sweep/`](../101-evidence-driven-improvement-sweep/overview.md) was written the same day from the same sweeps by a parallel session and covers most of slices 01–09, 11, 12 here (plus one slice per adopter/infra repo). Execute **one** of the two, not both. Unique to this plan: [`10-code-structure.md`](10-code-structure.md) (incl. S1, `SCRIPT FLUSH` in four tests), 11 C3 (symbol anchors), 05 guards G1–G2. Owner picks; record it in `status.yml`.
 - Baseline: v1.11.1 @ `f6f509e`, 2026-11-10. 0 open issues. ~265 Ruby files / ~36k lines in `lib/`. Ruby ≥ 3.2 (local 3.4.7; compat leg runs 3.2), Redis ≥ 7 with Lua, optional Rails engine, SolidJS + bun dashboard, Minitest on real Redis.
 - Invariants (`CLAUDE.md`): Redis key schema / job JSON / score formats never change; `Sidekiq::*` aliases intact (`lib/wurk/compat.rb`); Sidekiq surface = `docs/target/sidekiq-{free,pro,ent}.md`; intentional divergences recorded in `docs/idea/parity-divergences.md`; no shims; no "faster" claim unless `docs/benchmarks.md` supports it; never DB 0 / `FLUSHALL` / `SCRIPT FLUSH`; no worktrees.
 - Layer map: `lib/CLAUDE.md`. Test layers: `test/CLAUDE.md`. CI/release: `.github/CLAUDE.md`. Dashboard: `frontend/CLAUDE.md`.
-- Sweeps (all read-only): adopters + logs + Sentry; treasury gap analysis; core runtime; dashboard/API/docs/CI; memory (with Redis-free measurements); algorithms (static); code structure (static). **Only R1 (poison race), S1 (`SCRIPT FLUSH` in tests) and the cited lines for A1, A3, A4, A5, M1, M2, R3, C1 were re-read by the plan author.** Everything else is a sweep finding: re-verify at the cited `file:line` before editing; anything a slice marks "inference" needs a reproducing test first.
-- Adopters: `tesote/{sales,tesote.com,gringotts-wizarding-bank}`, `hiscore/hiscore.ro`, `developerz-ai/legaldiligencemedellin.com`. Local logs showed no wurk runtime fault; evidence is git history, config comments, Sentry. `tesote/treasury` = read-only. `tesote/sidekiq` = licensed Pro/Ent source — do not read or copy for implementation ([`07`](07-ecosystem-and-migration.md)).
+- Sweeps (all read-only): adopters + logs + Sentry; adopter F gap analysis; core runtime; dashboard/API/docs/CI; memory (with Redis-free measurements); algorithms (static); code structure (static). **Only R1 (poison race), S1 (`SCRIPT FLUSH` in tests) and the cited lines for A1, A3, A4, A5, M1, M2, R3, C1 were re-read by the plan author.** Everything else is a sweep finding: re-verify at the cited `file:line` before editing; anything a slice marks "inference" needs a reproducing test first.
+- Adopters: adopters A–C, adopter D, adopter E. Local logs showed no wurk runtime fault; evidence is git history, config comments, Sentry. adopter F = read-only. a local checkout = licensed Pro/Ent source — do not read or copy for implementation ([`07`](07-ecosystem-and-migration.md)).
 - Reference patterns: Lua loading `lib/wurk/lua.rb` + `Wurk::Lua::Loader` (EVALSHA, NOSCRIPT recovery); boot checks `lib/wurk/boot_checks.rb`; CLI subcommands `lib/wurk/preflight/`; command counting `Wurk::Test::CommandSpy`; ecosystem harness `test/ecosystem/README.md`; prior plan style `docs/plans/2026/10/04/101-squeaky-clean-audit/`.
 - Commands: `bin/check` (`fast`/`full`), `bin/rake test TEST=…`, `bin/rake test:parity`, `bin/rake test:ecosystem`, `bin/rake bench`, `bin/rake bench:vs_sidekiq`, `bin/repin-anchors`; in `frontend/`: `bun run test`, `bun run typecheck`, `bun run lint`.
 
@@ -18,7 +18,7 @@ Turn what five production adopters, one pending 7.x Pro/Ent migration (treasury)
 | # | Finding | Slice |
 |---|---|---|
 | 1 | Reaper re-queues a reclaimed job before the poison decision → a live worker runs it while it is dead-set and its death handlers fire | 01 R1 |
-| 2 | `unique_for:` without `unique!` silently never dedups (live in tesote.com); no boot warning | 01 R3, 12 |
+| 2 | `unique_for:` without `unique!` silently never dedups (live in adopter A); no boot warning | 01 R3, 12 |
 | 3 | `main` red since 2026-11-07 (Python 3.9 leg) | 11 C1 |
 | 4 | Four tests `SCRIPT FLUSH` the shared Redis (forbidden; likely flake source) | 10 S1 |
 | 5 | Worker boot path differs from web/test → prod-only crash-loops in 4 apps; embedded swarm forks in the wrong process in all 5 | 02 B1–B3 |
@@ -44,7 +44,7 @@ Turn what five production adopters, one pending 7.x Pro/Ent migration (treasury)
 12. [`12-human-decisions.md`](12-human-decisions.md) — H1–H11 + adopter follow-ups in their own repos.
 
 ## Waves (one PR in flight: build → PR → merged → pull → clean tree → next; ≤100 files per PR; ≤4 agents per wave, disjoint file sets, only the coordinator spawns)
-- **Wave 0 (day 1):** C1 · S1 · notify tesote.com owner (12) · baseline: T3 scale numbers + G1/G2 budgets + P1 profile.
+- **Wave 0 (day 1):** C1 · S1 · notify adopter A owner (12) · baseline: T3 scale numbers + G1/G2 budgets + P1 profile.
 - **Wave 1 (job safety + truth):** R1+R2 · R3 · R7 · C3 (symbol anchors) · B4+B5+B6 · W7+W8 · E9/C6 doc sweep.
 - **Wave 2 (adoption):** B2+B3 · B1 (non-breaking) + B8 + B13 + B15 · R5 oracle · E5 real-worker boot checks · O1–O5.
 - **Wave 3 (scale + memory):** A1 → A2 → A4+A5 → A3 · M1+A8, M2, M3 · M4+G4 · S2+S6.
@@ -70,4 +70,4 @@ Turn what five production adopters, one pending 7.x Pro/Ent migration (treasury)
 - **Parity vs improvement:** several "better" behaviours (auto-unique, `WURK_COUNT` default, `authoritative!` default, idle timeout default, embed opt-in) diverge from Sidekiq or break users → human rows in 12, never silent.
 - **Open:** `Thread.current[:wurk_capsule]` is fiber-local — does `Wurk.redis` inside a Fiber/Enumerator job use the wrong pool? Reproduce; if yes it joins 01. Statsd client shared across fork in embedded Puma workers? Verify (S5).
 - **Root `CLAUDE.md` budget:** ~480 chars free; new commands documented in the nested CLAUDE.md files.
-- **Adopter repos** are edited from their own checkouts; treasury never.
+- **Adopter repos** are edited from their own checkouts; adopter F never.

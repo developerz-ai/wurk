@@ -204,7 +204,10 @@ class WebApiParityTest < Wurk::Test::UnitCase
       request('POST', '/v1/jobs', token: ADMIN_TOKEN, body: job_body, key: 'lost-reply')
     end
 
-    assert_equal 500, status
+    # The connection dropped, so this is the outage answer: retry after a
+    # pause. It does not claim the write failed, which is why the retry below
+    # must go through the same key.
+    assert_equal 503, status
     assert_equal 1, queued_payloads.size, 'the write landed before its reply was lost'
 
     claims = idempotency_claims

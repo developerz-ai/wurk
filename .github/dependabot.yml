@@ -80,7 +80,7 @@ updates:
         patterns:
           - "*"
   # docker covers the Dockerfile's two base images (oven/bun and
-  # ruby:3.4-slim-bookworm). When dependabot bumps the oven/bun tag, every other
+  # ruby:4.0.10-slim-bookworm). When dependabot bumps the oven/bun tag, every other
   # bun pin must move with it, and dependabot cannot edit those: the
   # `bun-version:` inputs in .github/workflows/test.yml and
   # .github/workflows/release.yml, `bun` in mise.toml, and the `oven/bun` base

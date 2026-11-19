@@ -15,6 +15,8 @@ export function Tooltip(props: { tip: string; children: JSX.Element }) {
     if (r) setPos({ x: r.left + r.width / 2, y: r.top });
   };
 
+  const hide = () => setPos(null);
+
   // Associate the trigger with the tooltip for screen readers.
   const trigger = children(() => props.children);
   createEffect(() => {
@@ -26,7 +28,11 @@ export function Tooltip(props: { tip: string; children: JSX.Element }) {
     <span
       ref={ref}
       onMouseEnter={show}
-      onMouseLeave={() => setPos(null)}
+      onMouseLeave={hide}
+      // focusin/focusout bubble from the trigger, so keyboard users get the tip too.
+      onFocusIn={show}
+      onFocusOut={hide}
+      onKeyDown={(e) => e.key === 'Escape' && hide()}
       style={{ display: 'inline-flex' }}
     >
       {trigger()}

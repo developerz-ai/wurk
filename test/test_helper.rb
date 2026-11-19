@@ -61,7 +61,7 @@ module Wurk
     # historical 4. Read the NCPU block below for why one worker per core is the
     # wrong shape for this suite; the flat 4 that used to live there WAS one per
     # core on the 4-core fleet boxes that run `bin/check` as a merge gate, which
-    # is the class of red this scales away from (dz#4386, #522).
+    # is the class of red this scales away from (#522).
     #
     # A FUNCTION OF THE CORE COUNT, not a constant derived from this machine's:
     # a test can then state what the rule DOES across machines (1 -> 1, 4 -> 2,

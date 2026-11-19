@@ -182,6 +182,29 @@ class CapsuleTest < Wurk::Test::UnitCase
     assert_equal 0, @capsule.thread_priority
   end
 
+  # Sidekiq::Capsule delegates the hash-style option readers and writers to
+  # its config (capsule.rb:30); a fetcher or gem handed a capsule uses them.
+  def test_hash_style_readers_delegate_to_config
+    @config[:probe] = { nested: 7 }
+
+    assert_equal({ nested: 7 }, @capsule[:probe])
+    assert_equal 7, @capsule.dig(:probe, :nested)
+    assert_equal({ nested: 7 }, @capsule.fetch(:probe))
+    assert_equal :fallback, @capsule.fetch(:absent, :fallback)
+    assert_equal(:block, @capsule.fetch(:absent) { |key| key == :absent && :block })
+    assert @capsule.key?(:probe)
+    assert @capsule.has_key?(:probe) # rubocop:disable Style/PreferredHashMethods
+    refute @capsule.key?(:absent)
+  end
+
+  def test_hash_style_writers_delegate_to_config
+    @capsule[:probe] = 1
+    @capsule.merge!(other: 2)
+
+    assert_equal 1, @config[:probe]
+    assert_equal 2, @config[:other]
+  end
+
   # --- prepare! / fetcher defaulting (regression #35) -------------------
 
   def test_prepare_defaults_fetcher_to_reliable
