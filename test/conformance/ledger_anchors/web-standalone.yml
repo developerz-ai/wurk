@@ -8,7 +8,7 @@
   fragment: |-
     Wurk::Queue.include(Wurk::API::Fast::QueueExt)
 - entry: 'Fast Lua API ships free and loads by default'
-  anchor: 'lib/wurk.rb#L376'
+  anchor: 'lib/wurk.rb#L380'
   fragment: |-
     # Pro Fast API: Lua-backed Queue#delete_job / #delete_by_class, mixed into
 - entry: 'Search covers queue LISTs too, with explicit scan bounds'
@@ -31,7 +31,7 @@
       all      = %w[failed processed expired]
       to_clear = stats.empty? ? all : all & stats.flatten.map(&:to_s)
 - entry: '`Stats#expired`/`reset` extend the OSS Stats surface'
-  anchor: 'lib/wurk/stats.rb#L274'
+  anchor: 'lib/wurk/stats.rb#L297'
   fragment: |-
     def expired   = date_stat_hash('expired')
 - entry: '`Stats#expired`/`reset` extend the OSS Stats surface'
@@ -95,7 +95,7 @@
 
       Array(klass.outer_of)
 - entry: '`Chain#add` honours a class-declared `outer_of` ordering anchor'
-  anchor: 'lib/wurk/batch/server_middleware.rb#L46-L67'
+  anchor: 'lib/wurk/batch/server_middleware.rb#L48-L69'
   fragment: |-
     anchors << Wurk::Middleware::Expiry if defined?(Wurk::Middleware::Expiry)
     anchors << Wurk::Limiter::ServerMiddleware if defined?(Wurk::Limiter::ServerMiddleware)
@@ -135,7 +135,7 @@
     def web_redis_pool
       @web_redis_pool ||= build_redis_pool(size: web_pool_size, name: 'web', pool_timeout: WEB_POOL_TIMEOUT)
 - entry: 'Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported'
-  anchor: 'lib/wurk/configuration.rb#L1305-L1309'
+  anchor: 'lib/wurk/configuration.rb#L1312-L1316'
   fragment: |-
     def build_redis_pool(size:, name:, **overrides)
       RedisPool.new(size: size, name: name, on_error: method(:dispatch_redis_error),
@@ -146,7 +146,7 @@
     def close_parent_sockets
       @config.reset_redis_pools!
 - entry: 'Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported'
-  anchor: 'lib/wurk/swarm/child_boot.rb#L160-L161'
+  anchor: 'lib/wurk/swarm/child_boot.rb#L165-L166'
   fragment: |-
     def reconnect_after_fork
       @config.reset_redis_pools!

@@ -20,7 +20,7 @@ class IterableJobTest < Wurk::Test::UnitCase
     def build_enumerator(*_args, cursor:)
       start = cursor || 0
       Enumerator.new do |y|
-        start.upto(2) { |i| y << [i, i + 1] }
+        start.upto(2) { |i| y << [i, i] }
       end
     end
 
@@ -191,6 +191,29 @@ class IterableJobTest < Wurk::Test::UnitCase
     assert_equal ['a', 42], worker.sink
   end
 
+  # Saving the cursor after an item raised must not swap the item's error for
+  # the save's: a hard shutdown would otherwise be booked as a Redis retry.
+  def test_a_failed_state_save_keeps_the_items_own_error
+    klass = Class.new do
+      include Wurk::IterableJob
+
+      def build_enumerator(*, cursor:)
+        Enumerator.new { |y| y << [1, 0] }
+      end
+
+      def each_iteration(*) = raise(Wurk::Shutdown)
+      def flush_state(**) = raise(RedisClient::CannotConnectError, 'down')
+    end
+    reported = []
+    handler = ->(ex, ctx, *) { reported << [ex.class, ctx[:context]] }
+    Wurk.configuration.error_handlers << handler
+
+    assert_raises(Wurk::Shutdown) { klass.new.perform }
+    assert_includes reported, [RedisClient::CannotConnectError, 'iterable job state save']
+  ensure
+    Wurk.configuration.error_handlers.delete(handler)
+  end
+
   def test_arguments_defaults_to_empty_array
     assert_equal [], SimpleIterable.new.arguments
   end
@@ -219,7 +242,7 @@ class IterableJobTest < Wurk::Test::UnitCase
     assert_equal %w[x y], worker.seen
   end
 
-  def test_cursor_advances_to_last_yielded_value
+  def test_cursor_is_the_last_yielded_value
     klass = Class.new do
       include Wurk::IterableJob
 
@@ -511,7 +534,7 @@ class IterableJobTest < Wurk::Test::UnitCase
     def build_enumerator(*, cursor:)
       start = cursor || 0
       Enumerator.new do |y|
-        start.upto(2) { |i| y << [i, i + 1] }
+        start.upto(2) { |i| y << [i, i] }
       end
     end
 
@@ -736,7 +759,7 @@ class IterableJobTest < Wurk::Test::UnitCase
 
       cursor = redis.with { |c| c.call('HGET', "it-#{jid}", 'c') }
 
-      assert_equal 1, ::JSON.parse(cursor), 'cursor of the last completed iteration is flushed'
+      assert_equal 1, ::JSON.parse(cursor), 'the cursor of the first item not run is flushed'
     ensure
       cleanup_iteration_key(jid)
     end
@@ -801,7 +824,7 @@ class IterableJobTest < Wurk::Test::UnitCase
 
     def build_enumerator(*, cursor:)
       start = cursor || 0
-      Enumerator.new { |y| start.upto(2) { |i| y << [i, i + 1] } }
+      Enumerator.new { |y| start.upto(2) { |i| y << [i, i] } }
     end
 
     def each_iteration(item, *)
@@ -853,7 +876,7 @@ class IterableJobTest < Wurk::Test::UnitCase
 
     def build_enumerator(*, cursor:)
       start = cursor || 0
-      Enumerator.new { |y| start.upto(2) { |i| y << [i, i + 1] } }
+      Enumerator.new { |y| start.upto(2) { |i| y << [i, i] } }
     end
 
     def each_iteration(item, *)

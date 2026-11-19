@@ -145,12 +145,19 @@ module Wurk
         # time. A raise leaves the outcome unknown, and both outcomes are safe:
         # moved, or still in the private list, where Fetcher::SelfReconcile finds
         # it.
+        #
+        # The job goes back unrun, so its global-concurrency slot goes back with
+        # it: a caller outside the Processor (a throttling fetch wrapper) has no
+        # ensure to release it, and the heartbeat would refresh the orphaned
+        # hold for the life of the process. A second release from the
+        # Processor's own ensure frees nothing.
         def requeue
           config.redis do |conn|
             next conn.call_once('RPUSH', queue, job) unless private_queue
 
             Wurk::Lua::Loader.eval_once(conn, :requeue_unit, keys: [private_queue, queue], argv: [job])
           end
+          release_slot
         end
 
         # The Processor has settled this unit, one way or the other: stop

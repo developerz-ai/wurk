@@ -4,10 +4,12 @@ import { useNavigate, useParams, useSearchParams } from '@solidjs/router';
 import { Pagination, maxPageOf } from '../components/Pagination';
 import { useServedPage } from '../hooks/useServedPage';
 import { ArgsValue } from '../components/ArgsValue';
+import { activatable } from '../components/activatable';
 import { SortableTh } from '../components/SortableTh';
 import { useSort, type Accessors } from '../hooks/useSort';
 import { usePageParam } from '../hooks/usePageParam';
 import { useResetPageOnEmpty } from '../hooks/useResetPageOnEmpty';
+import { RefreshError } from '../components/RefreshError';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
 import { formatArgs, formatDuration, formatNumber, relativeTime, truncate } from '../utils';
@@ -101,12 +103,15 @@ function QueueJobs(props: { name: string }) {
       <Match when={query.isPending}>
         <SkeletonTable rows={6} cols={5} />
       </Match>
-      <Match when={query.isError || !query.data}>
+      {/* Gate on the payload, not isError: a failed background poll flips isError
+          while the last good payload is still cached. RefreshError says so inline. */}
+      <Match when={!query.data}>
         <div class="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>
       </Match>
       <Match when={query.data}>
         {(data) => (
           <div class="qjobs">
+            <RefreshError when={query.isError} />
             <div style={{ display: 'flex', 'align-items': 'center', gap: '0.75rem', 'margin-bottom': '1rem' }}>
               <span style={{ color: 'var(--text-muted)', 'font-size': '13px' }}>
                 {t('queues.job_count', { n: formatNumber(data().size) })} ·{' '}
@@ -149,7 +154,7 @@ function QueueJobs(props: { name: string }) {
                           return (
                             <tr
                               class="row-clickable"
-                              onClick={() => setSelected({ jid: job.jid, klass: job.class, args: job.args, queue: props.name, enqueued_at: job.enqueued_at })}
+                              {...activatable(() => setSelected({ jid: job.jid, klass: job.class, args: job.args, queue: props.name, enqueued_at: job.enqueued_at }))}
                             >
                               <td title={job.jid} style={{ 'font-family': 'monospace', 'font-size': '12px', color: 'var(--text-muted)' }}>
                                 {truncate(job.jid, 12)}
@@ -256,13 +261,16 @@ export default function Queues() {
           <SkeletonTable rows={8} cols={5} />
         </div>
       </Match>
-      <Match when={query.isError || !query.data}>
+      {/* Gate on the payload, not isError: a failed background poll flips isError
+          while the last good payload is still cached. RefreshError says so inline. */}
+      <Match when={!query.data}>
         <div class="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>
       </Match>
       <Match when={query.data}>
         {(_data) => (
           <div>
             <PageHeader icon="layer-group" title={t('nav.queues')} summary={t('summaries.queues')} />
+            <RefreshError when={query.isError} />
 
             <Show when={sorted().length > 0} fallback={<div class="empty-state">{t('common.empty')}</div>}>
               <div class="table-wrapper">
@@ -281,7 +289,7 @@ export default function Queues() {
                   <tbody>
                     <For each={sorted()}>
                       {(q) => (
-                        <tr class="row-clickable" onClick={() => setSelectedQueue(q.name)}>
+                        <tr class="row-clickable" {...activatable(() => setSelectedQueue(q.name))}>
                           <td style={{ 'font-weight': 500 }}>{q.name}</td>
                           <td>{formatNumber(q.size)}</td>
                           <td title={`${q.latency.toFixed(3)}s`}>{formatDuration(q.latency)}</td>

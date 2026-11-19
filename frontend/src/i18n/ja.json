@@ -125,7 +125,9 @@
     "no_running": "このプロセスで実行中のジョブはありません",
     "leader": "リーダー",
     "leader_title": "このプロセスはクラスターリーダーロックを保持しています",
-    "heartbeat_ok": "ハートビート正常"
+    "heartbeat_ok": "ハートビート正常",
+    "quiet": "静音中",
+    "embedded": "組み込み"
   },
   "cron": {
     "history_title": "実行履歴",
@@ -220,6 +222,7 @@
   "common": {
     "loading": "読み込み中…",
     "error": "データの読み込みエラー",
+    "refresh_failed": "更新できませんでした。最後に読み込んだデータを表示しています。",
     "empty": "アイテムなし",
     "page": "ページ",
     "of": "/",

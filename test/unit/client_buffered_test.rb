@@ -212,6 +212,71 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     @pool.with { |c| c.call('DEL', "queue:#{other}") }
   end
 
+  # Only replies known to be about the entry drop it. An unrecognised one
+  # (another server's `ERR …`, a cluster redirect) keeps every entry: dropping
+  # on a guess loses jobs for good.
+  def test_only_a_known_entry_error_drops_a_buffered_entry
+    buffered = Wurk::Client::Buffered
+
+    assert buffered.send(:entry_error?, RedisClient::CommandError.new('WRONGTYPE Operation against a key'))
+    assert buffered.send(:entry_error?, JSON::GeneratorError.new('source sequence is illegal/malformed utf-8'))
+    refute buffered.send(:entry_error?, RedisClient::CommandError.new('ERR unknown command from a fork'))
+    refute buffered.send(:entry_error?, RedisClient::CommandError.new('MOVED 3999 127.0.0.1:6381'))
+    refute buffered.send(:entry_error?, RedisClient::CommandError.new('OOM command not allowed'))
+  end
+
+  # One entry Redis will never accept (its queue key holds a string) must not
+  # hold the rest of the backlog hostage, nor be replayed forever: it is
+  # reported with its jid and set aside, and everything else lands.
+  def test_an_entry_redis_refuses_is_reported_and_dropped_without_blocking_the_rest
+    bad = "#{@queue}-wrongtype"
+    reported = []
+    handler = ->(ex, ctx, _cfg) { reported << [ex, ctx] if ctx[:context] == 'reliable_push replay' }
+    client, pool = outage_client
+    bad_jid = client.push(base_item('args' => [1], 'queue' => bad))
+    client.push(base_item('args' => [2]))
+    client.push(base_item('args' => [3]))
+    recover(pool)
+    @pool.with { |c| c.call('SET', "queue:#{bad}", 'not a list') }
+
+    log = Wurk::Test::GLOBAL_STATE_MUTEX.synchronize do
+      Wurk.configuration.error_handlers << handler
+      capture_wurk_log { @drained = Wurk::Client::Buffered.drain!(client, probe: true) }
+    ensure
+      Wurk.configuration.error_handlers.delete(handler)
+    end
+
+    assert_equal 2, @drained
+    assert_equal [[2], [3]], queued_args.reverse
+    assert_equal 0, Wurk::Client::Buffered.buffer_size
+    assert_equal 0, Wurk::Client::Buffered.send(:undelivered_count)
+    assert_equal([RedisClient::WrongTypeError], reported.map { |ex, _| ex.class })
+    assert_equal bad_jid, reported.first[1][:jid]
+    assert_includes log, bad_jid
+    assert_equal 0, Wurk::Client::Buffered.drain!(client, probe: true), 'the refused entry is not retried'
+  ensure
+    @pool.with { |c| c.call('DEL', "queue:#{bad}") }
+  end
+
+  # The queue write landed and only the status row behind it was refused:
+  # the job is in Redis, so a replay must neither push it again nor fail.
+  def test_an_entry_whose_queue_write_landed_is_not_replayed_again
+    client, pool = outage_client
+    jid = client.push(base_item('args' => [1], 'track' => true))
+    recover(pool)
+    status_key = Wurk::Keys.status(jid)
+    @pool.with { |c| c.call('LPUSH', status_key, 'not a hash') }
+
+    Wurk::Test::GLOBAL_STATE_MUTEX.synchronize do
+      capture_wurk_log { 2.times { Wurk::Client::Buffered.drain!(client, probe: true) } }
+    end
+
+    assert_equal 1, queue_length
+    assert_equal 0, Wurk::Client::Buffered.send(:undelivered_count)
+  ensure
+    @pool.with { |c| c.call('DEL', status_key) } if status_key
+  end
+
   def test_scheduled_and_immediate_backlog_each_land_where_they_belong
     client, pool = outage_client
     client.push(base_item('args' => [1]))
@@ -477,6 +542,17 @@ class ClientBufferedTest < Wurk::Test::UnitCase
 
     assert Wurk::Client::Buffered.circuit.open?(pool)
     assert_equal 1, Wurk::Client::Buffered.buffer_size
+  end
+
+  # A payload that cannot be serialized fails the push the way it does with the
+  # circuit closed. Buffering it used to raise from the drop report in
+  # enbuffer's ensure instead — an ArgumentError naming nothing about the job.
+  def test_an_unserializable_payload_behind_an_open_circuit_raises_its_own_error
+    client, pool = outage_client
+    Wurk::Client::Buffered.trip!(pool)
+
+    assert_raises(JSON::GeneratorError) { client.push(base_item('args' => [(+"\xff").force_encoding('UTF-8')])) }
+    assert_equal 0, Wurk::Client::Buffered.buffer_size
   end
 
   def test_a_circuit_with_nothing_buffered_is_closed_by_a_ping
@@ -760,6 +836,24 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     assert_equal 0, Wurk::Client::Buffered.buffer_size
   end
 
+  # A batch callback job carries no bid (a `:death`, or a top-level batch's
+  # `:complete`/`:success`), yet the fire writes the event's marker once the
+  # push returns: buffered, a crash would lose the callback for good. It has
+  # to raise so the fire's outage wait retries it instead.
+  def test_batch_callback_job_does_not_buffer_and_re_raises
+    client, pool = outage_client
+    callback = base_item('class' => 'Wurk::Batch::CallbackJob', 'args' => ['B1', 'Cb', 'death', {}])
+
+    assert_raises(RedisClient::ConnectionError) { client.push(callback) }
+    assert_equal 0, Wurk::Client::Buffered.buffer_size
+
+    attempts = pool.attempts
+
+    assert_raises(RedisClient::ConnectionError) { client.push(callback) }
+    assert_operator pool.attempts, :>, attempts, 'an open circuit must not swallow it either'
+    assert_equal 0, Wurk::Client::Buffered.buffer_size
+  end
+
   # --- partial drain on persistent outage --------------------------------
 
   def test_drain_re_buffers_payload_when_redis_still_down
@@ -937,6 +1031,36 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     Wurk::Client.reliable_push_drainer(interval: 0.05)
     Wurk::Client.reliable_push_drainer_stop!
 
+    refute_predicate Wurk::Client, :reliable_push_drainer_running?
+  end
+
+  # A stop that lands while a tick is replaying against a still-down Redis. The
+  # tick's failed replay re-trips the circuit, which asks for a drainer: stop
+  # used to hold the install lock across its join, so that tick waited out the
+  # whole join timeout, and once the join gave up and dropped the drainer, the
+  # tick found none and started a fresh one — still draining after stop said
+  # it had stopped.
+  def test_stop_during_a_failing_tick_returns_promptly_and_stays_stopped
+    client, pool = outage_client
+    client.push(base_item('args' => ['a']))
+    Wurk::Client.reliable_push_drainer_stop!
+    gate = Queue.new
+    pool.park_next_on(gate)
+    attempts = pool.attempts
+    Wurk::Client::Buffered.start_drainer!(interval: 0.02)
+    tick = Wurk::Client::Buffered.instance_variable_get(:@drainer).instance_variable_get(:@thread)
+
+    assert(wait_for { pool.attempts > attempts }, 'the tick never reached Redis')
+
+    started = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+    stopper = Thread.new { Wurk::Client.reliable_push_drainer_stop! }
+
+    assert(wait_for { stopper.status == 'sleep' }, 'stop never blocked')
+    gate << :go
+    stopper.join(10)
+    tick.join(10)
+
+    assert_operator ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - started, :<, 2.0
     refute_predicate Wurk::Client, :reliable_push_drainer_running?
   end
 

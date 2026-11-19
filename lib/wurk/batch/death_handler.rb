@@ -25,7 +25,9 @@ module Wurk
         bid = job['bid']
         return unless bid
 
-        Callbacks.retrying { |attempt| record(bid, job['jid'], replay: attempt.positive?) }
+        Callbacks.retrying(outage_budget: Callbacks::STORE_OUTAGE_BUDGET) do |attempt|
+          record(bid, job['jid'], replay: attempt.positive?)
+        end
       end
 
       def self.record(bid, jid, replay:)

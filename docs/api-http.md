@@ -256,6 +256,7 @@ branches on; renaming one is a breaking change, adding one is not.
 | `request_in_progress` | 409 | Another request under this `Idempotency-Key` hasn't answered yet — retry shortly (`Retry-After: 1`). |
 | `read_only` | 403 | This deployment (or mount) answers reads only. |
 | `rate_limited` | 429 | Per-token ceiling exceeded — `Retry-After` header and `retry_after` body field agree. |
+| `redis_unavailable` | 503 | Redis could not be reached, no pooled connection freed up in time, or the connection dropped mid-request — retry after `Retry-After` (also the `retry_after` body field). A dropped reply can follow a write that landed, so retry a produce under its `Idempotency-Key`. A Redis error reply (`WRONGTYPE`, `OOM`) is not this; it is `internal_error`. |
 | `internal_error` | 500 | Unexpected server error; details are in the server log, never the response. |
 
 ## Idempotency

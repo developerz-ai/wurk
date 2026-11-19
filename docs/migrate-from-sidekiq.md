@@ -190,7 +190,7 @@ Two independent knobs:
 
 | Knob | What it controls | How to set it | Default |
 |---|---|---|---|
-| **Parallelism** | Number of forked **worker processes** (real OS processes, true CPU parallelism) | `WURK_COUNT` (or the `SIDEKIQ_COUNT` alias) env var | **CPU core count** (`Etc.nprocessors`) |
+| **Parallelism** | Number of forked **worker processes** (real OS processes, true CPU parallelism) | `WURK_COUNT` (or the `SIDEKIQ_COUNT` alias) env var | **Detected CPU count** (the cgroup CPU limit, else `Etc.nprocessors`) |
 | **Concurrency** | **Threads per process** (Sidekiq-style; great for IO-bound, GIL-bound for CPU) | `config.concurrency`, CLI `-c`, YAML `:concurrency`, or `RAILS_MAX_THREADS` | `5` |
 
 > There is **no `WURK_CONCURRENCY` env var.** Threads-per-process is `config.concurrency`

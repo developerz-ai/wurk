@@ -1,14 +1,16 @@
 # frozen_string_literal: true
 
 require_relative '../test_helper'
-# The CurrentAttributes cases need `ActiveSupport::CurrentAttributes`. The
-# three files below are what it loads in ActiveSupport 8.1 — and deliberately
-# not `active_support` itself: that one pulls in the i18n gem, and a defined
-# ::I18n makes the I18n middleware write a "locale" key into the payload of
-# every job this worker pushes.
+# The CurrentAttributes cases need `ActiveSupport::CurrentAttributes`, and the
+# `cattr` value is ActiveJob's argument serialization, as upstream writes it.
+# Loading ActiveJob defines ::I18n; the I18n cases swap in their own stand-in
+# and keep the I18n middleware off the global chains, so no payload here
+# grows a "locale" key from it.
 require 'active_support/code_generator'
 require 'active_support/current_attributes'
 require 'active_support/isolated_execution_state'
+require 'active_job'
+require 'active_support/core_ext/integer/time'
 require 'json'
 require 'securerandom'
 require 'sidekiq/middleware/current_attributes'
@@ -44,6 +46,10 @@ class BuiltinParityTest < Wurk::Test::UnitCase
       def clear = MUTEX.synchronize { @seen.clear }
     end
   end
+
+  # How ActiveJob writes the attribute name `:probe_value` in a `cattr` pair.
+  SYMBOL_PROBE_VALUE = { '_aj_serialized' => 'ActiveJob::Serializers::SymbolSerializer',
+                         'value' => 'probe_value' }.freeze
 
   # The attributes the CurrentAttributes cases persist.
   class ProbeAttributes < ActiveSupport::CurrentAttributes
@@ -322,9 +328,37 @@ class BuiltinParityTest < Wurk::Test::UnitCase
 
     payload = queued_payload
 
-    assert_equal 'one', payload['cattr']['probe_value']
-    assert_equal 'two', payload['cattr_1']['second_value']
+    assert_equal [[SYMBOL_PROBE_VALUE, 'one']], payload['cattr']
+    assert_equal [[{ '_aj_serialized' => 'ActiveJob::Serializers::SymbolSerializer', 'value' => 'second_value' },
+                   'two']], payload['cattr_1']
     refute payload.key?('cattr_2')
+  end
+
+  # A job Sidekiq enqueued before the swap carries `cattr` in upstream's shape:
+  # `ActiveJob::Arguments.serialize(attributes)`, attribute names included.
+  def test_current_attributes_from_an_upstream_payload
+    Sidekiq::CurrentAttributes.persist(ProbeAttributes, @config)
+    build_capsule
+    payload = probe_job.merge('class' => ProbeJob.name, 'cattr' => [[SYMBOL_PROBE_VALUE, 'from-sidekiq']])
+    Sidekiq.redis { |conn| conn.call('LPUSH', "queue:#{@queue}", JSON.generate(payload)) }
+
+    @processor.process_one
+
+    assert_equal({ 'probe_value' => 'from-sidekiq' }, Probe.entries.last[:first])
+  end
+
+  # The serialization is ActiveJob's, so a value keeps its type across the
+  # push: a Symbol comes back a Symbol, not the String JSON would make it.
+  def test_current_attributes_keep_value_types
+    Sidekiq::CurrentAttributes.persist(ProbeAttributes, @config)
+    build_capsule
+    ProbeAttributes.probe_value = :enqueued
+
+    push_probe
+    ProbeAttributes.probe_value = nil
+    @processor.process_one
+
+    assert_equal :enqueued, Probe.entries.last[:first]['probe_value']
   end
 
   private

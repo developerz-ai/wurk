@@ -248,8 +248,21 @@ class RailtieTest < Wurk::Test::EngineCase
   end
 
   def test_unicorn_is_always_preforking
-    with_const(:Unicorn, Module.new) do
+    with_unicorn_server do
       assert_predicate Wurk::RailsBoot, :preforking_web_server?
+    end
+  end
+
+  # Same rule as #serving?: a unicorn Gemfile entry defines the constant in a
+  # `rails server` (Puma) process too, which must keep the swarm-fork path.
+  def test_a_unicorn_gemfile_entry_is_not_a_preforking_server
+    with_env('WEB_CONCURRENCY' => nil) do
+      with_const(:Unicorn, Module.new) do
+        with_program_name('/app/bin/rails') do
+          refute_predicate Wurk::RailsBoot, :preforking_web_server?
+          assert_equal :fork, Wurk::RailsBoot.boot_action(fake_app(embed: nil))
+        end
+      end
     end
   end
 
@@ -282,13 +295,13 @@ class RailtieTest < Wurk::Test::EngineCase
   end
 
   def test_boot_action_refuses_under_preforking_without_opt_in
-    with_const(:Unicorn, Module.new) do
+    with_unicorn_server do
       assert_equal :refuse, Wurk::RailsBoot.boot_action(fake_app(embed: nil))
     end
   end
 
   def test_boot_action_embeds_under_preforking_with_opt_in
-    with_const(:Unicorn, Module.new) do
+    with_unicorn_server do
       assert_equal :embed, Wurk::RailsBoot.boot_action(fake_app(embed: true))
     end
   end
@@ -550,6 +563,10 @@ class RailtieTest < Wurk::Test::EngineCase
       skip 'a server marker is already defined in this test process'
     end
     yield
+  end
+
+  def with_unicorn_server(&)
+    with_const(:Unicorn, Module.new) { with_program_name('/app/bin/unicorn', &) }
   end
 
   def with_program_name(name)

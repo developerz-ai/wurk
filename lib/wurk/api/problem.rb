@@ -66,6 +66,12 @@ module Wurk
       # the header as a number so a client that already parses this body does
       # not have to reach back into the headers for it.
       RATE_LIMITED = 'rate_limited'
+      # Redis could not be reached, no pooled connection freed up in time, or
+      # the connection dropped mid-request. Separate from `internal_error`
+      # because it is worth retrying after `retry_after`. A dropped reply means
+      # a write may still have landed, so a producer retries under its
+      # `Idempotency-Key`. Matches the dashboard's own slug for the condition.
+      REDIS_UNAVAILABLE = 'redis_unavailable'
 
       # Every slug needs a human title; `fetch` below turns a missing one into a
       # loud failure in the test suite rather than a half-formed error body.
@@ -87,7 +93,8 @@ module Wurk
         IDEMPOTENCY_KEY_REUSED => 'Idempotency Key Reused',
         REQUEST_IN_PROGRESS => 'Request In Progress',
         READ_ONLY => 'Read-Only Mode',
-        RATE_LIMITED => 'Too Many Requests'
+        RATE_LIMITED => 'Too Many Requests',
+        REDIS_UNAVAILABLE => 'Redis Unavailable'
       }.freeze
 
       module_function

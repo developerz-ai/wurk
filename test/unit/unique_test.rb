@@ -566,6 +566,53 @@ class UniqueTest < Wurk::Test::UnitCase
     end
   end
 
+  # ---- ClientMiddleware: a lock with no job behind it ------------------
+
+  # The lock is taken before the rest of the chain runs. A later middleware
+  # that halts the push leaves no job to release it, so every further enqueue
+  # of the same args would be dropped as a duplicate until the TTL.
+  def test_client_middleware_releases_lock_when_inner_chain_halts
+    ENABLE_MUTEX.synchronize do
+      Wurk::Unique.enable!
+      job = build_job(jid: 'halted-1', ttl: 600)
+      track_key(job)
+      pool = Wurk.configuration.redis_pool
+
+      refute Wurk::Unique::ClientMiddleware.new.call(nil, job, job['queue'], pool) { nil }
+      assert_nil redis_call('GET', Wurk::Unique.lock_key_for(job))
+      assert invoke_client(build_job(jid: 'halted-2', ttl: 600)), 'the next enqueue must not be a duplicate'
+    end
+  end
+
+  def test_client_middleware_releases_lock_when_inner_chain_raises
+    ENABLE_MUTEX.synchronize do
+      Wurk::Unique.enable!
+      job = build_job(jid: 'raised-1', ttl: 600)
+      track_key(job)
+      pool = Wurk.configuration.redis_pool
+
+      assert_raises(ArgumentError) do
+        Wurk::Unique::ClientMiddleware.new.call(nil, job, job['queue'], pool) { raise ArgumentError, 'inner' }
+      end
+      assert_nil redis_call('GET', Wurk::Unique.lock_key_for(job))
+    end
+  end
+
+  # A re-push of the lock holder (scheduled/retry promotion) that halts must
+  # leave the lock alone: it was taken by the original enqueue, not this call.
+  def test_client_middleware_keeps_lock_when_own_jid_repush_halts
+    ENABLE_MUTEX.synchronize do
+      Wurk::Unique.enable!
+      job = build_job(jid: 'repush-halt-1', ttl: 600)
+      track_key(job)
+      pool = Wurk.configuration.redis_pool
+
+      assert invoke_client(job)
+      refute Wurk::Unique::ClientMiddleware.new.call(nil, job, job['queue'], pool) { nil }
+      assert_equal 'repush-halt-1', redis_call('GET', Wurk::Unique.lock_key_for(job))
+    end
+  end
+
   def test_client_middleware_reacquires_when_lock_expires_mid_check
     ENABLE_MUTEX.synchronize do
       Wurk::Unique.enable!

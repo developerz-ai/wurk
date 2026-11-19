@@ -498,6 +498,26 @@ module Wurk
         track_enqueued(pipe, jobs, now)
       end
       mark_delivered(jobs)
+    rescue RedisClient::CommandError => e
+      mark_delivered(jobs) if lpush_applied?(e)
+      raise
+    end
+
+    # A pipeline raises its first error reply only after reading every reply,
+    # so a refused SADD or status row can sit next to an LPUSH that landed. The
+    # jobs are in Redis then, and must stay out of a reliable_push replay. The
+    # errors chain through `next_error` (redis-client >= 0.23); without it a
+    # refused SADD hides LPUSH's outcome, so that case counts as not landed, as
+    # does an error that names no command at all.
+    def lpush_applied?(error)
+      chained = error.respond_to?(:next_error)
+      until error.nil?
+        verb = Array(error.command).first.to_s.upcase
+        return false if verb.empty? || verb == 'LPUSH' || (verb == 'SADD' && !chained)
+
+        error = chained ? error.next_error : nil
+      end
+      true
     end
 
     # Ride the pipeline that is already open for the queue write, so a tracked

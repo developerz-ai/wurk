@@ -45,6 +45,7 @@ module Wurk
     HISTORY_CAP = 25
     DEFAULT_TICK_SECONDS = 60
     MISSED_TICK_THRESHOLD = 90
+    SKIPPED_COUNT_CAP = 1_000
 
     # Handed to the error handlers when a due loop names a class this process
     # cannot load, so the occurrence was skipped.
@@ -422,6 +423,22 @@ module Wurk
         next_fire_at(nxt) # fixed daily slot: drop the fold duplicate
       end
 
+      # For the poller's missed-tick line: the occurrences from `expected` (one
+      # itself) through `now`, less `firing`, the one the late tick still runs.
+      # Counted by walking the schedule, so a long outage stops at the cap and
+      # reads `1000+`.
+      def skipped_fires(expected, now, firing)
+        count = 0
+        occurrence = expected
+        while occurrence && occurrence <= now
+          return "#{SKIPPED_COUNT_CAP}+" if count == SKIPPED_COUNT_CAP
+
+          count += 1 unless occurrence == firing
+          occurrence = next_fire_at(occurrence)
+        end
+        count
+      end
+
       def local_components(epoch)
         parser.local_components(epoch, @tz)
       end
@@ -794,7 +811,7 @@ module Wurk
         future = loop_obj.next_fire_after(firing || slot, now)
         return unless claim_fire?(loop_obj, mark, now, future)
 
-        skip_missed(loop_obj, slot, now) unless firing == slot
+        skip_missed(loop_obj, slot, now, firing) unless firing == slot
         return if firing.nil?
 
         fire_claimed(loop_obj, now)
@@ -896,10 +913,13 @@ module Wurk
         [@config[:cron_grace] || MISSED_TICK_THRESHOLD, @tick_interval * 1.5].max
       end
 
-      def skip_missed(loop_obj, expected, now)
+      # One line however many occurrences the marks just advanced past, so it
+      # carries the count: an every-minute loop three minutes late drops three.
+      def skip_missed(loop_obj, expected, now, firing = nil)
         logger.warn(
           "[cron] missed tick lid=#{loop_obj.lid} klass=#{loop_obj.klass} " \
-          "expected_at=#{expected} now=#{now} drift=#{now - expected}s — skipped, not backfilled"
+          "expected_at=#{expected} now=#{now} drift=#{now - expected}s " \
+          "skipped=#{loop_obj.skipped_fires(expected, now, firing)} — skipped, not backfilled"
         )
         nil
       end
@@ -1042,10 +1062,15 @@ module Wurk
       # the lid is still derived from (schedule, klass, opts) so the
       # call is idempotent. Callers that want the Sidekiq DSL should use
       # `Manager#register` via `config.periodic { |mgr| ... }`.
+      #
+      # `tz:` stays in the options as well as reaching the loop: it has always
+      # been part of what this method hashes into the lid, and a lid that moved
+      # would leave the old loop firing next to the new one.
       def register(name, cron, worker_class, args = [], **opts)
         merged = opts.merge(args: args)
         merged[:label] = name if name
-        Loop.new(schedule: cron, klass: worker_class.to_s, options: merged).tap { |lp| persist(lp) }
+        loop_obj = Loop.new(schedule: cron, klass: worker_class.to_s, options: merged, tz: opts[:tz])
+        persist(loop_obj)
       end
 
       # `paused` is written with HSETNX, not HSET: a code-declared `paused:`
@@ -1059,24 +1084,38 @@ module Wurk
 
       # #persist for many loops in one pipelined round trip: a booting process
       # (each swarm child) writes its whole `config.periodic` block at once.
-      # Nothing here reads, so a pipeline is the same writes in the same order.
+      #
+      # One read first, of each loop's stored `tz` and `nf`: the lid does not
+      # hash a Manager loop's zone, so an edited `tz:` lands on the same hash,
+      # whose `nf` is still the next occurrence in the old zone. That mark is
+      # recomputed here; left alone it fires once more on the old zone's clock.
       def persist_all(loops)
         return loops if loops.empty?
 
         Wurk.redis do |c|
-          c.pipelined do |p|
-            loops.each do |loop_obj|
-              fields = loop_obj.to_redis_hash
-              paused = fields.delete('paused')
-              key = "#{LOOP_PREFIX}#{loop_obj.lid}"
-              p.call('SADD', PERIODIC_KEY, loop_obj.lid)
-              p.call('HSET', key, *fields.flatten)
-              p.call('HSETNX', key, 'paused', paused)
-            end
-          end
+          stored = c.pipelined { |p| loops.each { |lp| p.call('HMGET', "#{LOOP_PREFIX}#{lp.lid}", 'tz', 'nf') } }
+          c.pipelined { |p| loops.zip(stored) { |lp, marks| persist_loop(p, lp, rezoned: rezoned?(lp, *marks)) } }
         end
         loops
       end
+
+      def rezoned?(loop_obj, stored_tz, next_fire)
+        !next_fire.to_s.empty? && stored_tz.to_s != loop_obj.tz_name.to_s
+      end
+
+      def persist_loop(pipe, loop_obj, rezoned:)
+        fields = loop_obj.to_redis_hash
+        paused = fields.delete('paused')
+        key = "#{LOOP_PREFIX}#{loop_obj.lid}"
+        pipe.call('SADD', PERIODIC_KEY, loop_obj.lid)
+        pipe.call('HSET', key, *fields.flatten)
+        pipe.call('HSETNX', key, 'paused', paused)
+        return unless rezoned
+
+        upcoming = loop_obj.next_fire_at
+        upcoming ? pipe.call('HSET', key, 'nf', upcoming.to_s) : pipe.call('HDEL', key, 'nf')
+      end
+      private :persist_loop, :rezoned?
 
       # Drop every registered loop for `klass` (a name or a list of names)
       # except `keep_lids` — the loops a booting process just registered for

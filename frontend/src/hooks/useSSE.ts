@@ -23,6 +23,9 @@ export interface StatsSnapshot {
 // consumers: opened on the first mount, closed when the last consumer unmounts.
 // Signals are module-level so every consumer reads the same live state.
 const [stats, setStats] = createSignal<StatsSnapshot | null>(null);
+// Client clock (ms) at the last snapshot: `at` is the server's clock, and a
+// consumer weighing a snapshot against its own polled data needs one clock.
+const [statsAt, setStatsAt] = createSignal(0);
 const [connected, setConnected] = createSignal(false);
 let source: EventSource | null = null;
 let refs = 0;
@@ -60,6 +63,7 @@ function openStream() {
   es.addEventListener('stats', (e) => {
     try {
       setStats(JSON.parse((e as MessageEvent).data) as StatsSnapshot);
+      setStatsAt(Date.now());
     } catch {
       // ignore parse errors
     }
@@ -119,7 +123,7 @@ export function __resetSSE(): void {
 // `stats()` / `connected()` inside JSX or a memo so they track reactively.
 export function useSSE(
   enabled = true,
-): { stats: Accessor<StatsSnapshot | null>; connected: Accessor<boolean> } {
+): { stats: Accessor<StatsSnapshot | null>; statsAt: Accessor<number>; connected: Accessor<boolean> } {
   onMount(() => {
     if (!enabled) return;
     if (refs === 0) openStream();
@@ -130,5 +134,5 @@ export function useSSE(
     });
   });
 
-  return { stats, connected };
+  return { stats, statsAt, connected };
 }

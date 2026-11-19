@@ -188,6 +188,25 @@ class TestingModesTest < Wurk::Test::UnitCase
     end
   end
 
+  # The idiom upstream keeps a per-class index for:
+  # `expect { FakeJob.perform_async }.to change(FakeJob.jobs, :size).by(1)`
+  # reads `size` twice off the one Array `jobs` returned before the push.
+  def test_jobs_returns_a_live_reference
+    jobs = FakeJob.jobs
+    Wurk::Testing.fake! { FakeJob.perform_async(1) }
+
+    assert_equal 1, jobs.size
+    assert_same jobs, FakeJob.jobs
+  end
+
+  def test_jobs_clear_reaches_the_queue_too
+    Wurk::Testing.fake! { FakeJob.perform_async(1) }
+    FakeJob.jobs.clear
+
+    assert_empty Wurk::Queues['testq']
+    assert_equal 0, Wurk::Worker.drain_all
+  end
+
   def test_queues_index_returns_a_live_reference
     Wurk::Testing.fake! { FakeJob.perform_async(1) }
     Wurk::Queues['testq'].clear

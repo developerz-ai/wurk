@@ -184,8 +184,8 @@ describe('job-set "all" actions under a filter (#101 W4)', () => {
   });
 });
 
-describe('job detail backtrace (07-A16)', () => {
-  // jsdom has no <dialog> modality; Modal only needs the calls to exist.
+// jsdom has no <dialog> modality; Modal only needs the calls to exist.
+function stubDialog() {
   const dialog = Object.fromEntries(['showModal', 'close'].map((name) => [name, Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, name)]));
   beforeEach(() => {
     HTMLDialogElement.prototype.showModal = vi.fn();
@@ -197,6 +197,10 @@ describe('job detail backtrace (07-A16)', () => {
       else delete (HTMLDialogElement.prototype as unknown as Record<string, unknown>)[name];
     }
   });
+}
+
+describe('job detail backtrace (07-A16)', () => {
+  stubDialog();
 
   it('reads the backtrace from the entry endpoint, since listing rows leave it out', async () => {
     const row = entry(1);
@@ -213,5 +217,76 @@ describe('job detail backtrace (07-A16)', () => {
     expect(await screen.findByText('app/jobs/job1.rb:3:in perform')).toBeInTheDocument();
     const detail = fetchMock.mock.calls.map((c) => new URL(String(c[0]), 'http://x')).find((u) => u.pathname.includes('/api/retries/'));
     expect(decodeURIComponent(detail!.pathname.split('/api/retries/')[1])).toBe(key);
+  });
+});
+
+describe('job-set bulk selection', () => {
+  it('acts only on selected rows that are still on screen', async () => {
+    const fetchMock = stub((url) => {
+      if (!url.pathname.endsWith('/api/retries')) return { ok: true, count: 1 };
+      const page = Number(url.searchParams.get('page'));
+      return { total: 50, page, count: 25, max_page: 1, entries: [entry(page + 1)] };
+    });
+    renderRetries();
+
+    await screen.findByText('Job1');
+    fireEvent.click(screen.getByRole('checkbox', { name: t('table.select_row') }));
+    expect(screen.getByText(t('actions.selected', { n: 1 }))).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: t('actions.next') }));
+    await screen.findByText('Job2');
+
+    // Job1 is a page away: nothing here is selected, so nothing can be bulk-retried.
+    expect(screen.getByText(t('actions.select_hint'))).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: t('actions.retry') })[0]).toBeDisabled();
+    expect(fetchMock.mock.calls.some((c) => (c as unknown as [unknown, RequestInit?])[1]?.method === 'POST')).toBe(false);
+  });
+});
+
+describe('job detail', () => {
+  stubDialog();
+  it('opens from the keyboard: the row is focusable and Enter activates it', async () => {
+    stub((url) => (url.pathname.endsWith('/api/retries') ? { total: 1, page: 0, count: 25, entries: [entry(1)] } : entry(1)));
+    renderRetries();
+
+    const row = (await screen.findByText('Job1')).closest('tr')!;
+    expect(row).toHaveAttribute('tabindex', '0');
+    fireEvent.keyDown(row, { key: 'Enter' });
+
+    expect(await screen.findByText(t('job.jid'))).toBeInTheDocument();
+  });
+
+  it('does not open when Space toggles the row checkbox', async () => {
+    stub((url) => (url.pathname.endsWith('/api/retries') ? { total: 1, page: 0, count: 25, entries: [entry(1)] } : entry(1)));
+    renderRetries();
+
+    await screen.findByText('Job1');
+    fireEvent.keyDown(screen.getByRole('checkbox', { name: t('table.select_row') }), { key: ' ' });
+
+    expect(screen.queryByText(t('job.jid'))).toBeNull();
+  });
+
+  it('drops the action buttons when read-only mode arrives after the page rendered', async () => {
+    let resolveMeta: (v: unknown) => void = () => {};
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = new URL(String(input), 'http://x');
+        const body = url.pathname.endsWith('/api/meta')
+          ? await new Promise((resolve) => (resolveMeta = resolve))
+          : url.pathname.endsWith('/api/retries')
+            ? { total: 1, page: 0, count: 25, entries: [entry(1)] }
+            : entry(1);
+        return { ok: true, status: 200, json: async () => body } as Response;
+      }),
+    );
+    renderRetries();
+
+    fireEvent.click(await screen.findByText('Job1'));
+    const dialog = document.querySelector('dialog')!;
+    await waitFor(() => expect(dialog.querySelector('.modal-footer')).not.toBeNull());
+
+    resolveMeta({ read_only: true });
+    await waitFor(() => expect(dialog.querySelector('.modal-footer')).toBeNull());
   });
 });

@@ -1,5 +1,6 @@
 import { createSignal, onMount, For, Show, Switch, Match } from 'solid-js';
 import { Pagination } from '../components/Pagination';
+import { activatable } from '../components/activatable';
 import { ArgsValue } from '../components/ArgsValue';
 import { t } from '../i18n';
 import { basePath } from '../basePath';
@@ -70,6 +71,9 @@ export default function Retries() {
   const { sorted, sort, toggle } = useSort(() => query.data?.entries ?? [], SORT);
   const pageKeys = () => sorted().map(entryKey);
   const allChecked = () => pageKeys().length > 0 && pageKeys().every((k) => sel.selected().has(k));
+  // A selected row can leave the screen — another page, a new filter, a retry
+  // that fired meanwhile. Bulk actions reach only the ones still shown.
+  const chosen = () => pageKeys().filter((k) => sel.selected().has(k));
 
   return (
     <div>
@@ -98,12 +102,12 @@ export default function Retries() {
                     <JobSetActionBar
                       bulk={BULK}
                       all={ALL}
-                      selectedCount={sel.count()}
+                      selectedCount={chosen().length}
                       total={data().total}
                       filtered={list.filtered()}
                       matching={list.matching()}
                       pending={pending()}
-                      onBulk={(cmd) => bulk.mutate({ keys: [...sel.selected()], cmd }, { onSuccess: sel.clear })}
+                      onBulk={(cmd) => bulk.mutate({ keys: chosen(), cmd }, { onSuccess: sel.clear })}
                       progress={swept()}
                       onAll={(cmd) =>
                         list.filtered()
@@ -135,7 +139,7 @@ export default function Retries() {
                             const argsStr = formatArgs(entry.args);
                             const key = entryKey(entry);
                             return (
-                              <tr class="row-clickable" onClick={() => { setSelected(entry); setSelectedKey(key); }}>
+                              <tr class="row-clickable" {...activatable(() => { setSelected(entry); setSelectedKey(key); })}>
                                 <Show when={!readOnly()}>
                                   <td class="row-action" onClick={(e) => e.stopPropagation()}>
                                     <input type="checkbox" checked={sel.selected().has(key)} onChange={() => sel.toggle(key)} aria-label={t('table.select_row')} />

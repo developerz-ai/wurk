@@ -145,6 +145,35 @@ class ProfilesEndpointsTest < Wurk::Test::EngineCase
     assert_equal 404, last_response.status
   end
 
+  # `:key` addresses only members of the `profiles` ZSET. Any other key is a
+  # 404: a SET or LIST under that name used to WRONGTYPE into a 503
+  # "redis_unavailable", and a HASH carrying a `data` field was uploaded to
+  # the third-party profiler and had a `sid` written into it.
+  def test_profile_routes_404_for_a_key_outside_the_profiles_set
+    ::Wurk.redis do |c|
+      c.call('SADD', 'queues', 'default')
+      c.call('HSET', 'not-a-profile', 'data', 'secret', 'sid', 'planted')
+    end
+
+    stub_http_start(->(*) { flunk 'uploaded a non-profile key' }) do
+      %w[queues not-a-profile].each do |key|
+        get "/wurk/profiles/#{key}/data"
+
+        assert_equal 404, last_response.status, "GET #{key}/data"
+
+        get "/wurk/profiles/#{key}"
+
+        assert_equal 404, last_response.status, "GET #{key}"
+
+        post "/wurk/profiles/#{key}"
+
+        assert_equal 404, last_response.status, "POST #{key}"
+      end
+    end
+  ensure
+    ::Wurk.redis { |c| c.call('DEL', 'queues', 'not-a-profile') }
+  end
+
   def test_read_only_refuses_upload_and_get
     key = seed(jid: 'r', token: 't8')
     ::Wurk.redis { |c| c.call('HSET', key, 'sid', 'cached') }

@@ -48,7 +48,7 @@ You must override two methods:
 
 | Method | Signature | Must return / do |
 |---|---|---|
-| `build_enumerator` | `build_enumerator(*args, cursor:)` | An `Enumerator` yielding `[item, new_cursor]` pairs |
+| `build_enumerator` | `build_enumerator(*args, cursor:)` | An `Enumerator` yielding `[item, cursor]` pairs, where `cursor` is the item's own position: building the enumerator again from that cursor must start at that item |
 | `each_iteration` | `each_iteration(item, *args)` | Process exactly one item |
 
 `*args` in both is the job's `perform_async` arguments. The base
@@ -68,6 +68,11 @@ end                      #    override #each_iteration instead of #perform
 
 The guard is installed by `include`, so it only sees methods defined *after*
 that line. Put the `include` first.
+
+The cursor is checkpointed before its item runs, as upstream Sidekiq does. An
+interrupt between items resumes at the next unprocessed item; an item that
+raises is retried from itself. An enumerator that yields the *next* position
+instead (`[item, index + 1]`) skips one item after every interrupt.
 
 The cursor you yield must **round-trip through JSON** — it is stored with
 `JSON.generate` and reloaded with `JSON.parse`. Integers, strings, arrays and

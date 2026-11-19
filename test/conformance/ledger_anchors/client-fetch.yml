@@ -6,7 +6,7 @@
     # lose the connection in the batched phase above — and whatever Redis
 
 - entry: "Immediate plain multi-queue pushes register queues per group"
-  anchor: "lib/wurk/client.rb#L583-L585"
+  anchor: "lib/wurk/client.rb#L603-L605"
   fragment: |-
     def mark_delivered(payloads)
       Thread.current[DELIVERED_KEY]&.concat(payloads)
@@ -78,7 +78,7 @@
     CHILD_SIGNALS = { 'TERM' => :term, 'INT' => :term, 'TSTP' => :tstp, 'USR2' => :usr2, 'TTIN' => :ttin }.freeze
 
 - entry: "USR2 reopens logs; RSS recycling uses the rolling-restart machine"
-  anchor: "lib/wurk/swarm/child_boot.rb#L229-L250"
+  anchor: "lib/wurk/swarm/child_boot.rb#L234-L255"
   fragment: |-
     when :tstp then launcher.quiet
     when :usr2 then reopen_logs

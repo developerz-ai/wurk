@@ -112,8 +112,6 @@ module Wurk
       end
     end
 
-    private
-
     # Single pipeline for the cheap counters. Eagerly invoked at initialize
     # so callers can read many fields without paying per-method round trips.
     FAST_QUERIES = [
@@ -128,12 +126,37 @@ module Wurk
     FAST_KEYS = %i[processed failed expired scheduled_size retry_size dead_size processes_size].freeze
     private_constant :FAST_QUERIES, :FAST_KEYS
 
+    # The three below are public upstream (`@api private`, Sidekiq api.rb), and
+    # code holding a Stats calls them to refresh it. Each returns the stats Hash.
+    #
+    # O(1) Redis calls: the counters and the `default` queue's latency.
     def fetch_stats_fast!
       raw = Wurk.redis(idempotent: true) do |conn|
-        conn.pipelined { |pipe| FAST_QUERIES.each { |args| pipe.call(*args) } }
+        conn.pipelined do |pipe|
+          FAST_QUERIES.each { |args| pipe.call(*args) }
+          pipe.call('LRANGE', Keys.queue('default'), -1, -1)
+        end
       end
+      now_ms = ::Process.clock_gettime(::Process::CLOCK_REALTIME, :millisecond)
+      latency = compute_latency(raw.pop.first, now_ms)
       @stats = FAST_KEYS.zip(raw.map(&:to_i)).to_h
+      @stats[:default_queue_latency] = latency
+      @stats
     end
+
+    # O(processes + queues) Redis calls: `workers_size` and `enqueued`.
+    def fetch_stats_slow!
+      @stats[:workers_size] = workers_size
+      @stats[:enqueued] = enqueued
+      @stats
+    end
+
+    def fetch_stats!
+      fetch_stats_fast!
+      fetch_stats_slow!
+    end
+
+    private
 
     def build_summaries(names, results, paused_set)
       now_ms = ::Process.clock_gettime(::Process::CLOCK_REALTIME, :millisecond)

@@ -9,7 +9,7 @@ class EncRepushIterableWorker
   sidekiq_options encrypt: true
 
   def build_enumerator(*_args, cursor:)
-    Enumerator.new { |y| (cursor || 0).upto(2) { |i| y << [i, i + 1] } }
+    Enumerator.new { |y| (cursor || 0).upto(2) { |i| y << [i, i] } }
   end
 
   def each_iteration(_item, *_args)

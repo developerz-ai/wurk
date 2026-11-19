@@ -86,9 +86,11 @@ export default function Batches() {
     </div>
   );
 
-  useServedPage(page, setPage, () => q.data);
+  // keepPreviousData hands the previous page's rows (and its `page`) to the new
+  // key while that loads; neither hook may act on those.
+  useServedPage(page, setPage, () => q.data, () => q.isPlaceholderData);
 
-  useResetPageOnEmpty(page, setPage, () => !q.isPending && !!q.data, () => (q.data?.batches.length ?? 0) === 0);
+  useResetPageOnEmpty(page, setPage, () => !!q.data && !q.isPlaceholderData, () => (q.data?.batches.length ?? 0) === 0);
 
   const { sorted, sort, toggle } = useSort(() => q.data?.batches ?? [], SORT);
 

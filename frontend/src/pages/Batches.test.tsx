@@ -77,4 +77,23 @@ describe('Batches page', () => {
     resolveTagged(listing([batch('b-tagged')]));
     expect(await screen.findByText('import b-tagged')).toBeInTheDocument();
   });
+
+  it('stays on the next page while it loads over the previous page\'s rows', async () => {
+    const pageOf = (n: number) => ({
+      total: 60,
+      page: n,
+      max_page: 2,
+      count: 25,
+      batches: [batch(`b-page-${n}`)],
+    });
+    const fetchMock = stubFetch((url) => pageOf(Number(url.searchParams.get('page') ?? 0)));
+    const history = renderPage('/batches', '/batches', Batches);
+
+    await screen.findByText('import b-page-0');
+    fireEvent.click(screen.getByRole('button', { name: t('actions.next') }));
+
+    expect(await screen.findByText('import b-page-1')).toBeInTheDocument();
+    expect(history.get()).toContain('page=2');
+    expect(batchRequests(fetchMock).at(-1)!.url.searchParams.get('page')).toBe('1');
+  });
 });

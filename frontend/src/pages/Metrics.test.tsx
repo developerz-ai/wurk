@@ -3,6 +3,7 @@ import { render, screen, waitFor, fireEvent } from '@solidjs/testing-library';
 import { QueryClient, QueryClientProvider } from '@tanstack/solid-query';
 import { MemoryRouter, Route, createMemoryHistory } from '@solidjs/router';
 import Metrics from './Metrics';
+import { t } from '../i18n';
 
 // Stub the hand-rolled SVG charts so chart logic (one series per queue/field,
 // pivoted rows) is observable without a real layout — the charts need a measured
@@ -271,5 +272,26 @@ describe('Metrics — requested API URLs', () => {
     expect(fetchMock.urls.filter((u) => u.startsWith('/wurk/api/history/snapshots'))).toEqual([
       '/wurk/api/history/snapshots?limit=1000',
     ]);
+  });
+});
+
+describe('Metrics when the API is failing', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('says so, instead of reporting zero jobs, no workers and no history', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, status: 503, json: async () => ({ error: 'redis_unavailable' }) }) as Response),
+    );
+    renderMetrics();
+
+    // Throughput, queue depth and top job types each report the failure.
+    await waitFor(() => expect(screen.getAllByText(t('common.error'))).toHaveLength(3));
+    expect(screen.queryByText(t('dashboard.no_history'))).toBeNull();
+    expect(screen.queryByText(t('metrics.no_queue_history'))).toBeNull();
+    expect(screen.queryByText(t('metrics.no_workers'))).toBeNull();
+    expect(screen.queryByText('0')).toBeNull();
+    // processed, failed, latency, workers
+    expect(screen.getAllByText('—')).toHaveLength(4);
   });
 });

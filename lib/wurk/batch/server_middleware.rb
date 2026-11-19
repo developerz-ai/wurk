@@ -26,7 +26,9 @@ module Wurk
     # itself is retried in-process and only raises (sending the job to retry,
     # at-least-once) when Redis stays unreachable — a jid left in the live set
     # would hold the batch open forever. The fire after it never raises: it is
-    # re-driven in-process and then reported to the error handlers.
+    # re-driven in-process and then reported to the error handlers. Both wait
+    # out a store that is not serving (Callbacks::STORE_OUTAGE_BUDGET): once
+    # this job is ACKed nothing re-drives a fire that gave up.
     #
     # Invalidated batches short-circuit: the job is skipped without
     # raising — counts as a "success" for batch purposes per spec §12.
@@ -104,14 +106,16 @@ module Wurk
       # state: if the batch is drained, the dead run's fire may never have
       # happened, and the callback markers absorb it if it did.
       def ack_success(bid, jid)
-        _removed, pending, live, kids = Callbacks.retrying do
+        _removed, pending, live, kids = Callbacks.retrying(outage_budget: Callbacks::STORE_OUTAGE_BUDGET) do
           redis_pool.with { |conn| Batch.ack_success(conn, bid, jid) }
         end
         fire(bid, pending, live, kids)
       end
 
       def fire(bid, pending, live, kids)
-        Callbacks.retrying { Callbacks.maybe_fire(bid, pending: pending, live: live, kids: kids) }
+        Callbacks.retrying(outage_budget: Callbacks::STORE_OUTAGE_BUDGET) do
+          Callbacks.maybe_fire(bid, pending: pending, live: live, kids: kids)
+        end
       rescue StandardError => e
         error_config.handle_exception(e, { context: "batch #{bid}: firing callbacks after ack", bid: bid })
       end

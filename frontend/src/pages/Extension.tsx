@@ -92,6 +92,10 @@ function NativeExtension(props: { extName: string; indexPath: string; title: str
     if (url.origin !== window.location.origin || !url.pathname.startsWith(base)) return;
     e.preventDefault();
     const data = new FormData(form);
+    // FormData(form) leaves out the button that was pressed, and a view with
+    // several named submit buttons branches on exactly that pair.
+    const submitter = (e as SubmitEvent).submitter as HTMLButtonElement | HTMLInputElement | null;
+    if (submitter?.name) data.append(submitter.name, submitter.value);
     if ((form.method || 'get').toUpperCase() === 'GET') {
       const qs = new URLSearchParams(Array.from(data.entries()) as [string, string][]).toString();
       void load(`${url.pathname.slice(base.length)}${qs ? `?${qs}` : ''}`);

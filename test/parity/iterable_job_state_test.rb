@@ -13,6 +13,14 @@ require_relative '../test_helper'
 # interrupt signal), §7 (Sidekiq::Client#cancel!(jid) marks an IterableJob
 # cancelled and returns the timestamp).
 #
+# Cursor convention, from Sidekiq::Job::Iterable#iterate_with_enumerator and
+# its enumerators: the cursor yielded beside an item is that item's own
+# position (`array_enumerator` yields the index and drops that many on
+# resume), and it is recorded before the item runs. A run interrupted between
+# items resumes at the first item not yet run; one that stops inside an item
+# resumes with that item. This file used to pin enumerators yielding the NEXT
+# position, under which a clean interrupt re-ran the last completed item.
+#
 # Upstream revision: test/parity/.sidekiq_sha.
 #
 # Retention (any TTL/expiry on the `it-<jid>` key) is deliberately out of
@@ -35,7 +43,7 @@ class IterableJobStateParityTest < Wurk::Test::UnitCase
 
     def build_enumerator(*, cursor:)
       start = cursor || 0
-      Enumerator.new { |y| start.upto(3) { |i| y << [i, i + 1] } }
+      Enumerator.new { |y| start.upto(3) { |i| y << [i, i] } }
     end
 
     def each_iteration(item, *)
@@ -139,8 +147,8 @@ class IterableJobStateParityTest < Wurk::Test::UnitCase
       assert_match(/\A\d+\z/, hash['ex'].to_s, 'ex is an int')
       assert_equal '1', hash['ex']
 
-      # c: cursor (JSON string) — round-trips through JSON to the last
-      # completed cursor (item 1 advanced the cursor to 2).
+      # c: cursor (JSON string) — round-trips through JSON to the cursor of
+      # the item in flight (item 2 raised, so the resume starts with it).
       assert_equal 2, JSON.parse(hash['c'])
 
       # rt: runtime accumulated (float seconds).
@@ -191,8 +199,7 @@ class IterableJobStateParityTest < Wurk::Test::UnitCase
       # ex: execution count (int) — a second execution of the same jid.
       assert_equal '2', hash['ex']
 
-      # c: cursor (JSON string) — item 2 advanced the cursor to 3 before
-      # the interrupt at item 3.
+      # c: cursor (JSON string) — the interrupt came inside item 3.
       assert_equal 3, JSON.parse(hash['c'])
 
       # rt: accumulated ACROSS executions — exactly first (3 iterations) +
@@ -201,6 +208,96 @@ class IterableJobStateParityTest < Wurk::Test::UnitCase
       # or always wrote 0.0 cannot pass here.
       assert_in_delta 5 * ITERATION_SECONDS, Float(hash['rt']), RT_DELTA,
                       'rt must accumulate across executions'
+    ensure
+      cleanup_iteration_key(jid)
+    end
+  end
+
+  # --- a clean interrupt resumes after the last completed item -----------
+
+  # `interrupted?` reads `_context.stopping?`, as the Processor provides it.
+  class StoppingAfter
+    def initialize(checks)
+      @checks = checks
+    end
+
+    def stopping?
+      (@checks -= 1).negative?
+    end
+  end
+
+  class LetterIterable
+    include Sidekiq::IterableJob
+
+    def seen
+      @seen ||= []
+    end
+
+    def build_enumerator(*, cursor:)
+      array_enumerator(%w[a b c d], cursor: cursor)
+    end
+
+    def each_iteration(item, *)
+      seen << item
+    end
+  end
+
+  def test_run_interrupted_between_items_resumes_at_the_next_one
+    jid = random_jid
+    first = LetterIterable.new
+    first.jid = jid
+    first._context = StoppingAfter.new(2)
+
+    begin
+      assert_raises(Sidekiq::Job::Interrupted) { first.perform }
+      assert_equal %w[a b], first.seen
+      assert_equal 2, JSON.parse(state_hash(jid)['c']), 'the cursor is the index of the first item not run'
+
+      resumed = LetterIterable.new
+      resumed.jid = jid
+      resumed.perform
+
+      assert_equal %w[c d], resumed.seen
+      assert_equal 0, redis('EXISTS', "it-#{jid}")
+    ensure
+      cleanup_iteration_key(jid)
+    end
+  end
+
+  # State as Sidekiq leaves it for the same interruption: Wurk resumes it at
+  # the same item, so a job can cross a cutover mid-iteration.
+  def test_state_written_by_sidekiq_resumes_at_its_cursor
+    jid = random_jid
+    redis('HSET', "it-#{jid}", 'ex', '1', 'c', '2', 'rt', '0.25')
+    worker = LetterIterable.new
+    worker.jid = jid
+
+    begin
+      worker.perform
+
+      assert_equal %w[c d], worker.seen
+    ensure
+      cleanup_iteration_key(jid)
+    end
+  end
+
+  class FailingIterable < LetterIterable
+    def each_iteration(item, *)
+      super
+      raise 'boom' if item == 'b'
+    end
+  end
+
+  # Upstream flushes on any exception out of an iteration, so the retry
+  # starts with the item that raised.
+  def test_an_item_that_raises_is_where_the_retry_starts
+    jid = random_jid
+    worker = FailingIterable.new
+    worker.jid = jid
+
+    begin
+      assert_raises(RuntimeError) { worker.perform }
+      assert_equal 1, JSON.parse(state_hash(jid)['c'])
     ensure
       cleanup_iteration_key(jid)
     end

@@ -47,26 +47,26 @@
     @options[:redis_error_handlers] << block
 
 - entry: 'DEFAULTS adds `:redis_error_handlers`'
-  anchor: lib/wurk/configuration.rb#L1317-L1318
+  anchor: lib/wurk/configuration.rb#L1324-L1325
   fragment: |-
     def dispatch_redis_error(info)
     redis_error_handlers.each do |handler|
 
 - entry: 'Pool sizing: three disjoint pools per process'
-  anchor: lib/wurk/capsule.rb#L166-L171
+  anchor: lib/wurk/capsule.rb#L178-L183
   fragment: |-
     POOL_HEADROOM = 5
     MIN_POOL_SIZE = 10
 
 - entry: 'Pool sizing: three disjoint pools per process'
-  anchor: lib/wurk/capsule.rb#L179-L181
+  anchor: lib/wurk/capsule.rb#L193-L195
   fragment: |-
     def fetch_redis_pool
     @pools[:fetch] ||= build_pool(size: @concurrency, name: "#{@name}-fetch")
     end
 
 - entry: 'Pool sizing: three disjoint pools per process'
-  anchor: lib/wurk/capsule.rb#L328-L330
+  anchor: lib/wurk/capsule.rb#L342-L344
   fragment: |-
     def main_pool_size
     @config.redis_config[:size] || [@concurrency + POOL_HEADROOM, MIN_POOL_SIZE].max

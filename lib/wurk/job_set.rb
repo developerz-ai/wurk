@@ -331,9 +331,13 @@ module Wurk
     # Returns the entries retried.
     def retry_page(entries)
       client = Client.new
-      unwritten = take(entries).to_h { |entry| [entry, true] }.compare_by_identity
+      unwritten = remove_page(entries).to_h { |entry| [entry, true] }.compare_by_identity
       groups, halted = prepare_retries(client, unwritten)
-      groups.each_value.sum(halted) { |pairs| write_group(client, pairs, unwritten) }
+      # Unbuffered for the reason SortedEntry#push_to_redis is: the page is
+      # already out of the set, so memory must not count as delivered.
+      Client::Buffered.unbuffered do
+        groups.each_value.sum(halted) { |pairs| write_group(client, pairs, unwritten) }
+      end
     ensure
       unwritten&.each_key(&:restore_after_failed_push)
     end
@@ -377,8 +381,9 @@ module Wurk
     # The pipeline has already removed the rest of the page when a fallback
     # runs, so a fallback that raises puts back everything removed so far, the
     # pipeline's hits and every earlier fallback, before it propagates:
-    # #retry_page's restore only covers what #take returned.
-    def take(entries)
+    # #retry_page's restore only covers what this returned. Not named `take`:
+    # that is Enumerable's, which upstream's sets answer (`RetrySet.new.take(5)`).
+    def remove_page(entries)
       taken, misses = split_by_zrem(entries)
       misses.each { |entry| taken << entry if delete_by_jid(entry.score, entry.jid) }
       taken

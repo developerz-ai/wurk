@@ -125,7 +125,9 @@
     "no_running": "此进程当前没有运行中的任务",
     "leader": "领导者",
     "leader_title": "该进程持有集群领导者锁",
-    "heartbeat_ok": "心跳正常"
+    "heartbeat_ok": "心跳正常",
+    "quiet": "已静默",
+    "embedded": "嵌入式"
   },
   "cron": {
     "history_title": "执行历史",
@@ -220,6 +222,7 @@
   "common": {
     "loading": "加载中…",
     "error": "加载数据出错",
+    "refresh_failed": "刷新失败。正在显示上次加载的数据。",
     "empty": "暂无数据",
     "page": "第",
     "of": "共",

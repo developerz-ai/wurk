@@ -27,6 +27,12 @@ module Wurk
     # SCRIPT_NAME (Request#url_for) — the same mount-agnostic rule the SPA shell
     # follows in dashboard_controller.rb.
     class App
+      # Only the failures where Redis never answered. A CommandError (WRONGTYPE,
+      # OOM) is Redis answering, so it stays an internal_error: retrying it
+      # would never succeed.
+      REDIS_OUTAGE = [::RedisClient::ConnectionError, ::ConnectionPool::TimeoutError].freeze
+      REDIS_RETRY_AFTER = 1
+
       # `config` is read on every request rather than captured, so a token
       # registered after the first request still takes effect. Injectable
       # because a test must be able to hand this app its own token table
@@ -87,6 +93,8 @@ module Wurk
         request.principal = principal
         refusal = ReadOnly.refuse(request) || Throttle.refuse(request)
         refusal || route(request)
+      rescue *REDIS_OUTAGE => e
+        redis_unavailable(request, e)
       rescue StandardError => e
         internal_error(request, e)
       end
@@ -171,6 +179,18 @@ module Wurk
           detail: "The Wurk HTTP API is served under #{VERSION_PREFIX}.",
           instance: request.path,
           supported_versions: SUPPORTED_VERSIONS
+        )
+      end
+
+      def redis_unavailable(request, error)
+        ::Wurk.logger.warn { "Wurk::API #{request.request_method} #{request.path}: redis unavailable (#{error.class})" }
+        Problem.render(
+          Problem::REDIS_UNAVAILABLE,
+          status: 503,
+          detail: 'Redis is unreachable; retry after the given number of seconds.',
+          instance: request.path,
+          headers: { 'retry-after' => REDIS_RETRY_AFTER.to_s },
+          retry_after: REDIS_RETRY_AFTER
         )
       end
 

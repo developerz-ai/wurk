@@ -90,6 +90,14 @@ class ModuleApiParityTest < Wurk::Test::UnitCase
     Sidekiq.testing!(:inline) { assert_predicate Sidekiq::Testing, :inline? }
   end
 
+  # `mode in [:fake, :disable, :inline]`: anything else is a typo, and a typo
+  # that silently enabled fake mode would hide every push from Redis.
+  def test_testing_rejects_unknown_mode
+    assert_raises(RuntimeError) { Sidekiq.testing!(:inlin) { flunk 'block ran under an unknown mode' } }
+    assert_raises(RuntimeError) { Sidekiq.testing!('fake') { flunk 'block ran under an unknown mode' } }
+    refute_equal :inlin, Sidekiq::Testing.mode
+  end
+
   # --- §3 JSON ---------------------------------------------------------------
 
   def test_load_json

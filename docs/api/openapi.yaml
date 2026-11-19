@@ -565,7 +565,9 @@ components:
 
   responses:
     Problem:
-      description: RFC 9457 problem document.
+      description: >-
+        RFC 9457 problem document. Any route answers `503 redis_unavailable`
+        with a `Retry-After` header when Redis cannot be reached.
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
@@ -649,6 +651,7 @@ components:
             - request_in_progress
             - read_only
             - rate_limited
+            - redis_unavailable
         title: { type: string }
         status: { type: integer }
         detail: { type: string }

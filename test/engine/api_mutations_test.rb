@@ -499,6 +499,17 @@ class ApiMutationsTest < Wurk::Test::EngineCase
     assert_equal 404, last_response.status
   end
 
+  # Queue#delete_job raises ArgumentError on a blank jid; that is the
+  # client's malformed request, not a 500.
+  def test_delete_queue_job_without_a_jid_is_400
+    jid = push_to_queue
+    post "/wurk/api/queues/#{@queue}/delete"
+
+    assert_equal 400, last_response.status
+    assert_equal({ 'error' => 'jid required' }, ::JSON.parse(last_response.body))
+    assert queue_has_jid?(jid)
+  end
+
   # --- Per-queue pause / unpause (#114) -----------------------------------
 
   def test_pause_queue_sets_paused

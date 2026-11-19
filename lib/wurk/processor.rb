@@ -41,8 +41,41 @@ module Wurk
     # escaping the retry layer comes from the payload itself (a `retry_count`
     # that is not a number, args that cannot be re-serialized into a retry) and
     # will fail the same way every time.
-    TRANSIENT_FAILURES = [RedisClient::Error, ConnectionPool::Error, ConnectionPool::TimeoutError].freeze
+    TRANSIENT_FAILURES = [RedisClient::Error, ConnectionPool::Error, ConnectionPool::TimeoutError,
+                          JobRetry::StoreUnavailableAfterPerform].freeze
     private_constant :TRANSIENT_FAILURES
+
+    # Redis not answering, or answering that it is not serving yet. Narrower than
+    # TRANSIENT_FAILURES on purpose: a refusal on the merits (WRONGTYPE, OOM)
+    # after `perform` would refuse the re-run's bookkeeping too, so requeueing it
+    # would re-run `perform` every REQUEUE_PAUSE for good.
+    STORE_UNAVAILABLE = [RedisClient::ConnectionError, ConnectionPool::TimeoutError].freeze
+    private_constant :STORE_UNAVAILABLE
+    STORE_NOT_SERVING = /\A(?:LOADING|BUSY|TRYAGAIN|CLUSTERDOWN)\b/
+    private_constant :STORE_NOT_SERVING
+
+    # How many times one process puts a job back for an outage after `perform`
+    # before the error goes to the retry policy after all. Unbounded, a write
+    # that keeps failing while the requeue lands (a second Redis a middleware
+    # talks to, a pool that stays exhausted) re-runs `perform` every
+    # REQUEUE_PAUSE for good. Process-local: the payload carries no counter.
+    STORE_REQUEUE_LIMIT = 3
+    STORE_REQUEUE_JIDS = 10_000
+    private_constant :STORE_REQUEUE_LIMIT, :STORE_REQUEUE_JIDS
+    @store_requeues = {}
+    @store_requeues_lock = ::Mutex.new
+
+    # True while `jid` has requeues left; counts this one.
+    def self.store_requeue?(jid)
+      @store_requeues_lock.synchronize do
+        count = @store_requeues.delete(jid).to_i + 1
+        next false if count > STORE_REQUEUE_LIMIT
+
+        @store_requeues.shift while @store_requeues.size >= STORE_REQUEUE_JIDS
+        @store_requeues[jid] = count
+        true
+      end
+    end
 
     # Pause after putting a job back on an internal failure. The job goes to the
     # tail, which is the next fetch, so without one a failure that persists
@@ -453,9 +486,22 @@ module Wurk
     end
 
     def execute_job(instance, job_hash, queue)
+      performed = false
       @capsule.server_middleware.invoke(instance, job_hash, queue) do
-        instance.perform(*job_hash['args'])
+        result = instance.perform(*job_hash['args'])
+        performed = true
+        result
       end
+    rescue StandardError => e
+      raise unless performed && store_unavailable?(e) && self.class.store_requeue?(job_hash['jid'])
+
+      raise JobRetry::StoreUnavailableAfterPerform, "Redis unavailable after perform returned: #{e.class}: #{e.message}"
+    end
+
+    def store_unavailable?(error)
+      return true if STORE_UNAVAILABLE.any? { |klass| error.is_a?(klass) }
+
+      error.is_a?(RedisClient::CommandError) && STORE_NOT_SERVING.match?(error.message.to_s)
     end
 
     # Bookkeeping wrapper. Publishes the in-flight job to WORK_STATE so the
