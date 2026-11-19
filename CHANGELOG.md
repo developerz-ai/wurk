@@ -4,6 +4,10 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 Each release's notes live in their own file under [`docs/changelog/`](docs/changelog/); this page is the index, newest first. Not released yet: [`docs/changelog/unreleased.md`](docs/changelog/unreleased.md) ([diff since the last release][Unreleased]). A pull request with a user-visible change adds its line there.
 
+## [1.16.0] - 2026-11-19
+
+Readiness release: batch callbacks survive a Redis restart, a Redis outage after `perform` no longer fails the job, and more drop-in fixes against Sidekiq 8.1: `CurrentAttributes` in Sidekiq's shape, iterable jobs resume after the last finished item, missing `Capsule`/`Stats`/`JobSet` API, and testing-mode fixes. The dashboard keeps its data through a failed poll and works from the keyboard, and `/v1` answers a Redis outage with 503. [Release notes](docs/changelog/1.16.0.md).
+
 ## [1.15.1] - 2026-11-12
 
 Dashboard polish: no entrance animations, count-up numbers or shimmering placeholders, and the Metrics page fetches its queue history once. The migration guide offers a rolling cutover for stock Sidekiq 8 apps. [Release notes](docs/changelog/1.15.1.md).
@@ -168,7 +172,8 @@ Releases publish to RubyGems through GitHub Actions OIDC trusted publishing, and
 
 First public (pre-1.0) release. [Release notes](docs/changelog/0.0.1.md).
 
-[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.15.1...HEAD
+[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.16.0...HEAD
+[1.16.0]: https://github.com/developerz-ai/wurk/compare/v1.15.1...v1.16.0
 [1.15.1]: https://github.com/developerz-ai/wurk/compare/v1.15.0...v1.15.1
 [1.15.0]: https://github.com/developerz-ai/wurk/compare/v1.14.0...v1.15.0
 [1.14.0]: https://github.com/developerz-ai/wurk/compare/v1.13.0...v1.14.0
