@@ -20,8 +20,7 @@ module Wurk
     # The engine's CSRF model (spec §25.1, Web::SameOrigin): unsafe methods
     # must come from this origin.
     NOT_FOUND_HEADERS = { 'Content-Type' => 'text/plain' }.freeze
-    CROSS_ORIGIN = [403, { 'content-type' => 'application/json; charset=utf-8' }.freeze,
-                    ['{"error":"cross_origin"}'].freeze].freeze
+    CROSS_ORIGIN_BODY = '{"error":"cross_origin"}'
 
     class << self
       # Class-level Rack entry: host middleware (`Wurk::Web.use`), then the
@@ -53,7 +52,10 @@ module Wurk
       end
 
       def dispatch(env)
-        return CROSS_ORIGIN.dup unless SameOrigin.allowed?(env)
+        # Fresh headers each time: host middleware may add to them.
+        unless SameOrigin.allowed?(env)
+          return [403, { 'content-type' => 'application/json; charset=utf-8' }, [CROSS_ORIGIN_BODY]]
+        end
 
         StatsRoutes.serve(env) || dispatch_to_extensions(env) || dashboard_routes.call(env) ||
           [404, NOT_FOUND_HEADERS.dup, ['Not Found']]

@@ -60,6 +60,23 @@ class WebDashboardStandaloneTest < Wurk::Test::UnitCase
     assert_equal '{"error":"cross_origin"}', body.join
   end
 
+  # Rack lets middleware add to a response's headers; a refusal is no exception.
+  def test_host_middleware_can_add_headers_to_a_refusal
+    stamp = Class.new do
+      def initialize(app) = @app = app
+
+      def call(env)
+        status, headers, body = @app.call(env)
+        headers['x-stamp'] = '1'
+        [status, headers, body]
+      end
+    end
+    Wurk::Web.use(stamp)
+    status, headers, = app.call(env('POST', '/api/retries/all/delete'))
+
+    assert_equal [403, '1'], [status, headers['x-stamp']]
+  end
+
   # Plain HTTP on a LAN host sends no Fetch Metadata; the engine's U9 rule
   # (Origin equal to this origin) applies on this mount too.
   def test_a_matching_origin_passes_without_fetch_metadata

@@ -1572,7 +1572,7 @@ asserts upstream's ERB markup through a bare Rack `Sidekiq::Web`
 **Anchor:** [standalone dispatch](../../lib/wurk/web/rack_app.rb#L55-L60),
 [dashboard routes](../../lib/wurk/web/dashboard/routes.rb#L58-L69),
 [same-origin rule](../../lib/wurk/web/same_origin.rb#L25-L30);
-[`WebDashboardStandaloneTest`](../../test/unit/web_dashboard_standalone_test.rb#L108-L118)
+[`WebDashboardStandaloneTest`](../../test/unit/web_dashboard_standalone_test.rb#L120-L130)
 pins client routes answering the shell. Spec: [free §25.1 Entrypoint — Rack call and CSRF](../target/sidekiq-free.md#251-entrypoint) and [§25.4 Routes — built-in dashboard](../target/sidekiq-free.md#254-routes).
 
 ## `Chain#add` honours a class-declared `outer_of` ordering anchor

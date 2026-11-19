@@ -43,7 +43,7 @@
 - entry: '`Sidekiq::Web` outside Rails serves Wurk''s SPA dashboard, not upstream''s ERB pages'
   anchor: 'lib/wurk/web/rack_app.rb#L55-L60'
   fragment: |-
-    return CROSS_ORIGIN.dup unless SameOrigin.allowed?(env)
+    unless SameOrigin.allowed?(env)
 - entry: '`Sidekiq::Web` outside Rails serves Wurk''s SPA dashboard, not upstream''s ERB pages'
   anchor: 'lib/wurk/web/dashboard/routes.rb#L58-L69'
   fragment: |-
@@ -54,7 +54,7 @@
   fragment: |-
     def allowed?(env)
 - entry: '`Sidekiq::Web` outside Rails serves Wurk''s SPA dashboard, not upstream''s ERB pages'
-  anchor: 'test/unit/web_dashboard_standalone_test.rb#L108-L118'
+  anchor: 'test/unit/web_dashboard_standalone_test.rb#L120-L130'
   fragment: |-
     def test_client_routes_get_the_shell_with_the_mount_base
 - entry: '`Chain#add` honours a class-declared `outer_of` ordering anchor'
