@@ -40,47 +40,23 @@
     def drop(job)
       Wurk::Processor::EXPIRED.incr
       Wurk::Metrics::Statsd.increment('jobs.expired', tags: ["class:#{job['class']}"])
-- entry: '`Sidekiq::Web` outside a Rails app routes extensions only'
-  anchor: 'lib/wurk/web/rack_app.rb#L11-L21'
+- entry: '`Sidekiq::Web` outside Rails serves Wurk''s SPA dashboard, not upstream''s ERB pages'
+  anchor: 'lib/wurk/web/rack_app.rb#L55-L60'
   fragment: |-
-    # §25.1): unsafe methods must carry `Sec-Fetch-Site: same-origin`.
-    SAFE_METHODS = %w[GET HEAD OPTIONS TRACE].freeze
-- entry: '`Sidekiq::Web` outside a Rails app routes extensions only'
-  anchor: 'lib/wurk/web/rack_app.rb#L44-L53'
+    return CROSS_ORIGIN.dup unless SameOrigin.allowed?(env)
+- entry: '`Sidekiq::Web` outside Rails serves Wurk''s SPA dashboard, not upstream''s ERB pages'
+  anchor: 'lib/wurk/web/dashboard/routes.rb#L58-L69'
   fragment: |-
-    @standalone_app ||= Authorization.new(method(:dispatch), api_handoff: false)
-- entry: '`Sidekiq::Web` outside a Rails app routes extensions only'
-  anchor: 'lib/wurk/web/rack_app.rb#L55-L64'
+    endpoint, action, params = match(verb, segments(path))
+    return endpoint.call(env, action, params) if endpoint
+- entry: '`Sidekiq::Web` outside Rails serves Wurk''s SPA dashboard, not upstream''s ERB pages'
+  anchor: 'lib/wurk/web/same_origin.rb#L25-L30'
   fragment: |-
-    def safe_request?(env)
-      SAFE_METHODS.include?(env['REQUEST_METHOD']) ||
-        env['HTTP_SEC_FETCH_SITE'] == 'same-origin'
-- entry: '`Sidekiq::Web` outside a Rails app routes extensions only'
-  anchor: 'lib/wurk/web/rack_app.rb#L58-L75'
+    def allowed?(env)
+- entry: '`Sidekiq::Web` outside Rails serves Wurk''s SPA dashboard, not upstream''s ERB pages'
+  anchor: 'test/unit/web_dashboard_standalone_test.rb#L108-L118'
   fragment: |-
-    result = extension_result(ext, env)
-      next unless result
-      return rackify(result) unless result[0] == 404
-- entry: '`Sidekiq::Web` outside a Rails app routes extensions only'
-  anchor: 'config/routes.rb#L9-L16'
-  fragment: |-
-    scope :api, defaults: { format: :json } do
-      get  'meta',             to: 'api#meta'
-- entry: '`Sidekiq::Web` outside a Rails app routes extensions only'
-  anchor: 'config/routes.rb#L126-L144'
-  fragment: |-
-    match 'ext/:name(/*subpath)', to: 'extensions#show', via: %i[get post put patch delete], as: :extension,
-                                  format: false, defaults: { subpath: '' }, constraints: { name: %r{[^/]+} }
-- entry: '`Sidekiq::Web` outside a Rails app routes extensions only'
-  anchor: 'test/unit/web_rack_app_test.rb#L74-L107'
-  fragment: |-
-    def test_get_serves_extension_route_at_its_own_path
-      status, _headers, body = Wurk::Web.call(env_for('GET', '/standalone'))
-- entry: '`Sidekiq::Web` outside a Rails app routes extensions only'
-  anchor: 'test/unit/web_rack_app_test.rb#L112-L150'
-  fragment: |-
-    def test_authorization_denial_is_403_on_get_through_sidekiq_web
-      Sidekiq::Web.configure { |c| c.authorization { |_env, _method, _path| false } }
+    def test_client_routes_get_the_shell_with_the_mount_base
 - entry: '`Chain#add` honours a class-declared `outer_of` ordering anchor'
   anchor: 'lib/wurk/middleware/chain.rb#L70-L94'
   fragment: |-

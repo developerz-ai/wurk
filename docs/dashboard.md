@@ -236,9 +236,28 @@ run on both sides, and anything a host wraps around `Sidekiq::Web` runs first. T
 machine API is not served under this mount; `mount Wurk::Engine` or `mount Wurk::API`
 serves it.
 
-`run Sidekiq::Web` outside Rails serves extension routes and the
-[probe and stats routes](#probe-and-stats-routes) only. Anything else is a 404
-whose body names the fix, plus one WARN in the log.
+## Without Rails: `run Sidekiq::Web`
+
+Outside Rails, `run Sidekiq::Web` serves the whole dashboard from plain Rack: the
+same SPA, JSON API, live stream and profile routes as the engine, the bundle under
+`<mount>/wurk-assets`, registered extension routes, and the
+[probe and stats routes](#probe-and-stats-routes). The same gates run first:
+`Sidekiq::Web.use` middleware, the authorization hook and read-only mode, and the
+same-origin check on every mutation. Sinatra, Roda or a bare `config.ru`:
+
+```ruby
+# config.ru
+require "wurk"
+
+Wurk::Web.use(Rack::Auth::Basic, "Wurk") { |user, pass| user == ENV["WURK_USER"] && pass == ENV["WURK_PASS"] }
+
+map("/sidekiq") { run Sidekiq::Web }
+run MyApp
+```
+
+The live stream holds one server thread per open dashboard tab for up to 30s, capped at
+half the server's threads (`config.web.max_streams` overrides it), so run it on a
+threaded server such as Puma.
 
 ## Probe and stats routes
 

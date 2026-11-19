@@ -84,9 +84,9 @@ export default defineConfig(({ command }) => ({
   ],
   // The build is relative so chunk, preload and font URLs resolve against the
   // URL the bundle is served from, which carries the host's own prefix under
-  // RAILS_RELATIVE_URL_ROOT or a proxy; Wurk::DashboardController makes the
+  // RAILS_RELATIVE_URL_ROOT or a proxy; Wurk::Web::Dashboard::Shell makes the
   // shell's `./` URLs absolute per request. Dev must match
-  // Wurk::Engine::AssetMount::PREFIX (lib/wurk/engine.rb): the dev controller
+  // Wurk::Web::AssetMount::PREFIX (lib/wurk/web/asset_mount.rb): the dev controller
   // fetches the HMR shell from <vite>/wurk-assets/.
   base: command === "build" ? "./" : "/wurk-assets/",
   build: {

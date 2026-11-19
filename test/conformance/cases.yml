@@ -958,7 +958,7 @@
 - id: module.server-flag
   area: module
   behavior: server? reports whether this process is running workers, false in a client process and true in a worker.
-  source: docs/idea/parity-divergences.md#L1859-L1867
+  source: docs/idea/parity-divergences.md#L1850-L1858
   promise: >-
     `Sidekiq.server?` reports whether this process is running workers. It is false in a client process and true in a worker process.
   oracles: [ModuleApiParityTest#test_server_flag]
@@ -1682,7 +1682,7 @@
 - id: logger.context-thread-local
   area: logging
   behavior: The logging context is thread-local and lives under Wurk's own context key.
-  source: docs/idea/parity-divergences.md#L1869-L1877
+  source: docs/idea/parity-divergences.md#L1860-L1868
   promise: >-
     `Sidekiq::Context` stores its thread-local logging context under `Thread.current[:wurk_context]`. A context added on one thread is not visible on another.
   oracles: [LoggerParityTest#test_context_thread_local]

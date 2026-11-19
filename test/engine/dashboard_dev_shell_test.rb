@@ -1,9 +1,10 @@
 # frozen_string_literal: true
 
 require_relative '../engine_test_helper'
+require 'wurk/web/dashboard/shell'
 
 # WURK_VITE_DEV=1 HMR path (issue #181). Vite serves the shell + assets under
-# its `base` (== AssetMount::PREFIX), so the controller must fetch the shell
+# its `base` (== AssetMount::PREFIX), so the shell must be fetched
 # from that base (not the server root) and repoint the shell's base-relative
 # asset URLs at the Vite origin, since the page is served from the host app.
 # These cover the URL target + rewrite without needing a running Vite server.
@@ -11,13 +12,13 @@ class DashboardDevShellTest < Wurk::Test::EngineCase
   parallelize_me!
 
   def test_vite_dev_url_targets_the_asset_base_not_root
-    assert_equal "#{Wurk::Engine::AssetMount::PREFIX}/", Wurk::DashboardController::VITE_ASSET_BASE
-    assert_equal 'http://localhost:5173/wurk-assets/', with_vite_port(nil) { Wurk::DashboardController.vite_dev_url }
+    assert_equal "#{Wurk::Web::AssetMount::PREFIX}/", Wurk::Web::Dashboard::Shell.vite_asset_base
+    assert_equal 'http://localhost:5173/wurk-assets/', with_vite_port(nil) { Wurk::Web::Dashboard::Shell.vite_dev_url }
   end
 
   # bin/dev documents VITE_PORT and Vite binds it, so the shell fetch must follow it.
   def test_vite_dev_url_follows_vite_port
-    assert_equal 'http://localhost:5199/wurk-assets/', with_vite_port('5199') { Wurk::DashboardController.vite_dev_url }
+    assert_equal 'http://localhost:5199/wurk-assets/', with_vite_port('5199') { Wurk::Web::Dashboard::Shell.vite_dev_url }
   end
 
   def with_vite_port(port)
@@ -46,6 +47,6 @@ class DashboardDevShellTest < Wurk::Test::EngineCase
   private
 
   def rewrite(html)
-    Wurk::DashboardController.new.send(:rewrite_dev_asset_urls, html)
+    Wurk::Web::Dashboard::Shell.new(nil, asset_base: nil).send(:rewrite_dev_asset_urls, html)
   end
 end

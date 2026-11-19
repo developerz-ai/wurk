@@ -10,9 +10,9 @@ module Wurk
     # JobRecord, SortedEntry — so the API and the dashboard cannot report
     # different numbers for the same Redis. Only the shape differs, and it
     # differs on purpose: the dashboard's serializers
-    # (app/controllers/wurk/api/serializers.rb) answer to the SPA and change
+    # (lib/wurk/web/dashboard/serializers.rb) answer to the SPA and change
     # whenever it does, and they reach into Wurk::Web for host-registered
-    # extension rows — an engine dependency the API cannot take, because it
+    # extension rows — a dashboard dependency the API cannot take, because it
     # also runs standalone. Under /v1 these field names are a contract.
     module Serializers
       # Three missed beats at {Wurk::Heartbeat::BEAT_PAUSE} cadence, which is

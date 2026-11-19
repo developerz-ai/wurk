@@ -2,27 +2,26 @@
 
 require_relative 'extension'
 require_relative 'pool_scope'
+require_relative 'same_origin'
 require_relative 'stats_routes'
 
 module Wurk
   class Web
     # Upstream-compatible class-level Rack surface (#204): Sidekiq apps do
     # `run Sidekiq::Web`, `mount Sidekiq::Web => "/sidekiq"`, and rack-test
-    # ecosystem suites call `Sidekiq::Web.call(env)` directly. This entry serves
-    # the machine-readable routes (StatsRoutes) and the registered third-party
-    # Web extensions (#187's renderer) under their own route paths. Everything
-    # else is the dashboard, which is the engine's: in a booted Rails app the
-    # request goes there, through the engine's own copy of the gates below, so
-    # the stock install line shows the dashboard. Without an engine those paths
-    # 404 rather than half-serve the SPA.
+    # ecosystem suites call `Sidekiq::Web.call(env)` directly. In a booted Rails
+    # app the dashboard is the engine's, so those paths go there, through the
+    # engine's own copy of the gates below. Without Rails this entry serves it
+    # all itself: the machine-readable routes (StatsRoutes), the registered
+    # third-party Web extensions (#187's renderer) under their own route paths,
+    # and the dashboard — shell, bundle, JSON API, SSE and profiles — through
+    # Dashboard::Routes, the engine's actions over plain Rack.
     #
-    # Same CSRF model as upstream Sidekiq 8 and ExtensionsController (spec
-    # §25.1): unsafe methods must carry `Sec-Fetch-Site: same-origin`.
-    SAFE_METHODS = %w[GET HEAD OPTIONS TRACE].freeze
+    # The engine's CSRF model (spec §25.1, Web::SameOrigin): unsafe methods
+    # must come from this origin.
     NOT_FOUND_HEADERS = { 'Content-Type' => 'text/plain' }.freeze
-    NO_ENGINE_FIX = 'Wurk serves its dashboard from its Rails engine, so this Rack app answers only ' \
-                    'routes of registered Web extensions. Mount Sidekiq::Web or Wurk::Engine in a ' \
-                    'Rails app to get the dashboard.'
+    CROSS_ORIGIN = [403, { 'content-type' => 'application/json; charset=utf-8' }.freeze,
+                    ['{"error":"cross_origin"}'].freeze].freeze
 
     class << self
       # Class-level Rack entry: host middleware (`Wurk::Web.use`), then the
@@ -54,19 +53,25 @@ module Wurk
       end
 
       def dispatch(env)
-        return [403, NOT_FOUND_HEADERS.dup, ['Forbidden']] unless safe_request?(env)
+        return CROSS_ORIGIN.dup unless SameOrigin.allowed?(env)
 
-        StatsRoutes.serve(env) || dispatch_to_extensions(env)
+        StatsRoutes.serve(env) || dispatch_to_extensions(env) || dashboard_routes.call(env) ||
+          [404, NOT_FOUND_HEADERS.dup, ['Not Found']]
       end
 
-      def safe_request?(env)
-        SAFE_METHODS.include?(env['REQUEST_METHOD']) ||
-          env['HTTP_SEC_FETCH_SITE'] == 'same-origin'
+      # Loaded on the first standalone request: a Rails app never needs it, and
+      # loading it with Wurk::Web would close a require cycle through Web::Search.
+      def dashboard_routes
+        @dashboard_routes ||= begin
+          require_relative 'dashboard/routes'
+          Dashboard::Routes
+        end
       end
 
       # First extension whose routes answer the path wins; a per-extension
       # "no such route" 404 keeps scanning so extensions can't shadow each
-      # other, and is returned only when nothing else matched.
+      # other, and is returned only when nothing else matched and the path is
+      # one an extension declares. nil hands the path to the dashboard.
       def dispatch_to_extensions(env)
         not_found = nil
         config.extensions.each do |ext|
@@ -76,16 +81,7 @@ module Wurk
 
           not_found ||= result
         end
-        routed = not_found && Extension::Renderer.route?(env['REQUEST_METHOD'], env['PATH_INFO'].to_s)
-        rackify(routed ? not_found : no_dashboard_here)
-      end
-
-      def no_dashboard_here
-        unless @no_engine_warned
-          @no_engine_warned = true
-          ::Wurk.logger.warn { NO_ENGINE_FIX }
-        end
-        [404, NOT_FOUND_HEADERS.dup, NO_ENGINE_FIX]
+        rackify(not_found) if not_found && Extension::Renderer.route?(env['REQUEST_METHOD'], env['PATH_INFO'].to_s)
       end
 
       def extension_result(ext, env)

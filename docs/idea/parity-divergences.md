@@ -696,7 +696,7 @@ CAS release, rather than waiting out the TTL.
 
 **Why:** one bad payload must not block the rest of a bulk action or lose the entry it failed on.
 
-**Anchor:** `app/controllers/wurk/api_controller.rb`, `lib/wurk/job_set.rb`.
+**Anchor:** `lib/wurk/web/dashboard/api_actions.rb`, `lib/wurk/job_set.rb`.
 
 ## Dashboard job-set HTTP request shapes differ from Sidekiq Web
 
@@ -747,9 +747,9 @@ particular content type.
 
 **Anchor:** [Wurk route scope](../../config/routes.rb#L15) and
 [job-set routes](../../config/routes.rb#L39-L50),
-[command whitelists](../../app/controllers/wurk/api_controller.rb#L43-L48),
-[single/all dispatch](../../app/controllers/wurk/api_controller.rb#L110-L148),
-[bulk parameter lookup and rejection](../../app/controllers/wurk/api_controller.rb#L416-L431),
+[command whitelists](../../lib/wurk/web/dashboard/api_actions.rb#L40-L45),
+[single/all dispatch](../../lib/wurk/web/dashboard/api_actions.rb#L110-L148),
+[bulk parameter lookup and rejection](../../lib/wurk/web/dashboard/api_actions.rb#L411-L426),
 [frontend key builder](../../frontend/src/hooks/useJobSetActions.ts#L25-L30),
 [single/bulk/all requests](../../frontend/src/hooks/useJobSetActions.ts#L48-L64),
 [JSON encoding](../../frontend/src/http.ts#L33-L41), and
@@ -1110,11 +1110,11 @@ gem that reads `Sidekiq::Pro::VERSION` raises `NameError` and must gate on
 (`config/routes.rb:15,57-58`). The action is selected by the path:
 `ApiController#quiet_process` calls `signal_processes(:quiet!)` and
 `#stop_process` calls `signal_processes(:stop!)`
-(`app/controllers/wurk/api_controller.rb:192-193`). The helper reads only
+(`lib/wurk/web/dashboard/api_actions.rb:186-187`). The helper reads only
 `identity`: absent or empty, or `"all"`, targets every live non-embedded
 process; a named identity targets that process. An unknown identity returns
 404, and a named embedded process is not signalled and returns count 0
-(`app/controllers/wurk/api_controller.rb:467-478`). It does not select the
+(`lib/wurk/web/dashboard/api_actions.rb:457-468`). It does not select the
 action using `quiet` or `stop` request parameters.
 
 **Spec:** free [§25.4](../target/sidekiq-free.md#254-routes) specifies
@@ -1132,7 +1132,7 @@ or a compatibility handler; it does not infer unspecified flag semantics.
 
 **Anchor:** free §25.4 ([free §25.4 Routes — `POST /busy`](../target/sidekiq-free.md#254-routes));
 `config/routes.rb:15,65-70`;
-`app/controllers/wurk/api_controller.rb:192-193,467-478`
+`lib/wurk/web/dashboard/api_actions.rb:186-187,457-468`
 (`quiet_process`, `stop_process`, `signal_processes`).
 
 ## `Sidekiq.redis` retries a refused connect with backoff
@@ -1195,19 +1195,19 @@ a multi-million-entry set; the cursor keeps a large filtered sweep going
 without that. Without `?substr=`, `all/*` still acts on the whole set as
 upstream does.
 
-**Anchor:** [`Wurk::Api::Pagination`](../../app/controllers/wurk/api/pagination.rb)
+**Anchor:** [`Wurk::Api::Pagination`](../../lib/wurk/web/dashboard/pagination.rb)
 (`match?`, `walk`, `matching`), `ApiController#sweep_matching` and `#batches`
-(`app/controllers/wurk/api_controller.rb`),
+(`lib/wurk/web/dashboard/api_actions.rb`),
 [`BatchSet#tagged_snapshot`](../../lib/wurk/batch_set.rb);
 `test/engine/api_filters_test.rb`.
 
 ## Dashboard and web extension differences
 
-**Wurk:** only `POST /profiles/:key` uploads a profile (same-origin, refused in read-only mode); `GET` follows an existing upload or answers 405 (Sidekiq uploads on any GET); every `/profiles/:key` route 404s a key that is not a live member of the `profiles` ZSET (Sidekiq reads and writes whatever key the URL names); an engine mutation without `Sec-Fetch-Site` is accepted when Origin (else Referer) matches the request's own scheme, host and port, and refused when neither header is present (owner decision U9; Sidekiq refuses it); extension `redirect_to` inside the SPA falls back to the extension root for off-site targets (the SPA loads extensions with `fetch`, which cannot follow cross-origin redirects); `reload_page` inside the SPA goes to the extension index; `Sidekiq::Web.views` is an accepted, ignored array; read-only mode answers TRACE with 403 on the standalone mount; the health server closes connections past 16 concurrent unanswered.
+**Wurk:** only `POST /profiles/:key` uploads a profile (same-origin, refused in read-only mode); `GET` follows an existing upload or answers 405 (Sidekiq uploads on any GET); every `/profiles/:key` route 404s a key that is not a live member of the `profiles` ZSET (Sidekiq reads and writes whatever key the URL names); a mutation without `Sec-Fetch-Site` (on either mount) is accepted when Origin (else Referer) matches the request's own scheme, host and port, and refused when neither header is present (owner decision U9; Sidekiq refuses it); extension `redirect_to` inside the SPA falls back to the extension root for off-site targets (the SPA loads extensions with `fetch`, which cannot follow cross-origin redirects); `reload_page` inside the SPA goes to the extension index; `Sidekiq::Web.views` is an accepted, ignored array; read-only mode answers TRACE with 403 on the standalone mount; the health server closes connections past 16 concurrent unanswered.
 
 **Why:** cross-site GETs must not trigger third-party uploads; the rest follow from the SPA architecture.
 
-**Anchor:** `app/controllers/wurk/profiles_controller.rb`, `lib/wurk/web/extension.rb`, `lib/wurk/health.rb`.
+**Anchor:** `lib/wurk/web/dashboard/profile_actions.rb`, `lib/wurk/web/same_origin.rb`, `lib/wurk/web/extension.rb`, `lib/wurk/health.rb`.
 
 ## A job whose encrypted argument cannot be decrypted goes straight to the dead set
 
@@ -1234,7 +1234,7 @@ upstream does.
 block, relative to whatever mount the host chose (`config/routes.rb:15,21`;
 the dummy app mounts the engine at `/wurk`, `test/dummy/config/routes.rb:10`).
 `ApiController#delete_queue_job` reads `params[:jid].to_s` and calls
-`Wurk::Queue#delete_job(jid)` (`app/controllers/wurk/api_controller.rb:94-102`):
+`Wurk::Queue#delete_job(jid)` (`lib/wurk/web/dashboard/api_actions.rb:88-96`):
 a matched jid answers `{ok: true, deleted: true}`; an unmatched one answers
 404 `{error: 'unknown job'}`. The supported request form is
 `POST <mount>/api/queues/<name>/delete` with a `jid` parameter — the SolidJS
@@ -1258,13 +1258,13 @@ leaves `params[:jid]` blank, so `delete_job('')` raises
 `app/controllers/wurk/application_controller.rb:20`, class list at
 `lib/wurk/configuration.rb:122`) — an unhandled 500, not the
 `unknown job` 404, which is the unmatched-jid branch
-(`app/controllers/wurk/api_controller.rb:94-102`) and is reachable only when a
+(`lib/wurk/web/dashboard/api_actions.rb:88-96`) and is reachable only when a
 jid was supplied. The endpoint is the SolidJS SPA's wire contract, not
 upstream's ERB web. This entry records the divergence; it is not a sign-off
 to add `key_val` support.
 
 **Anchor:** free §25.4 ([free §25.4 Routes — `POST /queues/:name/delete`](../target/sidekiq-free.md#254-routes));
-`config/routes.rb:15,21`; `app/controllers/wurk/api_controller.rb:94-102`;
+`config/routes.rb:15,21`; `lib/wurk/web/dashboard/api_actions.rb:88-96`;
 `lib/wurk/api/fast.rb:20-31`;
 `app/controllers/wurk/application_controller.rb:20`;
 `lib/wurk/configuration.rb:122`; `frontend/src/pages/Queues.tsx:81-88`;
@@ -1547,48 +1547,33 @@ unchanged.
 **Anchor:** `lib/wurk/leader.rb:40`, `lib/wurk/leader.rb:120`,
 `lib/wurk/leader.rb:330-333`; Ent §6 ([Ent §6 Leader Election — best-effort lock, no user fencing token](../target/sidekiq-ent.md#6-leader-election)).
 
-## `Sidekiq::Web` outside a Rails app routes extensions only
+## `Sidekiq::Web` outside Rails serves Wurk's SPA dashboard, not upstream's ERB pages
 
 **Wurk:** inside a booted Rails app, `Sidekiq::Web.call(env)` serves registered
-extension routes at their own paths, as a bare page without upstream's layout, and
-hands every other path to `Wurk::Engine`, which runs its own `Wurk::Web.use` chain,
-authorization hook and read-only gate. `mount Sidekiq::Web` therefore shows the
-dashboard. Outside Rails there is no engine: `run Sidekiq::Web` dispatches only
-registered Web extensions, and does not provide built-in routes such as `GET /`,
-`/busy`, `/queues`, or `/retries`. After host middleware, authorization, and
-read-only gates allow a request through, an unmatched safe-method path returns 404
-with a body naming the fix, and logs one WARN per process. Safe methods are `GET`,
-`HEAD`, `OPTIONS`, and `TRACE`; unsafe requests reaching the dispatcher without
-`Sec-Fetch-Site: same-origin` return 403. Supplying that header permits routing, not
-automatic success or a bypass of the outer gates.
+extension routes at their own paths and hands every other path to `Wurk::Engine`.
+Outside Rails, `run Sidekiq::Web` serves the same dashboard the engine does:
+the SPA shell at every client route (`/`, `/busy`, `/queues`, `/retries`, ...),
+its JSON API and SSE stream under `/api`, the profile routes, and the
+precompiled bundle under `<mount>/wurk-assets`, through the engine's own
+actions (`Wurk::Web::Dashboard`). Registered extension routes and upstream's
+probe and stats routes (`HEAD /`, `GET /stats`, `GET /stats/queues`,
+`GET /dashboard/stats`) are served too. Host middleware, the authorization hook
+and the read-only gate run first, and unsafe methods pass the engine's
+same-origin rule (`Wurk::Web::SameOrigin`).
 
-**Spec:** free [§25.1](../target/sidekiq-free.md#251-entrypoint) exposes
-`run Sidekiq::Web` through the class-level `call(env)` and specifies the CSRF
-check. Free [§25.4](../target/sidekiq-free.md#254-routes) lists the built-in
-routes, including the dashboard, busy, queues, and retries pages, as part of
-that Web surface.
+**Spec:** free [§25.4](../target/sidekiq-free.md#254-routes) lists the built-in
+routes as server-rendered ERB pages.
 
-**Why:** the dashboard is the engine's SPA and JSON API, and half-serving them
-without Rails would be worse than a clear 404. A gem suite that asserts upstream's
-ERB home page through a bare Rack `Sidekiq::Web` (sidekiq-failures' `can display
-home`) cannot pass. Upstream's probe and stats routes (`HEAD /`, `GET /stats`,
-`GET /stats/queues`, `GET /dashboard/stats`) are served on every mount, this one
-included (`lib/wurk/web/stats_routes.rb`).
+**Why:** the dashboard is one SolidJS SPA on every mount; the page routes are
+its client routes, backed by the JSON API rather than ERB. A gem suite that
+asserts upstream's ERB markup through a bare Rack `Sidekiq::Web`
+(sidekiq-failures' `can display home`) cannot pass.
 
-**Anchor:** [standalone scope and safe methods](../../lib/wurk/web/rack_app.rb#L11-L21),
-[outer gates](../../lib/wurk/web/rack_app.rb#L44-L53),
-[CSRF check](../../lib/wurk/web/rack_app.rb#L55-L64), and
-[extension dispatch](../../lib/wurk/web/rack_app.rb#L58-L75);
-[engine root and JSON routes](../../config/routes.rb#L9-L16) and
-[extension embedding and SPA catch-all](../../config/routes.rb#L126-L144).
-Existing routing tests in
-[`WebRackAppTest`](../../test/unit/web_rack_app_test.rb#L74-L107) pin
-`test_get_serves_extension_route_at_its_own_path`,
-`test_unsafe_method_without_same_origin_header_is_denied`,
-`test_unsafe_method_with_same_origin_header_routes`, and
-`test_unknown_path_is_404`;
-[authorization and read-only tests](../../test/unit/web_rack_app_test.rb#L112-L150)
-pin the outer gates. Spec: [free §25.1 Entrypoint — Rack call and CSRF](../target/sidekiq-free.md#251-entrypoint) and [§25.4 Routes — built-in dashboard](../target/sidekiq-free.md#254-routes).
+**Anchor:** [standalone dispatch](../../lib/wurk/web/rack_app.rb#L55-L60),
+[dashboard routes](../../lib/wurk/web/dashboard/routes.rb#L58-L69),
+[same-origin rule](../../lib/wurk/web/same_origin.rb#L25-L30);
+[`WebDashboardStandaloneTest`](../../test/unit/web_dashboard_standalone_test.rb#L108-L118)
+pins client routes answering the shell. Spec: [free §25.1 Entrypoint — Rack call and CSRF](../target/sidekiq-free.md#251-entrypoint) and [§25.4 Routes — built-in dashboard](../target/sidekiq-free.md#254-routes).
 
 ## `Chain#add` honours a class-declared `outer_of` ordering anchor
 

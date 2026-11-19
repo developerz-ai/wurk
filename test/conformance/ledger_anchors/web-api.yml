@@ -9,18 +9,18 @@
     post 'retries',          to: 'api#retries_bulk',   as: :api_retries_bulk
     post 'retries/all/:cmd', to: 'api#retries_all',    as: :api_retries_all
 - entry: "Dashboard job-set HTTP request shapes differ from Sidekiq Web"
-  anchor: "app/controllers/wurk/api_controller.rb#L43-L48"
+  anchor: "lib/wurk/web/dashboard/api_actions.rb#L40-L45"
   fragment: |-
     RETRY_ACTIONS     = { 'retry' => :retry, 'delete' => :delete, 'kill' => :kill }.freeze
     SCHEDULED_ACTIONS = { 'delete' => :delete, 'add_to_queue' => :add_to_queue }.freeze
     DEAD_ACTIONS      = { 'retry' => :retry, 'delete' => :delete }.freeze
 - entry: "Dashboard job-set HTTP request shapes differ from Sidekiq Web"
-  anchor: "app/controllers/wurk/api_controller.rb#L110-L148"
+  anchor: "lib/wurk/web/dashboard/api_actions.rb#L110-L148"
   fragment: |-
     def retry_job    = single_entry_action(::Wurk::RetrySet.new, RETRY_ACTIONS, params[:cmd])
     def retries_bulk = bulk_entry_action(::Wurk::RetrySet.new, RETRY_ACTIONS)
 - entry: "Dashboard job-set HTTP request shapes differ from Sidekiq Web"
-  anchor: "app/controllers/wurk/api_controller.rb#L416-L431"
+  anchor: "lib/wurk/web/dashboard/api_actions.rb#L411-L426"
   fragment: |-
     method = actions[params[:cmd].to_s]
     return render(json: { error: 'unknown action' }, status: :bad_request) unless method
@@ -51,12 +51,12 @@
     post 'busy/quiet', to: 'api#quiet_process', as: :api_quiet_process
     post 'busy/stop',  to: 'api#stop_process',  as: :api_stop_process
 - entry: "Busy-control HTTP request-shape parity is unsupported"
-  anchor: "app/controllers/wurk/api_controller.rb#L192-L193"
+  anchor: "lib/wurk/web/dashboard/api_actions.rb#L186-L187"
   fragment: |-
     def quiet_process = signal_processes(:quiet!)
     def stop_process  = signal_processes(:stop!)
 - entry: "Busy-control HTTP request-shape parity is unsupported"
-  anchor: "app/controllers/wurk/api_controller.rb#L467-L478"
+  anchor: "lib/wurk/web/dashboard/api_actions.rb#L457-L468"
   fragment: |-
     identity = params[:identity].to_s
     if identity.empty? || identity == 'all'
@@ -70,7 +70,7 @@
   fragment: |-
     post 'queues/:name/delete', to: 'api#delete_queue_job', as: :api_delete_queue_job, constraints: { name: %r{[^/]+} }
 - entry: "Queue job-delete takes `jid`, not the spec's `key_val`"
-  anchor: "app/controllers/wurk/api_controller.rb#L94-L102"
+  anchor: "lib/wurk/web/dashboard/api_actions.rb#L88-L96"
   fragment: |-
     def delete_queue_job
       jid = params[:jid].to_s

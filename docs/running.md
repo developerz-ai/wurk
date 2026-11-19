@@ -134,6 +134,8 @@ fine. Fixed in 1.3.1; no `require "wurk/rails"` in routes.rb needed.)
 Wurk's standalone runners pull in no Rails code of their own, so they work in any
 Ruby app — a Sinatra service, a plain Rack app, a CLI daemon, whatever. You point
 `-r` at a single Ruby file that loads your code and defines your jobs.
+The dashboard needs no Rails either: `run Sidekiq::Web` in a `config.ru` serves it
+([Dashboard → Without Rails](dashboard.md#without-rails-run-sidekiqweb)).
 
 **1. A boot file that requires your app and defines jobs:**
 

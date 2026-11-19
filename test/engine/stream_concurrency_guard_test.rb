@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative '../engine_test_helper'
+require 'wurk/web/dashboard/stream_concurrency_guard'
 
 # Pins the self-healing half of the SSE concurrency cap (#101). A stream whose
 # thread is killed mid-flight never runs the `ensure` in #with_stream_slot, so
@@ -10,7 +11,7 @@ require_relative '../engine_test_helper'
 class StreamConcurrencyGuardTest < Wurk::Test::EngineCase
   parallelize_me!
 
-  GUARD = ::Wurk::StreamConcurrencyGuard
+  GUARD = ::Wurk::Web::Dashboard::StreamConcurrencyGuard
   SERVER_THREADS = 8
   CAP = SERVER_THREADS / 2
 
