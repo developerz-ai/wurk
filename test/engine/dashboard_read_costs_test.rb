@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative '../engine_test_helper'
+require 'wurk/web/dashboard/stats_tick'
 require_relative '../../bench/algo/support'
 
 # What the dashboard's polled and paged reads cost Redis, and that collapsing
@@ -19,14 +20,14 @@ class DashboardReadCostsTest < Wurk::Test::EngineCase
     super
     @pool = ::Wurk::RedisPool.new(size: 2, url: ::Wurk::Test.redis_url, middlewares: [AlgoBench::Tally])
     @pool.with { |c| ::Wurk::Test.flush!(c) }
-    ::Wurk::SseStreaming::SHARED_TICK.clear!
+    ::Wurk::Web::Dashboard::StatsTick::SHARED.clear!
     ::Wurk::Web::Enterprise::Limits.reset_probe!
   end
 
   def teardown
     @pool.with { |c| ::Wurk::Test.flush!(c) }
     @pool.disconnect!
-    ::Wurk::SseStreaming::SHARED_TICK.clear!
+    ::Wurk::Web::Dashboard::StatsTick::SHARED.clear!
     ::Wurk::Web::Enterprise::Limits.reset_probe!
   ensure
     super

@@ -1,1 +1,9 @@
 # Unreleased
+
+### Added
+
+- **The dashboard runs without Rails.** `run Sidekiq::Web` (or `map("/sidekiq") { run Sidekiq::Web }`) in a Sinatra, Roda or plain `config.ru` app now serves the full dashboard: the SPA at every page, its JSON API and live stream, profiles, extension tabs and the bundle under `<mount>/wurk-assets`. It answered only extension and stats routes before, and 404'd the rest. It runs the engine's own actions, and the same gates run first: `Sidekiq::Web.use` middleware, the authorization hook, read-only mode and the same-origin check. See `docs/dashboard.md` ("Without Rails").
+
+### Changed
+
+- **The standalone mount checks same-origin mutations the way the engine does.** Without `Sec-Fetch-Site` (a dashboard over plain HTTP on a LAN host), a mutation is accepted when its `Origin` (else `Referer`) is the request's own scheme, host and port, as the engine has since 1.15. A refused one answers 403 `{"error":"cross_origin"}`, the engine's body, where it answered a plain-text `Forbidden`.

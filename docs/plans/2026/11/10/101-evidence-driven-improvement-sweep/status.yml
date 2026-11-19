@@ -5,7 +5,7 @@ created_by: sebi
 worked_by: "sebi (Claude Code)"
 owner: sebi
 percent: 70
-current_focus: "Left: 09 W7 (owner design sign-off). 12 T4 (bench-vs-sidekiq.yml nightly) and 06 P6 (bench/command_count.rb heartbeat section) shipped. Soak: nightly 1h CI soak (soak.yml) replaces the local 24h run, which left no result; read verdicts with `gh run list --workflow soak.yml`."
+current_focus: "Nothing open. 09 W7 (dashboard without Rails) shipped on owner sign-off 2026-11-19: `run Sidekiq::Web` serves the full dashboard through Wurk::Web::Dashboard. 12 T4 and 06 P6 shipped; the nightly soak (soak.yml) replaces the local 24h run."
 slices:
   - file: 01-ci-green-doc-truth.md
     status: in_progress

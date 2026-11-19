@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative '../engine_test_helper'
+require 'wurk/web/dashboard/stream_concurrency_guard'
 
 # Drives Wurk::ApiController against the booted dummy app. The dashboard
 # wire-shape is the contract for every frontend page (Task #49+); these
@@ -659,16 +660,16 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
   # Retry-After instead of pinning another Puma thread. Slots are filled/freed
   # directly so the assertion is deterministic (no real concurrency needed).
   def test_stream_503_when_at_concurrent_cap
-    cap = ::Wurk::StreamConcurrencyGuard.max_streams
-    cap.times { ::Wurk::StreamConcurrencyGuard.acquire }
+    cap = ::Wurk::Web::Dashboard::StreamConcurrencyGuard.max_streams
+    cap.times { ::Wurk::Web::Dashboard::StreamConcurrencyGuard.acquire }
 
     get '/wurk/api/stream?max_duration=0&tick=0'
 
     assert_equal 503, last_response.status
-    assert_equal ::Wurk::StreamConcurrencyGuard::RETRY_AFTER_SECONDS.to_s,
+    assert_equal ::Wurk::Web::Dashboard::StreamConcurrencyGuard::RETRY_AFTER_SECONDS.to_s,
                  last_response.headers['Retry-After']
   ensure
-    cap.times { ::Wurk::StreamConcurrencyGuard.release }
+    cap.times { ::Wurk::Web::Dashboard::StreamConcurrencyGuard.release }
   end
 
   private

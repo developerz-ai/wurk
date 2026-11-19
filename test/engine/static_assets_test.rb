@@ -3,7 +3,7 @@
 require_relative '../engine_test_helper'
 require 'zlib'
 
-# Verifies that Wurk::Engine::AssetMount is wired to serve precompiled SPA
+# Verifies that Wurk::Web::AssetMount is wired to serve precompiled SPA
 # assets from vendor/assets/dashboard. Tests hashed filename serving and
 # manifest validation.
 class StaticAssetsTest < Wurk::Test::EngineCase
@@ -49,13 +49,13 @@ class StaticAssetsTest < Wurk::Test::EngineCase
   def test_asset_mount_middleware_is_configured
     middleware = Rails.application.middleware
 
-    mount_index = middleware.each_with_index.find { |m, _i| m.klass == ::Wurk::Engine::AssetMount }&.last
+    mount_index = middleware.each_with_index.find { |m, _i| m.klass == ::Wurk::Web::AssetMount }&.last
     static_index = middleware.each_with_index.find { |m, _i| m.klass == ::ActionDispatch::Static }&.last
 
-    assert mount_index, 'Wurk::Engine::AssetMount middleware should be configured'
+    assert mount_index, 'Wurk::Web::AssetMount middleware should be configured'
     assert static_index, '::ActionDispatch::Static middleware should be configured'
     assert_operator mount_index, :<, static_index,
-                    'Wurk::Engine::AssetMount should be inserted before ActionDispatch::Static'
+                    'Wurk::Web::AssetMount should be inserted before ActionDispatch::Static'
   end
 
   # Regression for #37: Rack::Static didn't strip the URL prefix before

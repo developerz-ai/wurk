@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative '../engine_test_helper'
+require 'wurk/web/dashboard/stats_tick'
 
 # Proves a Redis blip surfacing inside an engine action renders as a
 # structured, retryable signal instead of Rails' generic 500 error page
@@ -19,7 +20,7 @@ class RedisUnavailableTest < Wurk::Test::EngineCase
   # never reaches the raising serializer.
   def setup
     super
-    ::Wurk::SseStreaming::SHARED_TICK.clear!
+    ::Wurk::Web::Dashboard::StatsTick::SHARED.clear!
   end
 
   def test_json_action_returns_structured_503_on_redis_error

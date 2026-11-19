@@ -13,6 +13,8 @@ require 'wurk/web/extension'
 # extension routes at their own paths (no engine), with upstream's
 # Sec-Fetch-Site CSRF model and Config's hash-style settings.
 class WebRackAppTest < Wurk::Test::UnitCase
+  INDEX = File.expand_path('../../vendor/assets/dashboard/index.html', __dir__)
+
   # Mutates the process-global Wurk::Web.config singleton (middlewares,
   # bracket options) — cannot run in parallel with classes touching it.
 
@@ -91,7 +93,7 @@ class WebRackAppTest < Wurk::Test::UnitCase
     status, _headers, body = Wurk::Web.call(env_for('POST', '/standalone/poke'))
 
     assert_equal 403, status
-    assert_includes body.join, 'Forbidden'
+    assert_equal '{"error":"cross_origin"}', body.join, 'the engine answers this body; the SPA toast reads it'
   end
 
   def test_unsafe_method_with_same_origin_header_routes
@@ -103,22 +105,35 @@ class WebRackAppTest < Wurk::Test::UnitCase
   end
 
   # A process of its own: elsewhere in the suite Rails may have booted in this one,
-  # and then these paths belong to the engine.
-  def test_outside_rails_a_dashboard_path_is_a_404_naming_the_fix_once
+  # and then these paths belong to the engine. Without Rails, `run Sidekiq::Web`
+  # serves the whole dashboard: the shell for client routes, the JSON API and
+  # the bundle, while an extension's own route still wins.
+  def test_outside_rails_the_dashboard_is_served
+    skip 'dashboard build missing (run `bin/rake frontend:build`)' unless File.exist?(INDEX)
+
     script = <<~RUBY
       require 'wurk'
       require 'rack'
-      log = StringIO.new
-      Wurk.logger = Logger.new(log)
+      require 'rack/mock'
       module OneRoute
         def self.registered(app) = app.get('/one') { 'one' }
       end
       Wurk::Web.register(OneRoute, name: 'one', tab: 'One', index: 'one')
-      responses = %w[/nope /retries].map do |path|
-        status, _headers, body = Wurk::Web.call(Rack::MockRequest.env_for(path))
-        [status, body.join.include?('Wurk::Engine')]
-      end
-      print JSON.generate(responses: responses, warnings: log.string.scan('Mount Sidekiq::Web or Wurk::Engine').size)
+      app = Rack::URLMap.new('/sidekiq' => Sidekiq::Web)
+      call = ->(path, accept = 'text/html') {
+        status, headers, body = app.call(Rack::MockRequest.env_for(path, 'HTTP_ACCEPT' => accept))
+        [status, headers['content-type'].to_s, body.to_enum(:each).to_a.join]
+      }
+      shell = call.('/sidekiq/retries')
+      meta = call.('/sidekiq/api/meta', 'application/json')
+      asset = shell[2][%r{src="(/sidekiq/wurk-assets/[^"]+.js)"}, 1]
+      print JSON.generate(
+        shell: [shell[0], shell[2].include?('window.__WURK_BASE__ = "/sidekiq"')],
+        meta: [meta[0], JSON.parse(meta[2])['version']],
+        asset: asset && call.(asset, '*/*')[0],
+        extension: call.('/sidekiq/one')[2],
+        unknown_api: call.('/sidekiq/api/v1/queues')[0]
+      )
     RUBY
     env = { 'REDIS_URL' => Wurk::Test.redis_url, 'COVERAGE' => nil }
     out, status = Open3.capture2e(env, ::RbConfig.ruby, '-I', File.expand_path('../../lib', __dir__), '-e', script)
@@ -126,8 +141,11 @@ class WebRackAppTest < Wurk::Test::UnitCase
     assert_predicate status, :success?, out
     result = JSON.parse(out.lines.last)
 
-    assert_equal [[404, true], [404, true]], result['responses']
-    assert_equal 1, result['warnings']
+    assert_equal [200, true], result['shell']
+    assert_equal [200, Wurk::VERSION], result['meta']
+    assert_equal 200, result['asset']
+    assert_equal 'one', result['extension']
+    assert_equal 404, result['unknown_api']
   end
 
   # Upstream 8.1.5 denies these too, whatever c[:csrf] says. A gem's test posture

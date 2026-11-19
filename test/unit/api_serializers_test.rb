@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require_relative '../test_helper'
-require_relative '../../app/controllers/wurk/api/serializers'
+require_relative '../../lib/wurk/web/dashboard/serializers'
 
 # Custom job-info rows (spec §25.2) flow from the host-registered
 # Wurk::Web.config.custom_job_info_rows into the job-record JSON the SPA renders

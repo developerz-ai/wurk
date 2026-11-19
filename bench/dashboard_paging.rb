@@ -30,6 +30,7 @@ require 'zlib'
 require_relative 'algo/support'
 require_relative '../test/dummy/config/environment'
 require 'rack/mock'
+require 'wurk/web/dashboard/pagination'
 
 PAGE_SIZE = Integer(ENV.fetch('WURK_BENCH_PAGE_SIZE', '25'))
 DEEP_PAGE = Wurk::Api::Pagination::MAX_PAGE - 1

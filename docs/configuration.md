@@ -280,7 +280,8 @@ is the drop-in alias and is checked second (native wins).
 | `WURK_WEB_DEFAULT_THEME` | `Web::Config#reset!` | Seeds the dashboard theme hint: exactly `light`, `dark`, or `system`; unset emits no hint. Later Ruby assignment wins |
 | `WURK_API_READ_ONLY` | `Configuration#api_read_only?` | `=1` boots the HTTP API in read-only mode — every write route answers 403. Not inherited from `WURK_WEB_READ_ONLY`; see [HTTP API](api-http.md#read-only-mode). `config.api_read_only` wins when set |
 | `WURK_DEBUG` | `Configuration::ERROR_HANDLER` | Any value makes the default error handler log `full_message` (with backtrace) instead of `detailed_message` |
-| `WURK_VITE_DEV` | `Engine`, `DashboardController` | `=1` serves the SPA from the Vite dev server instead of the precompiled bundle |
+| `WURK_VITE_DEV` | `Engine`, `Web::Dashboard::Shell` | `=1` serves the SPA from the Vite dev server instead of the precompiled bundle |
+| `VITE_PORT` | `Web::Dashboard::Shell` | The Vite dev server's port under `WURK_VITE_DEV=1` (default `5173`); `bin/dev` exports it |
 | `RAILS_MAX_THREADS` | `CLI#apply_defaults!` | Fallback `concurrency` when neither CLI nor YAML set it |
 | `APP_ENV`, `RAILS_ENV`, `RACK_ENV` | `CLI#set_environment` | Environment, in that order, after `-e`. Default `development`. The CLI then writes `RACK_ENV`/`RAILS_ENV` back before booting the app |
 | `DEBUG_INVOCATION` | `CLI#initialize_logger` | `=1` sets the logger to `DEBUG` (same as `-v`) |

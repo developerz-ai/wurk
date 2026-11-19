@@ -197,6 +197,8 @@ Mount the engine wherever you like:
 mount Wurk::Engine => "/wurk"
 ```
 
+No Rails? `map("/sidekiq") { run Sidekiq::Web }` in a `config.ru` serves the same dashboard ([Dashboard → Without Rails](https://github.com/developerz-ai/wurk/blob/main/docs/dashboard.md#without-rails-run-sidekiqweb)).
+
 On Devise, wrap it in `authenticate` so only signed-in admins reach it — unauthenticated visitors get bounced to your login page:
 
 ```ruby
