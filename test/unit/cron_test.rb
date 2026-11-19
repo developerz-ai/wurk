@@ -453,21 +453,6 @@ class CronTest < Wurk::Test::UnitCase
                  lp.lid
   end
 
-  # A Manager loop's lid does not hash its zone, so an edited `tz:` rewrites the
-  # same hash; its stored next fire was the old zone's.
-  def test_changing_only_the_tz_recomputes_the_next_fire_mark
-    klass = "CronTest::Rezoned#{@suffix}"
-    old = Wurk::Cron::Manager.new.register('0 4 * * *', klass, tz: 'Asia/Tokyo')
-    @lids << old.lid
-    seed_mark(old.lid, 'nf', old.next_fire_at)
-
-    new = Wurk::Cron::Manager.new.register('0 4 * * *', klass, tz: 'America/Chicago')
-
-    assert_equal old.lid, new.lid
-    assert_includes [new.next_fire_at, new.next_fire_at(::Time.now.to_i - 60)].map(&:to_s), loop_hash(new.lid)['nf']
-    refute_equal old.next_fire_at.to_s, loop_hash(new.lid)['nf']
-  end
-
   def test_re_registering_with_the_same_tz_keeps_the_next_fire_mark
     klass = "CronTest::SameZone#{@suffix}"
     lp = Wurk::Cron::Manager.new.register('0 4 * * *', klass, tz: 'Asia/Tokyo')
@@ -477,16 +462,6 @@ class CronTest < Wurk::Test::UnitCase
     Wurk::Cron::Manager.new.register('0 4 * * *', klass, tz: 'Asia/Tokyo')
 
     assert_equal '12345', loop_hash(lp.lid)['nf']
-  end
-
-  def test_a_loop_that_never_fired_gets_no_mark_from_a_tz_change
-    klass = "CronTest::Unfired#{@suffix}"
-    lp = Wurk::Cron::Manager.new.register('0 4 * * *', klass, tz: 'Asia/Tokyo')
-    @lids << lp.lid
-
-    Wurk::Cron::Manager.new.register('0 4 * * *', klass, tz: 'America/Chicago')
-
-    assert_nil loop_hash(lp.lid)['nf']
   end
 
   # ---- LoopSet --------------------------------------------------------

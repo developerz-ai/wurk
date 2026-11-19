@@ -1084,38 +1084,30 @@ module Wurk
 
       # #persist for many loops in one pipelined round trip: a booting process
       # (each swarm child) writes its whole `config.periodic` block at once.
+      # Nothing here reads, so a pipeline is the same writes in the same order.
       #
-      # One read first, of each loop's stored `tz` and `nf`: the lid does not
-      # hash a Manager loop's zone, so an edited `tz:` lands on the same hash,
-      # whose `nf` is still the next occurrence in the old zone. That mark is
-      # recomputed here; left alone it fires once more on the old zone's clock.
+      # The lid does not hash a Manager loop's zone, so an edited `tz:` lands on
+      # the same hash and its stored `nf` still names the next occurrence in the
+      # old zone: that one fire happens on the old zone's clock, and every one
+      # after it on the new. Recomputing it here would cost every booting
+      # process a read of every loop (bench/algo cron budget).
       def persist_all(loops)
         return loops if loops.empty?
 
         Wurk.redis do |c|
-          stored = c.pipelined { |p| loops.each { |lp| p.call('HMGET', "#{LOOP_PREFIX}#{lp.lid}", 'tz', 'nf') } }
-          c.pipelined { |p| loops.zip(stored) { |lp, marks| persist_loop(p, lp, rezoned: rezoned?(lp, *marks)) } }
+          c.pipelined do |p|
+            loops.each do |loop_obj|
+              fields = loop_obj.to_redis_hash
+              paused = fields.delete('paused')
+              key = "#{LOOP_PREFIX}#{loop_obj.lid}"
+              p.call('SADD', PERIODIC_KEY, loop_obj.lid)
+              p.call('HSET', key, *fields.flatten)
+              p.call('HSETNX', key, 'paused', paused)
+            end
+          end
         end
         loops
       end
-
-      def rezoned?(loop_obj, stored_tz, next_fire)
-        !next_fire.to_s.empty? && stored_tz.to_s != loop_obj.tz_name.to_s
-      end
-
-      def persist_loop(pipe, loop_obj, rezoned:)
-        fields = loop_obj.to_redis_hash
-        paused = fields.delete('paused')
-        key = "#{LOOP_PREFIX}#{loop_obj.lid}"
-        pipe.call('SADD', PERIODIC_KEY, loop_obj.lid)
-        pipe.call('HSET', key, *fields.flatten)
-        pipe.call('HSETNX', key, 'paused', paused)
-        return unless rezoned
-
-        upcoming = loop_obj.next_fire_at
-        upcoming ? pipe.call('HSET', key, 'nf', upcoming.to_s) : pipe.call('HDEL', key, 'nf')
-      end
-      private :persist_loop, :rezoned?
 
       # Drop every registered loop for `klass` (a name or a list of names)
       # except `keep_lids` — the loops a booting process just registered for

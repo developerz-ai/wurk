@@ -122,6 +122,10 @@ unknown identifier logs one warning and evaluates the loop **as UTC** rather
 than crashing the poller. Wurk never mutates `ENV['TZ']` — that is process-global
 and would leak the schedule's zone into your `perform` code.
 
+Changing only a loop's `tz:` keeps its lid, so the loop keeps its stored next
+fire: that one occurrence runs on the old zone's clock, and every later one on
+the new zone's.
+
 ---
 
 ## The registry: loops, lids, and Redis
