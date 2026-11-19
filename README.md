@@ -336,6 +336,15 @@ TypeScript end to end, MIT, and as measured about its own claims as this file is
 
 Releases follow the work, not a calendar. A weekday checkup asks whether a shipping fix has merged and nobody has released it. When one has, the bot files a release request, its coding fleet opens the `Wurk::VERSION` bump PR, and merging that PR publishes the gem ([RELEASE.md](RELEASE.md)). The bot's policy is committed in [`.dz/maintainer/maintainer.yml`](.dz/maintainer/maintainer.yml).
 
+## Stargazers
+
+<a href="https://star-history.com/#developerz-ai/wurk&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=developerz-ai/wurk&type=Date&theme=dark">
+    <img alt="GitHub stars of developerz-ai/wurk over time" src="https://api.star-history.com/svg?repos=developerz-ai/wurk&type=Date" width="100%">
+  </picture>
+</a>
+
 ## Contributing
 
 Issues and pull requests are welcome — see **[CONTRIBUTING.md](https://github.com/developerz-ai/wurk/blob/main/CONTRIBUTING.md)** for the dev setup, test layers, and conventions, and **[SECURITY.md](https://github.com/developerz-ai/wurk/blob/main/SECURITY.md)** to report a vulnerability.
