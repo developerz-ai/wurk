@@ -466,7 +466,7 @@ COPY frontend/ ./frontend/
 RUN cd frontend && bun run build
 
 # Stage 2 — Ruby runtime. No Node/bun at runtime.
-FROM ruby:3.4-slim-bookworm
+FROM ruby:4.0.10-slim-bookworm
 ENV RAILS_ENV=production
 RUN useradd --create-home --shell /bin/bash wurk
 WORKDIR /app

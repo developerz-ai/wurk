@@ -212,7 +212,7 @@ jobs:
       - name: resolve redis port
         if: env.RUN == 'true' || env.GUARDS_ONLY == 'true'
         run: echo "REDIS_URL=redis://localhost:${{ job.services.redis.ports['6379'] }}/0" >> "$GITHUB_ENV"
-      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+      - uses: ruby/setup-ruby@f9c4492e86def3e644ab32a0ef185eda5b0c20d0 # v1.342.0
         if: env.RUN == 'true' || env.GUARDS_ONLY == 'true'
         with:
           ruby-version: ${{ env.RUBY_VERSION }}
@@ -328,7 +328,7 @@ jobs:
       - name: resolve redis port
         if: env.RUN == 'true'
         run: echo "REDIS_URL=redis://localhost:${{ job.services.redis.ports['6379'] }}/0" >> "$GITHUB_ENV"
-      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+      - uses: ruby/setup-ruby@f9c4492e86def3e644ab32a0ef185eda5b0c20d0 # v1.342.0
         if: env.RUN == 'true'
         with:
           ruby-version: "4.0"
@@ -450,7 +450,7 @@ jobs:
       - name: resolve store port
         if: env.RUN == 'true'
         run: echo "REDIS_URL=redis://localhost:${{ job.services.store.ports['6379'] }}/0" >> "$GITHUB_ENV"
-      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+      - uses: ruby/setup-ruby@f9c4492e86def3e644ab32a0ef185eda5b0c20d0 # v1.342.0
         if: env.RUN == 'true'
         with:
           ruby-version: ${{ matrix.ruby }}
@@ -545,7 +545,7 @@ jobs:
       - name: resolve redis url
         if: env.RUN == 'true'
         run: echo "WURK_E2E_REDIS_URL=redis://localhost:${{ job.services.redis.ports['6379'] }}/3" >> "$GITHUB_ENV"
-      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+      - uses: ruby/setup-ruby@f9c4492e86def3e644ab32a0ef185eda5b0c20d0 # v1.342.0
         if: env.RUN == 'true'
         with:
           ruby-version: "4.0"
@@ -595,7 +595,7 @@ jobs:
       - name: resolve redis port
         if: env.RUN == 'true'
         run: echo "REDIS_URL=redis://localhost:${{ job.services.redis.ports['6379'] }}/0" >> "$GITHUB_ENV"
-      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+      - uses: ruby/setup-ruby@f9c4492e86def3e644ab32a0ef185eda5b0c20d0 # v1.342.0
         if: env.RUN == 'true'
         with:
           ruby-version: "4.0"
@@ -642,7 +642,7 @@ jobs:
       - name: resolve redis port
         if: env.RUN == 'true'
         run: echo "REDIS_URL=redis://localhost:${{ job.services.redis.ports['6379'] }}/0" >> "$GITHUB_ENV"
-      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+      - uses: ruby/setup-ruby@f9c4492e86def3e644ab32a0ef185eda5b0c20d0 # v1.342.0
         if: env.RUN == 'true'
         with:
           ruby-version: "4.0"
@@ -808,7 +808,7 @@ jobs:
           persist-credentials: false
       - name: resolve redis port
         run: echo "REDIS_URL=redis://localhost:${{ job.services.redis.ports['6379'] }}/0" >> "$GITHUB_ENV"
-      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+      - uses: ruby/setup-ruby@f9c4492e86def3e644ab32a0ef185eda5b0c20d0 # v1.342.0
         with:
           ruby-version: ${{ matrix.ruby }}
           bundler-cache: true
@@ -849,7 +849,7 @@ jobs:
         if: env.RUN == 'true'
         with:
           persist-credentials: false
-      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+      - uses: ruby/setup-ruby@f9c4492e86def3e644ab32a0ef185eda5b0c20d0 # v1.342.0
         if: env.RUN == 'true'
         with:
           ruby-version: "4.0"

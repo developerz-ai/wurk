@@ -74,7 +74,7 @@ jobs:
             latest="$(curl -fsS https://rubygems.org/api/v1/versions/wurk/latest.json | ruby -rjson -e 'print JSON.parse(STDIN.read).fetch("version")')"
             echo "VERSION=${latest}" >> "$GITHUB_ENV"
           fi
-      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+      - uses: ruby/setup-ruby@f9c4492e86def3e644ab32a0ef185eda5b0c20d0 # v1.342.0
         with:
           ruby-version: "3.4"
           # No repo checkout and no Gemfile yet — the consumer app is built below.
