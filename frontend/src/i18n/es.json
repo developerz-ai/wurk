@@ -125,7 +125,9 @@
     "no_running": "No hay trabajos en ejecución en este proceso",
     "leader": "Líder",
     "leader_title": "Este proceso mantiene el bloqueo de líder del clúster",
-    "heartbeat_ok": "Latido correcto"
+    "heartbeat_ok": "Latido correcto",
+    "quiet": "En silencio",
+    "embedded": "Integrado"
   },
   "cron": {
     "history_title": "Historial de ejecución",
@@ -220,6 +222,7 @@
   "common": {
     "loading": "Cargando…",
     "error": "Error al cargar datos",
+    "refresh_failed": "No se pudo actualizar. Se muestran los últimos datos cargados.",
     "empty": "Sin elementos",
     "page": "Página",
     "of": "de",

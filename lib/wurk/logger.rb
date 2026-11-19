@@ -84,6 +84,13 @@ module Wurk
         end
       end
 
+      # Pretty without the ANSI colour codes (Sidekiq 8.0.8+).
+      class Plain < Base
+        def call(severity, time, _program_name, message)
+          "#{severity} #{time.utc.iso8601(3)} #{pid_tag} tid=#{tid}#{format_context}: #{message}\n"
+        end
+      end
+
       class WithoutTimestamp < Pretty
         def call(severity, _time, _program_name, message)
           "#{SEVERITY_COLORS[severity]} #{pid_tag} tid=#{tid}#{format_context}: #{message}\n"

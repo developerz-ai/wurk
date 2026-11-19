@@ -2,6 +2,8 @@
 
 require_relative '../test_helper'
 require 'wurk/middleware/i18n'
+require 'active_job'
+require 'active_support/core_ext/integer/time'
 require 'wurk/middleware/current_attributes'
 require 'wurk/middleware/interrupt_handler'
 
@@ -129,6 +131,11 @@ class MiddlewareBuiltinsTest < Wurk::Test::UnitCase
     Object.const_set(:I18n, real) if had_real
   end
 
+  # What Load would restore from a `cattr` value, after the trip through JSON.
+  def stored(value)
+    Wurk::Middleware::CurrentAttributes.load({ 'cattr' => JSON.parse(JSON.generate(value)) }, 0)
+  end
+
   def build_handler
     h = Wurk::Middleware::InterruptHandler.new
     h.config = FakeConfig.new
@@ -227,7 +234,7 @@ class MiddlewareBuiltinsTest < Wurk::Test::UnitCase
     job = {}
     Wurk::Middleware::CurrentAttributes::Save.new([FakeCurrent]).call('X', job, 'q', nil) { :body }
 
-    assert_equal({ user: 42 }, job['cattr'])
+    assert_equal({ user: 42 }, stored(job['cattr']))
   end
 
   def test_current_attributes_save_uses_indexed_keys_for_multi
@@ -238,8 +245,8 @@ class MiddlewareBuiltinsTest < Wurk::Test::UnitCase
       .new([FakeCurrent, FakeCurrentTwo])
       .call('X', job, 'q', nil) { :body }
 
-    assert_equal({ user: 1 }, job['cattr'])
-    assert_equal({ request_id: 'r-1' }, job['cattr_1'])
+    assert_equal({ user: 1 }, stored(job['cattr']))
+    assert_equal({ request_id: 'r-1' }, stored(job['cattr_1']))
   end
 
   def test_current_attributes_save_does_not_overwrite_existing
@@ -254,7 +261,7 @@ class MiddlewareBuiltinsTest < Wurk::Test::UnitCase
     seen = nil
     Wurk::Middleware::CurrentAttributes::Load
       .new([FakeCurrent])
-      .call(nil, { 'cattr' => { user: 99 } }, 'q') do
+      .call(nil, { 'cattr' => { 'user' => 99 } }, 'q') do
         seen = FakeCurrent.attributes[:user]
       end
 
@@ -264,7 +271,7 @@ class MiddlewareBuiltinsTest < Wurk::Test::UnitCase
   def test_current_attributes_load_resets_after_block
     Wurk::Middleware::CurrentAttributes::Load
       .new([FakeCurrent])
-      .call(nil, { 'cattr' => { user: 99 } }, 'q') { :body }
+      .call(nil, { 'cattr' => { 'user' => 99 } }, 'q') { :body }
 
     assert_empty FakeCurrent.attributes
   end
@@ -273,7 +280,7 @@ class MiddlewareBuiltinsTest < Wurk::Test::UnitCase
     assert_raises(StandardError) do
       Wurk::Middleware::CurrentAttributes::Load
         .new([FakeCurrent])
-        .call(nil, { 'cattr' => { user: 99 } }, 'q') { raise StandardError }
+        .call(nil, { 'cattr' => { 'user' => 99 } }, 'q') { raise StandardError }
     end
     assert_empty FakeCurrent.attributes
   end
@@ -282,7 +289,7 @@ class MiddlewareBuiltinsTest < Wurk::Test::UnitCase
     seen_user = seen_req = nil
     Wurk::Middleware::CurrentAttributes::Load
       .new([FakeCurrent, FakeCurrentTwo])
-      .call(nil, { 'cattr' => { user: 1 }, 'cattr_1' => { request_id: 'r' } }, 'q') do
+      .call(nil, { 'cattr' => { 'user' => 1 }, 'cattr_1' => { 'request_id' => 'r' } }, 'q') do
         seen_user = FakeCurrent.attributes[:user]
         seen_req  = FakeCurrentTwo.attributes[:request_id]
       end
@@ -308,6 +315,26 @@ class MiddlewareBuiltinsTest < Wurk::Test::UnitCase
     assert cfg.server_middleware.exists?(Wurk::Middleware::CurrentAttributes::Load)
   end
 
+  # A fresh enqueue only serializes: Load runs ahead of Save, finds no `cattr`
+  # and deserializes nothing, so a record attribute costs no GlobalID lookup.
+  def test_current_attributes_fresh_push_does_not_deserialize
+    FakeCurrent.attributes[:user] = 5
+    cfg = Wurk::Configuration.new
+    Wurk::Middleware::CurrentAttributes.persist(FakeCurrent, cfg)
+    job = {}
+    calls = []
+    original = ActiveJob::Arguments.method(:deserialize)
+    ActiveJob::Arguments.define_singleton_method(:deserialize) { |value| (calls << value) && original.call(value) }
+    begin
+      cfg.client_middleware.invoke('X', job, 'q', nil) { :pushed }
+    ensure
+      ActiveJob::Arguments.singleton_class.send(:remove_method, :deserialize)
+    end
+
+    assert_empty calls
+    assert_equal({ user: 5 }, stored(job['cattr']))
+  end
+
   def test_current_attributes_persist_accepts_array
     cfg = Wurk::Configuration.new
     Wurk::Middleware::CurrentAttributes.persist([FakeCurrent, FakeCurrentTwo], cfg)
@@ -326,9 +353,11 @@ class MiddlewareBuiltinsTest < Wurk::Test::UnitCase
 
     cfg.client_middleware.invoke('X', job, 'q', nil) { :pushed }
 
-    assert_equal({ user: 5 }, job['cattr'])
+    assert_equal({ user: 5 }, stored(job['cattr']))
     seen = nil
-    cfg.server_middleware.invoke(Object.new, { 'cattr' => { user: 9 } }, 'q') { seen = FakeCurrent.attributes[:user] }
+    cfg.server_middleware.invoke(Object.new, { 'cattr' => { 'user' => 9 } }, 'q') do
+      seen = FakeCurrent.attributes[:user]
+    end
 
     assert_equal 9, seen
   end
@@ -348,7 +377,7 @@ class MiddlewareBuiltinsTest < Wurk::Test::UnitCase
 
     cfg.client_middleware.invoke('X', job, 'q', nil) { :pushed }
 
-    assert_equal({ from: 'reloaded' }, job['cattr'])
+    assert_equal({ from: 'reloaded' }, stored(job['cattr']))
   ensure
     Object.send(:remove_const, const)
   end
@@ -389,7 +418,7 @@ class MiddlewareBuiltinsTest < Wurk::Test::UnitCase
     seen = nil
     Wurk::Middleware::CurrentAttributes::Load
       .new([FakeCurrent])
-      .call('X', { 'cattr' => { user: 7 } }, 'q', nil) { seen = FakeCurrent.attributes[:user] }
+      .call('X', { 'cattr' => { 'user' => 7 } }, 'q', nil) { seen = FakeCurrent.attributes[:user] }
 
     assert_equal 7, seen
   end
@@ -401,9 +430,30 @@ class MiddlewareBuiltinsTest < Wurk::Test::UnitCase
 
     Wurk::Middleware::CurrentAttributes::Load
       .new([FakeCurrent])
-      .call('X', { 'cattr' => { user: 'job-snapshot' } }, 'q', nil) { :enqueued }
+      .call('X', { 'cattr' => { 'user' => 'job-snapshot' } }, 'q', nil) { :enqueued }
 
     assert_equal 'request-scoped', FakeCurrent.attributes[:user]
+  end
+
+  # Upstream's shape, `ActiveJob::Arguments.serialize(attributes)`: a Sidekiq-
+  # written payload restores, and a Symbol stays a Symbol.
+  def test_current_attributes_save_writes_the_activejob_serialization
+    FakeCurrent.user = :admin
+    job = {}
+    Wurk::Middleware::CurrentAttributes::Save.new([FakeCurrent]).call('X', job, 'q', nil) { :body }
+
+    assert_equal ActiveJob::Arguments.serialize({ user: :admin }), job['cattr']
+    assert_equal({ user: :admin }, stored(job['cattr']))
+  end
+
+  # A deploy can drop an attribute while jobs that carry it are still queued.
+  def test_current_attributes_load_skips_an_attribute_the_class_no_longer_has
+    seen = nil
+    Wurk::Middleware::CurrentAttributes::Load
+      .new([FakeCurrent])
+      .call(nil, { 'cattr' => { 'user' => 3, 'dropped' => 'x' } }, 'q') { seen = FakeCurrent.attributes.dup }
+
+    assert_equal({ user: 3 }, seen)
   end
 
   # #98: the documented drop-in constant is the top-level

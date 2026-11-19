@@ -54,6 +54,31 @@ class DataApiParityTest < Wurk::Test::UnitCase
     assert_equal 5, stats.workers_size
   end
 
+  # Sidekiq's Stats exposes its three fetchers (`@api private`, but public
+  # methods): `fetch_stats_fast!` re-reads the counters and the default queue's
+  # latency, `fetch_stats_slow!` adds `workers_size` and `enqueued`, and
+  # `fetch_stats!` runs both. Each returns the stats Hash.
+  def test_stats_fetchers_refresh_a_held_instance
+    stats = Sidekiq::Stats.new
+    redis('SET', 'stat:processed', '7')
+    add_process('h:1:aaa', busy: 2)
+    2.times { enqueue('qa', job) }
+
+    assert_equal 0, stats.processed
+    fast = stats.fetch_stats_fast!
+
+    assert_equal 7, stats.processed
+    assert_equal 7, fast[:processed]
+    assert_in_delta 0.0, fast[:default_queue_latency]
+    refute fast.key?(:enqueued)
+    assert_equal({ workers_size: 2, enqueued: 2 }, stats.fetch_stats_slow!.slice(:workers_size, :enqueued))
+
+    redis('SET', 'stat:failed', '4')
+    all = stats.fetch_stats!
+
+    assert_equal [4, 1, 2, 2], all.values_at(:failed, :processes_size, :workers_size, :enqueued)
+  end
+
   # §19.1: `Sidekiq::Stats` reads the global counters (`processed`,
   # `failed`), the sorted-set sizes, the queue totals and the worker count.
   # On an untouched Redis every one of them reads zero.

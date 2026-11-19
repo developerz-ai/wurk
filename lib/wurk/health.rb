@@ -158,8 +158,11 @@ module Wurk
       # nothing rebound until the pod restarted. Now a survivor takes the port
       # over within RETRY_INTERVAL of the owner's exit, so liveness/readiness
       # ride out ordinary child churn (crash-respawn, rolling restart, recycle).
+      # In a swarm one child owning the shared port is the normal case, so that
+      # logs at INFO; WARN is kept for a lone process, where the holder is
+      # something else.
       def start_retry_loop
-        logger&.warn do
+        logger&.public_send(Health.fleet_size.to_i > 1 ? :info : :warn) do
           "Wurk::Health: port #{@port} in use; polling every #{@retry_interval}s to take it over"
         end
         @retry_thread = ::Thread.new do

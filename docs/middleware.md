@@ -540,9 +540,38 @@ client chain and `Load` to **both** the client and server chains. It raises
 `ArgumentError` on an empty list. Calling it twice with the same classes is
 safe — `add` dedupes by class.
 
+**ActiveJob is required.** `persist` does `require "active_job"` and raises
+`LoadError` if the gem is missing: the attributes are written with
+`ActiveJob::Arguments.serialize`, as Sidekiq writes them. A Rails app has it
+already; a non-Rails app using this middleware needs `activejob` in its
+Gemfile.
+
 Wire keys are Sidekiq's exactly: the first registered class uses `"cattr"`, the
 rest `"cattr_1"`, `"cattr_2"`, … `Save` uses `job[key] ||= …`, so a
 caller-supplied value wins.
+
+The value is Sidekiq's too: `ActiveJob::Arguments.serialize(attributes)`, an
+array of `[name, value]` pairs with each value in ActiveJob's argument format.
+
+```json
+"cattr": [["tenant_id", 42], ["locale", {"_aj_serialized": "ActiveJob::Serializers::SymbolSerializer", "value": "en"}]]
+```
+
+So a Symbol, a Time or a record (GlobalID) comes back in the job as itself, not
+as the String or Hash plain JSON would leave, and a job enqueued by Sidekiq
+restores under Wurk and the reverse. An attribute value ActiveJob cannot
+serialize raises `ActiveJob::SerializationError` at enqueue.
+
+`Load` also reads the plain JSON object (`"cattr": {"tenant_id": 42}`) that
+Wurk wrote before it matched this shape, so jobs already in Redis keep their
+attributes across the upgrade. The other direction is not covered: a worker
+still running the older Wurk reads the new pairs without deserializing them,
+so during a rolling upgrade a job enqueued by the new version can fail there
+and succeed once its retry lands on an upgraded worker.
+
+An attribute the job carries that the class no longer defines is skipped, not
+raised on, so a deploy that drops an attribute does not fail the jobs already
+queued.
 
 `Load` **saves and restores** the surrounding attribute state rather than
 resetting it. That matters because `Load` also runs on the client chain, where

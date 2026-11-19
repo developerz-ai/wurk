@@ -10,7 +10,7 @@ end
 
 | Path | Meaning |
 |---|---|
-| `/live` | 200 while the Launcher is running; 503 once `stop`/`quiet` is called. |
+| `/live` | 200 until the process is shutting down; 503 once `stop` is called. A quiet process stays 200. |
 | `/ready` | 200 only when Redis is reachable **and** the local heartbeat fired within `ready_window` (default 30s); in swarm mode, enough children must also have fresh heartbeats (see `min_ready` below). 503 otherwise. |
 | `/metrics` | Prometheus text exposition, enabled by default. Set `metrics: false` to disable this endpoint (404). |
 

@@ -393,6 +393,35 @@ class JobSetTest < Wurk::Test::UnitCase
     @pool.with { |c| c.call('DEL', private_set) }
   end
 
+  # With reliable_push! an open outage circuit takes a push into memory. The
+  # page is already out of the set by then, so a crash would lose it.
+  def test_retry_all_behind_an_open_reliable_push_circuit_reaches_redis
+    queue = unique_queue
+    private_set = test_private_set
+    seed_private(private_set, (0...3).map { |i| [10 + i, "rc-#{i}-#{@ns}", { 'queue' => queue }] })
+    Wurk::Client.reliable_push!
+    Wurk::Client::Buffered.reset!
+    Wurk::Client::Buffered.circuit.trip(@pool)
+
+    assert_equal 3, private_job_set(private_set).retry_all
+    assert_equal 0, Wurk::Client::Buffered.buffer_size
+    assert_drained(private_set, into_queue: queue, expected: 3)
+  ensure
+    Wurk::Client::Buffered.reset!
+    @pool.with { |c| c.call('DEL', private_set) }
+  end
+
+  # Enumerable#take, which upstream's sets answer: a private helper of that
+  # name used to shadow it.
+  def test_take_is_enumerables
+    private_set = test_private_set
+    seed_private(private_set, (0...3).map { |i| [10 + i, "tk-#{i}-#{@ns}"] })
+
+    assert_equal 2, private_job_set(private_set).take(2).size
+  ensure
+    @pool.with { |c| c.call('DEL', private_set) }
+  end
+
   # K29: a job that re-fails straight back into the set (same jid, new bytes)
   # used to keep `until size.zero?` spinning, pinning the dashboard's Puma
   # thread. Each job is now retried once per call.
@@ -498,7 +527,7 @@ class JobSetTest < Wurk::Test::UnitCase
     entries[1] = Wurk::SortedEntry.new(set, entries[1].score, "#{entries[1].value} ")
     set.define_singleton_method(:delete_by_jid) { |*| raise RedisClient::ConnectionError, 'gone' }
 
-    assert_raises(RedisClient::ConnectionError) { set.send(:take, entries) }
+    assert_raises(RedisClient::ConnectionError) { set.send(:remove_page, entries) }
     assert_equal payloads.sort, @pool.with { |c| c.call('ZRANGE', private_set, 0, -1) }.sort
   ensure
     @pool.with { |c| c.call('DEL', private_set) }
@@ -518,7 +547,7 @@ class JobSetTest < Wurk::Test::UnitCase
       (calls += 1) == 1 ? real.call(*a) : raise(RedisClient::ConnectionError, 'gone')
     end
 
-    assert_raises(RedisClient::ConnectionError) { set.send(:take, entries) }
+    assert_raises(RedisClient::ConnectionError) { set.send(:remove_page, entries) }
     assert_equal 2, calls
     # Restored as the bytes read, which here carry the space that forced the miss.
     jids = @pool.with { |c| c.call('ZRANGE', private_set, 0, -1) }.map { |v| Wurk.load_json(v)['jid'] }

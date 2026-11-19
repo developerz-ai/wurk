@@ -217,7 +217,7 @@ module Wurk
 
     # @param val [Integer] threads per worker process
     def concurrency=(val)
-      default_capsule.concurrency = val
+      default_capsule.concurrency = Integer(val)
     end
 
     def queues = default_capsule.queues
@@ -813,7 +813,14 @@ module Wurk
       @logger ||= default_logger
     end
 
-    attr_writer :logger
+    # nil silences the current logger instead of replacing it, as upstream does.
+    def logger=(logger)
+      if logger.nil?
+        self.logger.level = ::Logger::FATAL
+      else
+        @logger = logger
+      end
+    end
 
     def handle_exception(ex, ctx = {})
       ctx = redact_jobstr(ctx)

@@ -125,7 +125,9 @@
     "no_running": "Aucune tâche en cours sur ce processus",
     "leader": "Leader",
     "leader_title": "Ce processus détient le verrou de leader du cluster",
-    "heartbeat_ok": "Battement de cœur OK"
+    "heartbeat_ok": "Battement de cœur OK",
+    "quiet": "Silencieux",
+    "embedded": "Intégré"
   },
   "cron": {
     "history_title": "Historique d'exécution",
@@ -220,6 +222,7 @@
   "common": {
     "loading": "Chargement…",
     "error": "Erreur de chargement",
+    "refresh_failed": "Échec de l'actualisation. Affichage des dernières données chargées.",
     "empty": "Aucun élément",
     "page": "Page",
     "of": "sur",

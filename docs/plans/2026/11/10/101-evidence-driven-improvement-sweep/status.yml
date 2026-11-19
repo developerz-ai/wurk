@@ -5,7 +5,7 @@ created_by: sebi
 worked_by: "sebi (Claude Code)"
 owner: sebi
 percent: 70
-current_focus: "24h soak on 1.15.0 running (started 2026-11-12 03:30Z, a soak directory, frozen tree 5ea710e); then publish Soak numbers in docs/benchmarks.md. Left: 12 T4 nightly vs_sidekiq, 09 W7 (design sign-off), 06 P6 bench section, the adopter slices (14–18)"
+current_focus: "Left: 09 W7 (owner design sign-off). 12 T4 (bench-vs-sidekiq.yml nightly) and 06 P6 (bench/command_count.rb heartbeat section) shipped. Soak: nightly 1h CI soak (soak.yml) replaces the local 24h run, which left no result; read verdicts with `gh run list --workflow soak.yml`."
 slices:
   - file: 01-ci-green-doc-truth.md
     status: in_progress
@@ -163,4 +163,4 @@ evidence:
   - "wave 1 slice 'unique': Duration unique_for (string TTL ignored on release), retry_for Duration written as null, timeout/deadline Durations written as strings - fixed; follow-up: read side of Middleware::Timeout#bound_for for already-queued string timeouts."
   - "slice 19: done; detail kept in the infrastructure repository (this tree is public)"
 notes: "Written 2026-11-10 from 5 read-only sweeps at v1.11.1 @ f6f509e. Sweeps 3-5 ran no tests, benches or Redis; rows marked inferred/suspect need a reproducing test first. Wave-4 cost cuts proceed only where wave-2 measurements justify them. adopter F is read-only. Human decisions U1-U11 in 13."
-last_updated: 2026-11-12
+last_updated: 2026-11-19

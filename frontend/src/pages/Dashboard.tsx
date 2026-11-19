@@ -119,7 +119,15 @@ export default function Dashboard() {
     refetchInterval: 30000,
   }));
 
-  const stats = (): StatsData | null => sse.stats() ?? statsQuery.data ?? null;
+  // Newest wins. The stream's last snapshot outlives the stream — Nav holds it
+  // open for the app's lifetime — so once it drops, a poll that landed after
+  // that snapshot has to replace it, or the cards freeze at the moment it died.
+  const stats = (): StatsData | null => {
+    const live = sse.stats();
+    const polled = statsQuery.data;
+    if (!live || !polled) return live ?? polled ?? null;
+    return statsQuery.dataUpdatedAt > sse.statsAt() ? polled : live;
+  };
   // Delta math needs the prior-hour buckets, so keep the full history for
   // hourlyDeltaPct() and slice only for chart rendering. Slicing first would
   // drop the comparison window on the 1h tab and force the 100% fallback.
@@ -246,9 +254,19 @@ export default function Dashboard() {
                   <Show
                     when={hasHistory()}
                     fallback={
-                      <div class="empty-state" style={{ height: '320px', display: 'grid', 'place-items': 'center' }}>
-                        {t('dashboard.no_history')}
-                      </div>
+                      // A failed load with nothing cached is not "no history yet".
+                      <Show
+                        when={!(historyQuery.isError && historyQuery.data === undefined)}
+                        fallback={
+                          <div class="empty-state" style={{ height: '320px', display: 'grid', 'place-items': 'center', color: 'var(--danger)' }}>
+                            {t('common.error')}
+                          </div>
+                        }
+                      >
+                        <div class="empty-state" style={{ height: '320px', display: 'grid', 'place-items': 'center' }}>
+                          {t('dashboard.no_history')}
+                        </div>
+                      </Show>
                     }
                   >
                     <AreaChart
@@ -311,7 +329,7 @@ export default function Dashboard() {
                   <table>
                     <thead>
                       <tr>
-                        <th>Name</th>
+                        <th>{t('table.name')}</th>
                         <th>{t('table.size')}</th>
                         <th>{t('table.latency')}</th>
                         <th>{t('table.status')}</th>

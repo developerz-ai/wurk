@@ -85,6 +85,16 @@ class LoggerTest < Wurk::Test::UnitCase
     assert_match(/pid=#{::Process.pid}/, line)
   end
 
+  # --- Plain formatter (Sidekiq 8.0.8+, #6778) ---------------------------
+
+  # Upstream's uncoloured Pretty: an app that sets it must not NameError.
+  def test_plain_is_pretty_without_colour
+    Thread.current[Wurk::Context::KEY] = { 'jid' => 'abc' }
+    line = format_with(Sidekiq::Logger::Formatters::Plain.new, 'WARN', 'x')
+
+    assert_equal "WARN 2026-01-02T03:04:05.000Z pid=#{::Process.pid} tid=#{Wurk::Component.tid} jid=abc: x\n", line
+  end
+
   # --- JSON formatter ---------------------------------------------------
 
   def test_json_emits_newline_terminated_line

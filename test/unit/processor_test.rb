@@ -657,6 +657,92 @@ class ProcessorTest < Wurk::Test::UnitCase
     @pool.with { |c| c.call('DEL', private_queue) }
   end
 
+  # `perform` returned, then bookkeeping after it (a batch's ack, a status
+  # row) lost Redis. That is no verdict on the job: on its last attempt it must
+  # not die (a batch would be marked dead and its success suppressed for good),
+  # so it goes back to run again, as an internal failure does.
+  def test_a_store_outage_after_perform_returned_is_not_a_job_failure
+    deaths = []
+    errors = capture_errors
+    @config.death_handlers << ->(job, ex) { deaths << [job['jid'], ex.class] }
+    @capsule.server_middleware.add(failing_after_yield_middleware, RedisClient::CannotConnectError.new('down'))
+    klass = define_worker_recording
+    payload = enqueue(class: klass.name, args: [1], retry: false)
+
+    @processor.process_one
+    settle_acks
+
+    assert_equal [[1]], klass.sink
+    assert_empty deaths
+    assert_equal 0, dead_count_for(payload['jid'])
+    assert_equal 1, llen(@public_queue), 'back on its queue to run again'
+    assert_equal 0, llen(private_queue)
+    assert_equal [[Wurk::JobRetry::StoreUnavailableAfterPerform, 'Internal exception!']], errors
+  end
+
+  # Bounded: a write that keeps failing while the requeue lands (a second
+  # Redis a middleware uses) must not re-run `perform` forever. After the
+  # limit the retry policy decides.
+  def test_a_store_outage_after_perform_requeues_a_bounded_number_of_times
+    deaths = []
+    capture_errors
+    @config.death_handlers << ->(job, ex) { deaths << [job['jid'], ex.class] }
+    @capsule.server_middleware.add(failing_after_yield_middleware, RedisClient::CannotConnectError.new('down'))
+    klass = define_worker_recording
+    payload = enqueue(class: klass.name, args: [1], retry: false)
+
+    4.times do
+      @processor.process_one
+      settle_acks
+    end
+
+    assert_equal 4, klass.sink.size
+    assert_equal [[payload['jid'], RedisClient::CannotConnectError]], deaths
+    assert_equal 0, llen(@public_queue)
+
+    # The limit holds per jid for the process: the same job back (say from
+    # the retry set) does not get a fresh set of requeues.
+    @pool.with { |c| c.call('LPUSH', @public_queue, Wurk.dump_json(payload)) }
+    @processor.process_one
+    settle_acks
+
+    assert_equal 2, deaths.size
+    assert_equal 0, llen(@public_queue)
+  end
+
+  # The same outage before `perform` ran is the job failing to run: the retry
+  # policy decides, as before.
+  def test_a_store_outage_before_perform_still_goes_through_the_retry_policy
+    deaths = []
+    @config.death_handlers << ->(job, ex) { deaths << [job['jid'], ex.class] }
+    @capsule.server_middleware.add(failing_before_yield_middleware, RedisClient::CannotConnectError.new('down'))
+    klass = define_worker_recording
+    payload = enqueue(class: klass.name, args: [1], retry: false)
+
+    @processor.process_one
+    settle_acks
+
+    assert_empty klass.sink
+    assert_equal [[payload['jid'], RedisClient::CannotConnectError]], deaths
+    assert_equal 0, llen(@public_queue)
+  end
+
+  # Redis refusing the write on its merits is no outage: requeueing it would
+  # re-run `perform` every second for good.
+  def test_a_command_error_after_perform_returned_still_goes_through_the_retry_policy
+    deaths = []
+    @config.death_handlers << ->(job, ex) { deaths << [job['jid'], ex.class] }
+    @capsule.server_middleware.add(failing_after_yield_middleware, RedisClient::WrongTypeError.new('WRONGTYPE'))
+    klass = define_worker_recording
+    payload = enqueue(class: klass.name, args: [1], retry: false)
+
+    @processor.process_one
+    settle_acks
+
+    assert_equal [[payload['jid'], RedisClient::WrongTypeError]], deaths
+    assert_equal 0, llen(@public_queue)
+  end
+
   # A job killed here fires death handlers: a batch has to hear about it, or it
   # never completes.
   def test_a_killed_job_fires_the_death_handlers
@@ -1235,6 +1321,29 @@ class ProcessorTest < Wurk::Test::UnitCase
 
   def unique_worker_name
     "PT_Worker_#{Process.pid}_#{object_id}_#{SecureRandom.hex(4)}"
+  end
+
+  def failing_after_yield_middleware
+    Class.new do
+      include Wurk::Middleware::ServerMiddleware
+
+      def initialize(error) = @error = error
+
+      def call(_instance, _job, _queue)
+        yield
+        raise @error
+      end
+    end
+  end
+
+  def failing_before_yield_middleware
+    Class.new do
+      include Wurk::Middleware::ServerMiddleware
+
+      def initialize(error) = @error = error
+
+      def call(*) = raise(@error)
+    end
   end
 
   # Records :before/:after around `yield` into the seeded sink array.

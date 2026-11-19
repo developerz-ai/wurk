@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup } from 'solid-js';
+import { createEffect, createSignal, on, onCleanup } from 'solid-js';
 import { t } from '../i18n';
 
 interface FilterBoxProps {
@@ -16,11 +16,32 @@ const DEBOUNCE_MS = 250;
 // per keystroke.
 export function FilterBox(props: FilterBoxProps) {
   const [input, setInput] = createSignal(props.value);
+  // The last value this box and its owner agreed on: what it emitted, or what
+  // the owner last pushed in.
+  let settled = props.value;
+
+  // Adopt a value changed from outside (browser Back on `?tag=`, a cleared
+  // filter). The debounced emit below echoes back as props.value === settled
+  // and is ignored, so in-progress typing is never overwritten by its own
+  // earlier emit.
+  createEffect(
+    on(
+      () => props.value,
+      (value) => {
+        if (value === settled) return;
+        settled = value;
+        setInput(value);
+      },
+      { defer: true },
+    ),
+  );
 
   createEffect(() => {
     const next = input();
     const id = setTimeout(() => {
-      if (next !== props.value) props.onChange(next);
+      if (next === settled) return;
+      settled = next;
+      props.onChange(next);
     }, DEBOUNCE_MS);
     onCleanup(() => clearTimeout(id));
   });

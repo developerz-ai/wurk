@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent } from '@solidjs/testing-library';
+import { render, screen, fireEvent, waitFor } from '@solidjs/testing-library';
 import { QueryClient, QueryClientProvider } from '@tanstack/solid-query';
 import Busy from './Busy';
+import { t } from '../i18n';
+import { TICK_MS, __resetTick, useLiveTick } from '../tick';
 
 const NOW = Date.now() / 1000;
 
@@ -151,5 +153,52 @@ describe('Busy', () => {
     expect(screen.getByText('host-a:100:aaaa')).toBeInTheDocument();
     // Only this process's in-flight jobs — host-b's job stays out.
     expect(screen.queryByText('OtherJob')).toBeNull();
+  });
+
+  it('opens the process detail from the keyboard', async () => {
+    renderBusy();
+    const card = (await screen.findByText('PID 100')).closest<HTMLElement>('.card')!;
+    expect(card).toHaveAttribute('tabindex', '0');
+    fireEvent.keyDown(card, { key: 'Enter' });
+
+    expect(await screen.findByText('HardJob')).toBeInTheDocument();
+  });
+
+  it('labels the quiet and embedded states through i18n', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, status: 200, json: async () => [{ ...PROCESSES[0], quiet: true, embedded: true }] }) as Response),
+    );
+    renderBusy();
+
+    expect(await screen.findByText(t('busy.quiet'))).toBeInTheDocument();
+    expect(screen.getByText(t('busy.embedded'))).toBeInTheDocument();
+  });
+
+  // A killed process keeps its last `beat` until its heartbeat key expires, so
+  // every poll returns the same row and only the clock can retire the dot.
+  it('drops the heartbeat-OK dot once the last beat ages past 30s, without new data', async () => {
+    const start = Date.now();
+    const now = vi.spyOn(Date, 'now').mockReturnValue(start);
+    try {
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const Shell = () => {
+        useLiveTick();
+        return <Busy />;
+      };
+      render(() => (
+        <QueryClientProvider client={client}>
+          <Shell />
+        </QueryClientProvider>
+      ));
+      await screen.findByText('PID 100');
+      expect(screen.getAllByTitle(t('busy.heartbeat_ok'))).toHaveLength(3);
+
+      now.mockReturnValue(start + 60_000);
+      await waitFor(() => expect(screen.queryAllByTitle(t('busy.heartbeat_ok'))).toHaveLength(0), { timeout: TICK_MS * 3 });
+    } finally {
+      now.mockRestore();
+      __resetTick();
+    }
   });
 });

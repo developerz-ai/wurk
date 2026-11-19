@@ -105,8 +105,8 @@ Sidekiq has no equivalent for any of these — they aren't parity, they're new s
 | **[Debounce, throttle-to-slot & collapse](docs/unique-jobs.md)** | `collapse: { policy: :debounce }` coalesces bursts into one job (last payload wins); `collapse: { policy: :throttle }` admits one job per fixed time slot | Burst coalescing — every enqueue in the window runs standalone again |
 | **[Per-job timeouts & deadlines](docs/retries.md)** | `timeout:` bounds one attempt, `deadline:` bounds the whole job from enqueue, enforced by a lightweight per-capsule watchdog thread (no thread-per-job) | Runaway/stuck jobs run unbounded except for `shutdown_timeout` |
 | **[Global per-queue concurrency caps](docs/rate-limiting.md)** | `config.global_concurrency = { critical: 20 }` caps in-flight jobs for a queue across the whole cluster, folded into the fetch pipeline | The cluster-wide cap; only per-key `Limiter`s remain |
-| **Worker topology DSL** | Declare which queues/classes a given fleet role runs, in code instead of ad hoc `-q` flags | The declarative topology; fall back to CLI queue flags |
-| **[Kubernetes probes](#kubernetes-metrics--tracing)** | `config.health_check` opens a thin `/live`/`/ready` HTTP listener, self-electing across a swarm's children | The built-in probe listener; roll your own liveness check |
+| **Worker topology DSL** | `config.topology` declares how many processes of each kind the swarm forks, with each kind's queues and concurrency, in code instead of ad hoc `-q` flags | The declarative topology; fall back to CLI queue flags |
+| **[Kubernetes probes](#kubernetes-metrics--tracing)** | `config.health_check` opens a thin `/live`/`/ready`/`/metrics` HTTP listener, self-electing across a swarm's children | The built-in probe listener; roll your own liveness check |
 | **Dashboard theme, locale & timezone** | Light/dark/system theme, per-visitor locale override, and a 400-zone timezone picker for every timestamp in the SPA | Nothing server-side — this is dashboard-only |
 
 AI dashboard panes — anomaly detection, natural-language queries, error triage, and capacity forecasting — are **planned, not shipped**: they're [roadmap M5](docs/idea/13-roadmap.md#m5--ai-dashboard), after the M4.5 extras above.
@@ -258,10 +258,11 @@ end
 
 | Path | Meaning |
 |---|---|
-| `/live` | 200 while the Launcher is running; 503 once `stop`/`quiet` is called. |
+| `/live` | 200 until the process is shutting down; 503 once `stop` is called. A quiet process stays 200, so quieting a pod does not get it restarted. |
+| `/metrics` | Prometheus text exposition; `metrics: false` turns it into a 404. |
 | `/ready` | 200 only when Redis is reachable **and** the heartbeat fired within `ready_window` (default 30s); 503 otherwise. |
 
-Knobs: `health_check(port:, bind: "0.0.0.0", ready_window: 30)`. In swarm mode one child owns the port; the others poll every 5s and take it over if the owner dies, so probes survive a child restart — a pod never fails a probe just because a worker recycled.
+Knobs: `health_check(port:, bind: "0.0.0.0", ready_window: 30, metrics: true, min_ready: nil)`, or `WURK_HEALTH_PORT` to turn it on from the environment. In swarm mode one child owns the port; the others poll every 5s and take it over if the owner dies, so probes survive a child restart — a pod never fails a probe just because a worker recycled.
 
 **Getting the numbers out.** Point these at whatever you already run:
 
@@ -273,7 +274,7 @@ Knobs: `health_check(port:, bind: "0.0.0.0", ready_window: 30)`. In swarm mode o
 | Queue/job/swarm state for external scrapers and autoscalers | Bearer-token `/v1` JSON API, mountable standalone or via `wurk api` | [api-http](docs/api-http.md) |
 | Errors | Built-in Sentry reporting, terminal failures only, no job args | [sentry](docs/sentry.md) |
 
-There is no native Prometheus `/metrics` endpoint — the StatsD export or the `/v1` API is the current path into a Prometheus/Grafana stack.
+For Prometheus, scrape `GET /metrics` on the probe port ([metrics](docs/metrics.md)); the StatsD export and the `/v1` API are the other paths into a Prometheus/Grafana stack.
 
 **Backpressure at fleet scale.** `config.global_concurrency = { critical: 20 }` caps in-flight jobs for a queue across every pod, folded into the fetch pipeline rather than bolted on as a middleware sleep — see [rate limiting](docs/rate-limiting.md).
 

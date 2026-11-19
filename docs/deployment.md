@@ -3,8 +3,8 @@
 Wurk is a drop-in for Sidekiq, so it deploys the same way: a long-running worker
 process supervised by your init system, signalled for quiet/reload/stop during a
 deploy. If you already run Sidekiq under systemd or capistrano-sidekiq, the only
-change is the binary name (`sidekiq` → `wurk`) — the signals, flags, and config
-file are identical.
+change is the binary name (`sidekiq` → `wurk`), and even that is optional since
+`sidekiq` ships as an alias — the signals, flags, and config file are identical.
 
 > Authoritative signal reference: [`docs/target/sidekiq-free.md`](target/sidekiq-free.md) §21 (CLI).
 > Just getting a worker running (incl. standalone, no Rails)? See [`docs/running.md`](running.md).
@@ -22,8 +22,8 @@ file are identical.
 
 `wurkswarm` on a Rails target loads `config/application.rb` before the `WURK_PRELOAD` groups, so gems that need Rails at require time load. If that file raises `NameError`, because it uses a gem it expects the swarm to have preloaded, the process re-executes itself once (same pid, same environment) with the preload first, which is stock `sidekiqswarm`'s order, and logs a warning naming the first error. Such an app starts its boot twice, so a `Bundler.require` of your own in `config/application.rb` avoids that. An app needing both orders in one boot has no order that works: it fails, and shows both errors.
 
-`sidekiqswarm` ships as an alias for `wurkswarm`, so an existing Enterprise
-`sidekiqswarm` invocation keeps working unchanged.
+`sidekiq` ships as an alias for `wurk` and `sidekiqswarm` as an alias for
+`wurkswarm`, so an existing invocation of either keeps working unchanged.
 
 In a Rails app the engine auto-starts the swarm during boot, so your web/worker
 dynos often need no separate worker command at all — set `WURK_DISABLED=1` on
@@ -67,7 +67,7 @@ These are what your deploy tooling sends. Wurk implements the full Sidekiq set.
 | `TERM` / `INT` | `wurk`, swarm parent | Graceful shutdown — stop fetching, let in-flight jobs finish up to the shutdown timeout (`-t`, default **25s**), then exit. The swarm parent relays `TERM` to every child and waits `timeout + 5s` before `KILL`ing stragglers. |
 | `TSTP` | `wurk`, swarm parent | Quiet — stop fetching new work; in-flight jobs finish. **One-way: there is no resume.** Quiet, then `TERM` to shut down. |
 | `USR1` | swarm parent **only** | Zero-downtime rolling restart — fork a replacement child, wait for its heartbeat, `TERM` the old one, then the next slot. See [§ Rolling restarts](#rolling-restarts). |
-| `TTIN` / `INFO` | `wurk` only | Dump every thread's backtrace to the log (for diagnosing a stuck worker). |
+| `TTIN` | `wurk`, swarm parent | Dump every thread's backtrace to the log (for diagnosing a stuck worker). The swarm parent relays it to every child, and each child dumps its own threads. `wurk` also takes `INFO`, where the platform has it (BSD, macOS). |
 | `USR2` | `wurk`, swarm parent | Reopen log files (logrotate). The swarm parent relays it to every child. |
 
 Two sharp edges, both provable from the trap tables (`Wurk::CLI::SIGNAL_HANDLERS`,
@@ -78,8 +78,8 @@ Two sharp edges, both provable from the trap tables (`Wurk::CLI::SIGNAL_HANDLERS
   disposition and terminates the process abruptly, mid-job. Rolling restart is a
   swarm-parent feature. (Swarm *children* trap `USR1` as an explicit no-op, so a
   stray signal to a child pid is harmless.)
-- **`TTIN` / `INFO` are single-process only.** The swarm parent and its children do
-  not trap them, so use them against `bundle exec wurk`, not `wurkswarm`.
+- **`INFO` is single-process only.** The swarm parent and its children trap `TTIN`
+  but not `INFO`, so send `TTIN` to a `wurkswarm` parent.
 
 **Quiet is global and sticky.** `TSTP` on the swarm parent sets a flag that is relayed
 to every live child *and* inherited by every future fork — a child that crashes or is
@@ -508,7 +508,7 @@ drain.
   form (`ENTRYPOINT bundle exec wurkswarm`) wraps the command in `/bin/sh -c`, which
   reintroduces the same problem.
 - **PID 1 has no default signal dispositions**, but Wurk installs explicit traps for
-  everything it cares about (`TERM INT TSTP USR1 USR2` on the swarm parent), so it
+  everything it cares about (`TERM INT TSTP USR1 USR2 TTIN` on the swarm parent), so it
   works as PID 1 without an init shim. You still may want `--init` / `tini` so the
   reaping of *your app's* stray grandchildren isn't the swarm's problem — the swarm
   reaps only its own children.
@@ -590,7 +590,8 @@ Anything else returns `404` JSON; any non-`GET` returns `405`. Every response ex
 
 Knobs (`Wurk::Configuration#health_check`): `port:` (required, 0–65535 — `0` lets the
 kernel pick), `bind:` (default `"0.0.0.0"`), `ready_window:` (default `30`, must be
-> 0). The listener starts **last** in the launcher's boot order, so probes are not
+> 0), `metrics:` (default `true`) and `min_ready:` (default `nil`: half the fleet,
+rounded up). The listener starts **last** in the launcher's boot order, so probes are not
 accepted until pollers, managers, and the reaper are up.
 
 > **Swarm mode: the port is shared, and it fails over.** All children try to bind the
@@ -940,8 +941,8 @@ everything else is the same everywhere.
    Redis answers and it has heartbeated within `ready_window`.
 5. **Stop the old workers.** `TERM`. In-flight jobs get up to `shutdown_timeout`
    (`-t`, default 25s); the swarm parent waits `timeout + 5s` before `KILL`ing
-   stragglers. Anything killed anyway is reclaimed from its private list on the next
-   boot, so the worst case is a retry, not a loss.
+   stragglers. Anything killed anyway is reclaimed from its private list once the dead
+   process's heartbeat expires, so the worst case is a late re-run, not a loss.
 6. **Confirm the fleet.** The dashboard's Busy page should show only new-release
    processes; the swarm parent logs a line per respawn/restart.
 

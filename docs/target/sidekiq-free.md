@@ -467,7 +467,7 @@ end
 ```ruby
 module Sidekiq::IterableJob
   # Cannot define #perform (raises at method_added)
-  def build_enumerator(*args, cursor:) end   # MUST return Enumerator yielding [obj, new_cursor]
+  def build_enumerator(*args, cursor:) end   # MUST return Enumerator yielding [obj, cursor]; cursor = obj's own position (checkpointed before obj runs; resume re-enters at it)
   def each_iteration(item, *args)     end
 
   # hooks

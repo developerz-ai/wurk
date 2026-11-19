@@ -238,6 +238,34 @@ class LuaTest < Wurk::Test::UnitCase
     end
   end
 
+  # A job arg is user data: a hash in it that happens to carry an
+  # `enqueued_at` key, ahead of the top-level one or without it, keeps its value.
+  # Key order is the producer's (a stock Sidekiq client writes its own), so the
+  # top-level key can sit anywhere.
+  def test_reliable_schedule_promote_restamps_only_the_top_level_enqueued_at
+    sset = "#{@ns}:schedule"
+    members = [
+      '{"class":"R","args":[{"enqueued_at":5,"nested":{"enqueued_at":6}}],' \
+      '"queue":"beta","jid":"a","enqueued_at":1600000000000}',
+      %({"enqueued_at":1600000000000,"class":"R","args":[{"enqueued_at":5}],"queue":"beta","jid":"b"}),
+      '{"class":"R","args":[{"enqueued_at":5},"x\\\\",{"enqueued_at":7}],"queue":"beta","jid":"c"}',
+      '{"class":"R","args":["{\\"enqueued_at\\":5}",{"k\\"":[{"enqueued_at":8}]}],' \
+      '"queue":"beta","enqueued_at":1.5e12,"jid":"d"}'
+    ]
+    @pool.with do |c|
+      members.each_with_index { |m, i| c.call('ZADD', sset, 100 + i, m) }
+      promote(c, sset)
+      jobs = c.call('LRANGE', "#{@ns}:queue:beta", 0, -1).map { |raw| Wurk.load_json(raw) }.sort_by { |j| j['jid'] }
+
+      assert_equal([1_700_000_000_000] * 4, jobs.map { |j| j['enqueued_at'] })
+      assert_equal [{ 'enqueued_at' => 5, 'nested' => { 'enqueued_at' => 6 } }], jobs[0]['args']
+      assert_equal [{ 'enqueued_at' => 5 }], jobs[1]['args']
+      assert_equal [{ 'enqueued_at' => 5 }, 'x\\', { 'enqueued_at' => 7 }], jobs[2]['args']
+      assert_equal ['{"enqueued_at":5}', { 'k"' => [{ 'enqueued_at' => 8 }] }], jobs[3]['args']
+      c.call('DEL', "#{@ns}:queue:beta")
+    end
+  end
+
   # K6: a poison member scored below a valid one used to abort the script at
   # the same member on every sweep. It must land in dead (scored `now`) while
   # the valid member behind it still promotes.

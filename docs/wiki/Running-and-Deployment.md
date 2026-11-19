@@ -18,7 +18,7 @@ The Rails console and the test environment skip the auto-fork automatically.
 | `bundle exec wurk` | One process, one thread pool | `sidekiq` |
 | `bundle exec wurkswarm` | Forks N children from one preloaded parent — real parallelism | `sidekiqswarm` |
 
-`sidekiqswarm` is an alias for `wurkswarm`. There is **no `sidekiq` binary**; point any `bundle exec sidekiq` invocation at `wurk`. Flags are Sidekiq's: `-c`, `-q queue[,weight]`, `-r`, `-t`, `-e`, `-g`, `-C`, `-v`.
+`sidekiq` is an alias for `wurk` and `sidekiqswarm` for `wurkswarm`, so an existing `bundle exec sidekiq` invocation keeps working. Flags are Sidekiq's: `-c`, `-q queue[,weight]`, `-r`, `-t`, `-e`, `-g`, `-C`, `-v`.
 
 ## Signals
 

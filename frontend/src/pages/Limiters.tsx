@@ -6,6 +6,7 @@ import { SortableTh } from '../components/SortableTh';
 import { useSort, type Accessors } from '../hooks/useSort';
 import { usePageParam } from '../hooks/usePageParam';
 import { useResetPageOnEmpty } from '../hooks/useResetPageOnEmpty';
+import { RefreshError } from '../components/RefreshError';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
 import { SkeletonTable } from '../components/Skeleton';
@@ -100,7 +101,9 @@ export default function Limiters() {
           <SkeletonTable rows={8} cols={readOnly() ? 6 : 7} />
         </div>
       </Match>
-      <Match when={q.isError || !q.data}>
+      {/* Gate on the payload, not isError: a failed background poll flips isError
+          while the last good payload is still cached. RefreshError says so inline. */}
+      <Match when={!q.data}>
         <div class="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>
       </Match>
       <Match when={q.data}>
@@ -109,6 +112,7 @@ export default function Limiters() {
             <PageHeader icon="gauge" title={t('nav.limiters')} summary={t('summaries.limiters')}>
               <span class="badge badge-muted">{formatNumber(data().total)}</span>
             </PageHeader>
+            <RefreshError when={q.isError} />
 
             <Show when={sorted().length > 0} fallback={<div class="empty-state">{t('common.empty')}</div>}>
               <div class="table-wrapper">

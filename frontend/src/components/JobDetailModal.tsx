@@ -1,4 +1,4 @@
-import { For, Show, type JSX } from 'solid-js';
+import { For, Show, createMemo, type JSX } from 'solid-js';
 import { useQuery } from '@tanstack/solid-query';
 import Modal from './Modal';
 import { t } from '../i18n';
@@ -67,7 +67,10 @@ export default function JobDetailModal(props: JobDetailModalProps) {
     staleTime: 30_000,
   }));
   const backtrace = () => props.entry?.error_backtrace ?? (wantsDetail() ? detail.data?.error_backtrace : null);
-  const footer =
+  // A memo, not a one-off: `actions` goes away when read-only mode arrives
+  // (useMeta can settle after the page that renders this), and the buttons
+  // have to go with it.
+  const footer = createMemo(() =>
     props.actions && props.actions.length > 0 && props.onAction ? (
       <div style={{ display: 'flex', gap: '0.5rem', 'justify-content': 'flex-end', 'flex-wrap': 'wrap' }}>
         <For each={props.actions}>
@@ -86,10 +89,11 @@ export default function JobDetailModal(props: JobDetailModalProps) {
           )}
         </For>
       </div>
-    ) : undefined;
+    ) : undefined,
+  );
 
   return (
-    <Modal open={props.entry !== null} onClose={props.onClose} title={props.entry?.klass ?? t('job.detail')} width={680} footer={footer}>
+    <Modal open={props.entry !== null} onClose={props.onClose} title={props.entry?.klass ?? t('job.detail')} width={680} footer={footer()}>
       <Show when={props.entry}>
         {(entry) => (
           <div style={{ display: 'flex', 'flex-direction': 'column', gap: '1rem' }}>

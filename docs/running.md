@@ -84,9 +84,9 @@ or simply running `wurkswarm` separately.
 | `bundle exec wurk` | One process, a thread pool | `sidekiq` |
 | `bundle exec wurkswarm` | Forks N worker children from one preloaded parent — fork-based real parallelism | `sidekiqswarm` |
 
-`sidekiqswarm` ships as an alias for `wurkswarm`, so an existing Enterprise
-invocation drops in unchanged. There is **no `sidekiq` binary** — point any
-`bundle exec sidekiq` command at `wurk`.
+`sidekiq` ships as an alias for `wurk` and `sidekiqswarm` as an alias for
+`wurkswarm`, so an existing `bundle exec sidekiq` or Enterprise `sidekiqswarm`
+invocation drops in unchanged.
 
 ```bash
 bundle exec wurk        -e production            # single process
@@ -267,6 +267,7 @@ with (a WARN says so), and only a swarm child rebuilds its pools.
 Send `TERM` (or `INT`) for a graceful drain — fetching stops, in-flight jobs
 finish up to the shutdown timeout (`-t`, default 25s), then the process exits. A
 `SIGKILL` is always safe: reliable fetch keeps in-flight jobs on a per-process
-private list in Redis and reclaims them on the next boot. The full signal table
+private list in Redis, and a live process reclaims them once the dead one's
+heartbeat expires. The full signal table
 (quiet, rolling restart, thread dump, log reopen) is in
 [`docs/deployment.md`](deployment.md#signals).

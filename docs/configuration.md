@@ -167,6 +167,7 @@ Verbatim from `Wurk::Configuration::DEFAULTS`.
 | `:redis_error_handlers` | Array | `[]` | Registered via `config.on_redis_error`; receives one Hash |
 | `:status_ttl` | Integer | `Keys::STATUS_TTL` | `status:<jid>` (`Wurk::Status`) row lifetime, re-stamped on every write |
 | `:status_retention` | Integer / nil | `nil` | Extra lifetime a `complete` status row gets past `status_ttl`; `nil` keeps the same clock as a running job, `0` matches Sidekiq's own behavior (nothing left behind) |
+| `:metrics_retention` | Integer / nil | `nil` | TTL in seconds of the 10-minute metrics buckets; `nil` keeps 30 days, anything under 3 days raises (see [metrics](metrics.md)) |
 | `:telemetry` | Boolean | `false` | Opts into OpenTelemetry spans (`Wurk::Telemetry`); also needs the `opentelemetry-api` gem installed |
 | `:api_tokens` | Hash | `{}` | Bearer tokens for the HTTP API (`Wurk::API`), as `token => [scopes]`. Empty means the API mount doesn't exist |
 | `:api_max_body_bytes` | Integer | `1_048_576` | Request body cap, refused before parsing |
@@ -177,6 +178,7 @@ Verbatim from `Wurk::Configuration::DEFAULTS`.
 | `:api_rate_limit` | Integer / nil | `nil` | Per-token request ceiling; `nil` is off |
 | `:api_rate_limit_interval` | Symbol | `:minute` | Window `api_rate_limit` is measured over |
 | `:global_concurrency` | Hash | `{}` | Cluster-wide per-queue cap (`Wurk::QueueSlot`), as `{ "critical" => 20 }`. Empty means no queue is capped |
+| `:swarm_crash_exit_after` | Numeric / nil | `600` | Seconds every swarm slot may crash-loop before `wurkswarm` exits non-zero; `nil` or `false` respawns forever (see [Health checks](#health-checks)) |
 
 ### Additional keys read at runtime
 
@@ -195,7 +197,7 @@ Not in `DEFAULTS` — unset unless you assign them.
 | `:scheduled_enq` | Class | poller default | Set to `Wurk::Scheduled::ReliableEnq` by `config.reliable_scheduler!` |
 | `:job_logger` | Class | `Wurk::JobLogger` | Per-job start/done logger |
 | `:skip_default_job_logging` | Boolean | `false` | Silences the per-job start/done lines |
-| `:scheduler_initial_wait` | Numeric | `10` | Seconds before the scheduler's first sweep |
+| `:scheduler_initial_wait` | Numeric | `10` plus up to `5` of random jitter | Seconds before the scheduler's first sweep |
 | `:cron_tick_interval` | Numeric | `60` | Periodic (cron) tick cadence |
 | `:metrics_rollup_interval` | Numeric | `60` | Leader-only metrics + per-queue gauge rollup cadence |
 | `:super_fetch_reaper_interval` | Numeric | `60` | Orphan-reclamation sweep cadence |
@@ -211,7 +213,7 @@ Not in `DEFAULTS` — unset unless you assign them.
 
 | Call | Notes |
 |---|---|
-| `config.concurrency` / `= n` | Threads per process; reads/writes the **default capsule** |
+| `config.concurrency` / `= n` | Threads per process; reads/writes the **default capsule**. Coerced with `Integer()`, so `ENV` strings work and a non-numeric value raises |
 | `config.queues` / `= [...]` | Ordered/weighted queue list on the default capsule |
 | `config.total_concurrency` | Sum of `concurrency` across all capsules |
 | `config.capsule(name) { |cap| … }` | Create/lookup a capsule |
@@ -229,7 +231,7 @@ Not in `DEFAULTS` — unset unless you assign them.
 | `config.error_handlers` / `config.death_handlers` | Arrays of callables |
 | `config.handle_exception(ex, ctx = {})` | Dispatch to the error handlers |
 | `config.on(event) { … }` | Lifecycle hook |
-| `config.logger` / `= logger` | Process logger |
+| `config.logger` / `= logger` | Process logger. Assigning `nil` keeps the current logger and raises its level to `FATAL`, as Sidekiq does |
 | `config.thread_priority` / `= n` | Default `-1`; applied to every component thread `safe_thread` spawns (an explicit `priority:` argument wins) |
 | `config.register(name, obj)` / `config.lookup(name, default_class = nil)` | Extension service locator |
 | `config.topology` / `= Wurk::Topology…` | Swarm layout |
@@ -238,7 +240,7 @@ Not in `DEFAULTS` — unset unless you assign them.
 | `config.periodic { |mgr| … }` | Cron registration (`mgr.register(cron, JobClass, **opts)`) |
 | `config.retain_history(seconds = 30) { |s| … }` | Ent historical-metrics snapshotter |
 | `config.dogstatsd = -> { … }` | Statsd/Dogstatsd client factory, invoked once per process after fork |
-| `config.health_check(port:, bind: "0.0.0.0", ready_window: 30)` | Opt-in `/live` + `/ready` listener |
+| `config.health_check(port:, bind: "0.0.0.0", ready_window: 30, metrics: true, min_ready: nil)` | Opt-in `/live` + `/ready` + `/metrics` listener (see [Health checks](#health-checks)) |
 | `config.web` | The `Wurk::Web.config` singleton (see [authentication.md](authentication.md)) |
 | `config.super_fetch!` | Sidekiq Pro toggle; reliable fetch is already the default, so this is a no-op apart from capturing its optional recovery block |
 | `config.reliable_scheduler!` | **Not a no-op.** Swaps `:scheduled_enq` to the atomic promoter. The default poller pops then pushes and has a job-loss window — see [Reliability](reliability.md) |
@@ -343,8 +345,9 @@ production:
 
 `wurk` (single process, one thread pool) and `wurkswarm` (parent forks
 `WURK_COUNT` children and supervises them) share one option parser.
-`sidekiqswarm` is shipped as an alias for `wurkswarm`. There is no `sidekiq`
-binary.
+`sidekiq` is shipped as an alias for `wurk` and `sidekiqswarm` as an alias for
+`wurkswarm`, so an existing `bundle exec sidekiq -C config/sidekiq.yml` keeps
+working.
 
 | Flag | Option | Notes |
 |---|---|---|
@@ -737,8 +740,8 @@ Wurk.logger.formatter = Wurk::Logger::Formatters::JSON.new   # NDJSON for log ag
 |---|---|
 | Destination | `$stdout`. Assign `config.logger = Wurk::Logger.new("/var/log/wurk.log")` for a file |
 | Level | `INFO`. `DEBUG` via `-v` or `DEBUG_INVOCATION=1` |
-| Formatter | `Formatters::Pretty` by default; `Formatters::WithoutTimestamp` when `DYNO` is set (Heroku already prefixes a timestamp); `Formatters::JSON` opt-in |
-| Context | All three formatters read the thread-local `Wurk::Context`, so every line carries `jid`/`bid`/`tags` without threading a hash through |
+| Formatter | `Formatters::Pretty` by default; `Formatters::WithoutTimestamp` when `DYNO` is set (Heroku already prefixes a timestamp); `Formatters::JSON` and `Formatters::Plain` (`Pretty` without the ANSI colour codes) opt-in |
+| Context | Every formatter reads the thread-local `Wurk::Context`, so every line carries `jid`/`bid`/`tags` without threading a hash through |
 | Per-job lines | `Wurk::JobLogger` emits start/done. Silence with `config[:skip_default_job_logging] = true`; swap the class with `config[:job_logger]`; choose which job keys reach the log context with `config[:logged_job_attributes]` (default `["bid", "tags"]`) |
 | Log rotation | `SIGUSR2` reopens the log file. Send it to the swarm parent — it relays USR2 to every child, and each child calls `logger.reopen`. The standalone `wurk` process handles USR2 itself |
 
@@ -874,9 +877,7 @@ stored `localStorage` preference still outrank the hint. Both the shell's
 pre-paint script and the SPA respect the stored preference.
 
 Dark is the palette on the bare `:root`; light is a full second palette, not a
-filter — see [`docs/benchmarks.md`](benchmarks.md) for none of this affects
-performance, it's pure CSS custom properties swapped by a `data-theme`
-attribute.
+filter. Both are CSS custom properties swapped by a `data-theme` attribute.
 
 ### Timezone
 
@@ -958,7 +959,7 @@ differs from `docs/target/sidekiq-free.md`:
 The removed `YAML :strict` row was never a divergence: strict fetch was
 removed in Sidekiq 8.x itself, the spec's YAML config section
 (`docs/target/sidekiq-free.md:1230-1248`) defines no `:strict` key, and Wurk
-drops the key for parity (`lib/wurk/cli.rb:429`).
+drops the key for parity (`Wurk::CLI#parse_config`).
 
 ---
 

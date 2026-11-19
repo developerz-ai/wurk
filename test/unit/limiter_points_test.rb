@@ -110,6 +110,29 @@ class LimiterPointsTest < Wurk::Test::UnitCase
     assert_raises(ArgumentError) { l.within_limit(estimate: 0) { |_h| } }
   end
 
+  # A missing state key is a full bucket (the acquire script's own default), so
+  # an adjustment landing after `reset` — or after the key's ttl lapsed under a
+  # long block — starts from the cap, not from an empty bucket.
+  def test_refund_after_reset_starts_from_a_full_bucket
+    l = Wurk::Limiter.points("j-#{@suffix}", 100, 0)
+    l.within_limit(estimate: 50) do |h|
+      l.reset
+      h.points_used(20)
+    end
+
+    assert_in_delta 100, l.size, 0.1
+  end
+
+  def test_under_estimate_after_reset_is_charged_against_a_full_bucket
+    l = Wurk::Limiter.points("k-#{@suffix}", 100, 0)
+    l.within_limit(estimate: 10) do |h|
+      l.reset
+      h.points_used(30)
+    end
+
+    assert_in_delta 80, l.size, 0.1
+  end
+
   def test_reset_restores_full_balance_on_next_acquire
     l = Wurk::Limiter.points("i-#{@suffix}", 100, 0)
     l.within_limit(estimate: 50) { |_h| }

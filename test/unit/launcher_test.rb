@@ -442,6 +442,26 @@ class LauncherTest < Wurk::Test::UnitCase
     assert_equal 1, listed?(id), 'a quieted process must stay in the live set (#236)'
   end
 
+  # A swarm child respawned into a quieted swarm quiets its launcher before
+  # running it (ChildBoot start_quiet). That must boot processors that exit
+  # without a single fetch, leaving a job already waiting on the queue alone.
+  def test_quiet_before_run_never_fetches
+    queue = "lt-quiet-#{@ns}"
+    @config.default_capsule.queues = [queue]
+    @cleanup_keys << "queue:#{queue}"
+    pool.with { |c| c.call('LPUSH', "queue:#{queue}", Wurk.dump_json('class' => 'X', 'jid' => 'j1', 'args' => [])) }
+    launcher = Wurk::Launcher.new(@config)
+
+    launcher.quiet
+    launch(launcher, async_beat: false)
+    processors = launcher.managers.flat_map { |m| m.workers.to_a }
+    deadline = ::Time.now + 5
+    sleep 0.01 while processors.any? { |p| p.thread&.alive? } && ::Time.now < deadline
+
+    assert(processors.none? { |p| p.thread&.alive? }, 'quieted processors must exit')
+    assert_equal(1, pool.with { |c| c.call('LLEN', "queue:#{queue}") })
+  end
+
   # Regression #236: the heartbeat survives quiet, so #stop is now what tears the
   # thread down — via stop_heartbeat (terminate the beat timer, then join).
   def test_stop_terminates_the_heartbeat_thread

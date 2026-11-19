@@ -155,6 +155,25 @@ class ChildBootTest < Wurk::Test::UnitCase
     read&.close
   end
 
+  # A child respawned into a TSTP-quieted swarm must never fetch. Quieting
+  # after `launcher.run` left the processors fetching from the moment the
+  # managers started until the quiet landed — every job they claimed in that
+  # window ran mid-maintenance. In a real fork: run_launcher arms pdeathsig.
+  def test_start_quiet_quiets_the_launcher_before_it_runs
+    read, write = ::IO.pipe
+    pid = ::Process.fork do
+      read.close
+      write.write(start_quiet_launcher_events.join(','))
+      exit!(0)
+    end
+    write.close
+    ::Process.waitpid(pid)
+
+    assert_equal 'quiet,run,stop', read.read
+  ensure
+    read&.close
+  end
+
   def test_install_signal_handlers_wires_self_pipe_dispatch
     with_saved_traps(%w[TERM INT TSTP USR2 TTIN]) do
       launcher = FakeLauncher.new
@@ -329,6 +348,20 @@ class ChildBootTest < Wurk::Test::UnitCase
     launcher = FakeLauncher.new
     @boot.send(:install_signal_handlers, launcher)
     wait_until { launcher.events.include?(:quiet) }
+  end
+
+  # Runs in the forked child. The fake's `run` TERMs its own process, so the
+  # dispatcher stops the launcher and run_launcher returns.
+  def start_quiet_launcher_events
+    launcher = FakeLauncher.new
+    launcher.define_singleton_method(:run) do
+      @events << :run
+      ::Process.kill('TERM', ::Process.pid)
+    end
+    boot = Wurk::Swarm::ChildBoot.new(@config, nil, 0, start_quiet: true)
+    Wurk::Launcher.define_singleton_method(:new) { |*| launcher }
+    boot.send(:run_launcher)
+    launcher.events
   end
 
   def with_saved_traps(signals)

@@ -155,6 +155,21 @@ class FetcherCappedTest < Wurk::Test::UnitCase
                  'the member names this thread and the claim it made')
   end
 
+  # A unit put back unrun (the Sidekiq UnitOfWork#requeue a throttling fetch
+  # wrapper calls) gives back its slot with the job. It used to keep it, and
+  # the heartbeat refreshed it every beat: at capacity 1 the queue stopped
+  # cluster-wide for the life of the process.
+  def test_a_requeued_unit_gives_back_its_slot
+    build_fetcher
+    enqueue(@public_queue, 'p1')
+    uow = @fetcher.retrieve_work
+    uow.requeue
+
+    assert_empty slot_members
+    refute Wurk::QueueSlot::HELD.snapshot.key?(uow.slot_token)
+    assert_equal 'p1', @fetcher.retrieve_work&.job
+  end
+
   # The refusal has to happen before either list is touched, or a worker that
   # cannot run the job has still taken it off the queue.
   def test_a_queue_at_capacity_yields_nothing_and_leaves_the_job_queued

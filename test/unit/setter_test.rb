@@ -118,6 +118,23 @@ class SetterTest < Wurk::Test::UnitCase
     assert_raises(ArgumentError) { Wurk::Worker::Setter.new(SpyWorker, wait: 'soon') }
   end
 
+  # Upstream takes `wait_until || wait`: a nil one means no delay (code that
+  # forwards an optional delay), and never reaches the payload as a key.
+  def test_nil_wait_enqueues_now
+    SpyWorker.set(wait: nil, wait_until: nil).perform_async
+
+    refute SpyWorker.captured_item.key?('at')
+    refute SpyWorker.captured_item.key?('wait')
+    refute SpyWorker.captured_item.key?('wait_until')
+  end
+
+  def test_wait_until_wins_over_wait
+    target = Time.now.to_f + 600
+    SpyWorker.set(wait_until: target, wait: 30).perform_async
+
+    assert_in_delta target, SpyWorker.captured_item['at'], 0.01
+  end
+
   # --- perform_async --------------------------------------------------
 
   def test_perform_async_builds_class_args_payload

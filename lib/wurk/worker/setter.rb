@@ -114,22 +114,20 @@ module Wurk
         ::Time.now.to_f
       end
 
-      # Lifts wait/wait_until → at; stringifies keys. Matches Sidekiq's
-      # Setter initializer normalization exactly.
+      # Lifts wait/wait_until → at; stringifies keys. As Sidekiq's Setter:
+      # `wait_until` wins over `wait`, and a nil one means no delay.
       def normalize_opts(opts)
-        result = {}
-        opts.each do |k, v|
-          key = k.to_s
-          case key
-          when 'wait', 'wait_until'
-            # Sidekiq drops `at` when the target is not in the future, so
-            # set(wait: 0) / an elapsed wait_until enqueues immediately
-            # instead of parking in the schedule ZSET for up to a poll tick.
-            ts = absolute_at(v)
-            result['at'] = ts if ts > now_seconds
-          else result[key] = v
-          end
-        end
+        result = opts.transform_keys(&:to_s)
+        wait_until = result.delete('wait_until')
+        wait = result.delete('wait')
+        interval = wait_until || wait
+        return result if interval.nil?
+
+        # Sidekiq drops `at` when the target is not in the future, so
+        # set(wait: 0) / an elapsed wait_until enqueues immediately
+        # instead of parking in the schedule ZSET for up to a poll tick.
+        ts = absolute_at(interval)
+        result['at'] = ts if ts > now_seconds
         result
       end
     end

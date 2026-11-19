@@ -1,9 +1,11 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/solid-query';
 import { onMount, createSignal, For, Switch, Match, Show } from 'solid-js';
+import { RefreshError } from '../components/RefreshError';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
 import { SkeletonTable } from '../components/Skeleton';
 import Modal from '../components/Modal';
+import { activatable } from '../components/activatable';
 import { relativeTime, hoverTime, truncate } from '../utils';
 import { useMeta } from '../hooks/useMeta';
 import { SortableTh } from '../components/SortableTh';
@@ -86,7 +88,9 @@ export default function Cron() {
           <SkeletonTable rows={8} cols={readOnly() ? 6 : 7} />
         </div>
       </Match>
-      <Match when={q.isError || !q.data}>
+      {/* Gate on the payload, not isError: a failed background poll flips isError
+          while the last good payload is still cached. RefreshError says so inline. */}
+      <Match when={!q.data}>
         <div class="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>
       </Match>
       <Match when={q.data}>
@@ -95,6 +99,7 @@ export default function Cron() {
             <PageHeader icon="stopwatch" title={t('nav.cron')} summary={t('summaries.cron')}>
               <span class="badge badge-muted">{data().length}</span>
             </PageHeader>
+            <RefreshError when={q.isError} />
 
             <Show when={data().length > 0} fallback={<div class="empty-state">{t('common.empty')}</div>}>
               <div class="table-wrapper">
@@ -113,10 +118,7 @@ export default function Cron() {
                   <tbody>
                     <For each={sorted()}>
                       {(loop) => (
-                        <tr
-                          class="row-clickable"
-                          onClick={() => setHistoryLoop(loop)}
-                        >
+                        <tr class="row-clickable" {...activatable(() => setHistoryLoop(loop))}>
                           <td style={{ 'font-family': 'monospace', 'font-size': '12px' }} title={loop.tz ?? undefined}>
                             {loop.schedule}
                           </td>

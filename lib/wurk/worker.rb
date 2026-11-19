@@ -102,22 +102,6 @@ module Wurk
       batch.valid?
     end
 
-    # What `MyJob.jobs` returns. Queues indexes by queue and groups by class on
-    # read, so the rows are a fresh Array; #clear still has to reach the store,
-    # because `MyJob.jobs.clear` is the documented way to reset a class between
-    # tests. Other in-place mutators stay local to this copy.
-    class JobsView < ::Array
-      def initialize(klass, rows)
-        super(rows)
-        @klass = klass
-      end
-
-      def clear
-        ::Wurk::Queues.clear_class(@klass)
-        super
-      end
-    end
-
     # Class-level DSL mixed into every job class by {Wurk::Worker}. These are
     # the public enqueue and configuration entry points.
     #
@@ -216,9 +200,10 @@ module Wurk
         get_sidekiq_options['queue']
       end
 
-      # Fake jobs enqueued for this class, across every queue.
+      # Fake jobs enqueued for this class, across every queue. The live
+      # Array, as upstream: `change(MyJob.jobs, :size)` holds on to it.
       def jobs
-        JobsView.new(to_s, ::Wurk::Queues.jobs_by_class[to_s] || [])
+        ::Wurk::Queues.jobs_by_class[to_s]
       end
 
       def clear

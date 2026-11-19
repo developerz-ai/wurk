@@ -215,7 +215,11 @@ module Wurk
     # Sidekiq-compatible test-mode entry point. Delegates to Wurk::Testing
     # (the single source of truth for the mode): a block scopes the mode to the
     # current thread; no block sets it globally. `Sidekiq.testing!` aliases here.
-    def testing!(mode = :fake, &) = Wurk::Testing.__set_test_mode(mode, &)
+    def testing!(mode = :fake, &)
+      raise "Unknown testing mode: #{mode}" unless %i[fake disable inline].include?(mode)
+
+      Wurk::Testing.__set_test_mode(mode, &)
+    end
 
     # True when in :fake or :inline mode (i.e. not pushing to real Redis).
     def testing? = Wurk::Testing.enabled?
