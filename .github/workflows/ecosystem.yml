@@ -120,7 +120,7 @@ jobs:
       - name: resolve redis port
         if: env.RUN == 'true'
         run: echo "ECOSYSTEM_REDIS_URL=redis://localhost:${{ job.services.redis.ports['6379'] }}/15" >> "$GITHUB_ENV"
-      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+      - uses: ruby/setup-ruby@f9c4492e86def3e644ab32a0ef185eda5b0c20d0 # v1.342.0
         if: env.RUN == 'true'
         with:
           # NOT the newest Ruby, deliberately. This job's subject is third-party
