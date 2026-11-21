@@ -7,12 +7,10 @@ module Wurk
     # The Reaper's report on a `queue:*|*` key that is not a private list it
     # can read the owner of — a list whose owner tail does not parse, say
     # `queue:<queue>|<host>|not-a-pid|<index>`, left behind by a producer that
-    # is not Wurk. Sidekiq Pro's four-part shape
-    # (`queue:<queue>|<host>|<pid>|<index>`) parses as the pre-nonce tail and
-    # is reclaimed, so Pro's lists are not reported. Nothing will ever reclaim
-    # the jobs of an unparseable list, so it is said once per key per process
-    # (WARN, with the list's length) rather than skipped in silence on every
-    # sweep.
+    # is not Wurk, or a key that reads as both a Wurk and a Sidekiq Pro list
+    # (PrivateListKey.parse_full). Nothing will ever reclaim the jobs of an
+    # unparseable list, so it is said once per key per process (WARN, with the
+    # list's length) rather than skipped in silence on every sweep.
     #
     # The dedup memory is an in-memory ::Set in THIS process only: one
     # UnparseableKeys per Reaper, one Reaper per Launcher, one Launcher per
@@ -43,9 +41,10 @@ module Wurk
         @reported.clear if @reported.size >= MEMORY
         @reported << key
         @config.logger.warn do
-          "reaper: #{key.inspect} looks like a reliable-fetch private list but matches neither " \
-            'queue:<queue>|<host>|<pid>|<nonce>|<index> nor the pre-nonce ' \
-            "queue:<queue>|<host>|<pid>|<index>; its #{size} job(s) will not be recovered " \
+          "reaper: #{key.inspect} looks like a reliable-fetch private list but does not read as " \
+            'exactly one of queue:<queue>|<host>|<pid>|<nonce>|<index>, the pre-nonce ' \
+            'queue:<queue>|<host>|<pid>|<index> or Sidekiq Pro\'s queue:sq|<identity>|<queue>; ' \
+            "its #{size} job(s) will not be recovered " \
             'automatically. Inspect it and LMOVE them back onto their queue by hand ' \
             'if they belong to a dead process. ' \
             'Reported once per process: every worker that sees the key logs it for itself, ' \

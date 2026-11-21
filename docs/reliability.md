@@ -292,16 +292,18 @@ the same class of weakness Sidekiq Pro's `super_fetch` has never closed — see
 
 ### The unparseable-key warning
 
-A `queue:*|*` key whose owner Wurk cannot read — a name whose tail is neither
-`<host>|<pid>|<nonce>|<index>` nor `<host>|<pid>|<index>`, say a list another
+A `queue:*|*` key whose owner Wurk cannot read — a name that is not exactly one
+of `queue:<queue>|<host>|<pid>|<nonce>|<index>`, `queue:<queue>|<host>|<pid>|<index>`
+or Sidekiq Pro's `queue:sq|<host>:<pid>:<nonce>|<queue>`, say a list another
 tool wrote under the `queue:` prefix — is one the reaper can never reclaim. It
 does not skip it in silence: it logs a WARN naming the key and how many jobs it
 holds, and moves on. The jobs in such a list stay where they are until you move
 them back by hand.
 
-Sidekiq Pro's own four-part list (`queue:<public>|<host>|<pid>|<index>`) **is**
-read — it is the pre-nonce shape — so it is reclaimed like any other, not
-skipped.
+A Sidekiq Pro list is reclaimed once its owner's heartbeat hash (the `info`
+field at `<host>:<pid>:<nonce>`) has been gone for the reaper's grace, and never
+while it exists. A key that reads as both a Pro and a Wurk list, such as Pro's
+queue `2024|1`, names two possible owners, so Wurk refuses it and warns.
 
 **That warning is per process, and it repeats.** The set of already-reported
 keys is an in-memory `Set` held by the reaper — one instance per worker

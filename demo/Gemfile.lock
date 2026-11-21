@@ -1,7 +1,7 @@
 PATH
   remote: ..
   specs:
-    wurk (1.15.1)
+    wurk (1.15.2)
       base64 (>= 0.1, < 1)
       connection_pool (>= 3.0, < 4)
       fiddle (>= 1.0, < 2)
@@ -153,7 +153,7 @@ GEM
       prettyprint
     prettyprint (0.2.0)
     prism (1.9.0)
-    puma (8.0.2)
+    puma (8.0.3)
       nio4r (~> 2.0)
     racc (1.8.1)
     rack (3.2.8)

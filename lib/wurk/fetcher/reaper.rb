@@ -229,9 +229,9 @@ module Wurk
       end
 
       # Yields private_list_key, [public_q, host, pid, nonce] for every list.
-      # MATCH `queue:*|*` matches only private lists (public queue
-      # keys carry no `|`); PrivateListKey.parse_full drops anything that isn't a
-      # well-formed `queue:<public>|<host>|<pid>|<nonce>|<idx>`.
+      # MATCH `queue:*|*` also matches a public queue with `|` in its name
+      # (#public_queue?); PrivateListKey.parse_full drops anything that is not
+      # a well-formed Wurk or Sidekiq Pro private list.
       def each_private_list
         cursor = '0'
         loop do
@@ -275,9 +275,17 @@ module Wurk
           @grace.forget(key)
           return false
         end
-        return false if @grace.recent?(key, owner)
+        return false if public_queue?(key) || @grace.recent?(key, owner)
 
         owner_gone?(host, pid, nonce)
+      end
+
+      # A public queue's own name can read as a private list. It has no owner to
+      # be dead, and draining it would move its waiting jobs to another queue.
+      def public_queue?(key)
+        redis(idempotent: true) do |c|
+          c.call('SISMEMBER', Keys::QUEUES_SET, key.delete_prefix(Keys::QUEUE_PREFIX))
+        end == 1
       end
 
       def owner_key(host, pid, nonce)

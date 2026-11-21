@@ -162,8 +162,8 @@ remains unchanged.
 
 **Anchor:** [key generation](../../lib/wurk/fetcher/reliable.rb#L87-L95),
 [nonce lifetime](../../lib/wurk/component.rb#L20-L22),
-[current and legacy parsing](../../lib/wurk/fetcher/private_list_key.rb#L30-L52)
-and [tail shapes](../../lib/wurk/fetcher/private_list_key.rb#L56-L78),
+[current and legacy parsing](../../lib/wurk/fetcher/private_list_key.rb#L62-L84)
+and [tail shapes](../../lib/wurk/fetcher/private_list_key.rb#L70-L92),
 Pro §3.2 ([Pro §3.2 Algorithm — private queue naming](../target/sidekiq-pro.md#32-algorithm)).
 
 ## Orphan reclaim moves a job tail-to-tail, not `RPOPLPUSH`
@@ -315,7 +315,7 @@ changes the signal and hand-off ordering, not the purpose of RSS recycling.
 **Wurk:** `Fetcher::Reaper#orphaned?` fast-paths same-boot-generation
 private lists (host **and** `Component::PROCESS_NONCE` match) straight to
 `Process.kill(0, pid)` (`#local_pid_alive?`,
-`lib/wurk/fetcher/reaper.rb:265-276,293-303`). The nonce is
+`lib/wurk/fetcher/reaper.rb:265-276,297-307`). The nonce is
 minted once per process image and inherited unchanged across `fork`
 (`lib/wurk/component.rb:20-22`), so this group is every process forked from
 the current swarm boot, not a single pid. If the OS hands a *replacement*
@@ -342,7 +342,7 @@ component is bug-compatible with — carries the identical limitation, this is
 recorded as a deliberate, matched-parity gap rather than an intentional
 "improvement" left undone.
 
-**Anchor:** `lib/wurk/fetcher/reaper.rb:265-276,293-303`, `lib/wurk/component.rb:20-22`,
+**Anchor:** `lib/wurk/fetcher/reaper.rb:265-276,297-307`, `lib/wurk/component.rb:20-22`,
 `docs/reliability.md` (Reliable fetch → How "dead" is decided), Pro §3.2.
 
 ## Poison-pill counter resets on ACK, and a poison kill fires death handlers
