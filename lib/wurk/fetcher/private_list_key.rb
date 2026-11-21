@@ -4,19 +4,51 @@ require_relative '../keys'
 
 module Wurk
   class Fetcher
-    # Reads the owner back out of a reliable-fetch private list key
-    # (`queue:<public>|<host>|<pid>|<nonce>|<idx>`, see
-    # Reliable.private_queue_name) for the Reaper's liveness check. Pure string
-    # work, no Redis.
+    # Reads the owner back out of a reliable-fetch private list key for the
+    # Reaper's liveness check: Wurk's `queue:<public>|<host>|<pid>|<nonce>|<idx>`
+    # (Reliable.private_queue_name) or Sidekiq Pro's
+    # `queue:sq|<host>:<pid>:<nonce>|<public>` (SuperFetch#private_queue). Pure
+    # string work, no Redis.
     module PrivateListKey
       # The nonce shape Component::PROCESS_NONCE writes (`SecureRandom.hex(6)`).
       NONCE_PATTERN = /\A[0-9a-f]{12}\z/
 
+      PRO_PREFIX = "#{Keys::QUEUE_PREFIX}sq|".freeze
+      # Rebuilt byte for byte into the heartbeat key the liveness check reads,
+      # so a pid that would not round-trip through Integer is refused.
+      PRO_IDENTITY = /\A(.+):([1-9]\d*):([0-9a-f]{12})\z/
+      PRO_QUEUE = /\A[^|]+(?:\|[^|]+)*\z/
+
       module_function
 
-      # `queue:<public>|<host>|<pid>|<nonce>|<idx>` → [public_q, host, pid,
-      # nonce], parsed from the right so a `|` inside the queue name is
-      # tolerated. nil when the key isn't a well-formed private list.
+      # [public_q, host, pid, nonce], or nil when the key isn't a well-formed
+      # private list.
+      #
+      # A key that reads as both Pro's and Wurk's is refused: the two name
+      # different owners, and judging the wrong one dead would drain a live
+      # owner's list. It stays put and the Reaper reports it.
+      def parse_full(key)
+        return unless key.valid_encoding?
+
+        pro = parse_pro(key)
+        wurk = parse_wurk(key)
+        pro && wurk ? nil : pro || wurk
+      end
+
+      # `queue:sq|<identity>|<public>`. Everything after the identity is the
+      # queue, so a `|` inside its name is kept.
+      def parse_pro(key)
+        return unless key.start_with?(PRO_PREFIX)
+
+        identity, queue = key.delete_prefix(PRO_PREFIX).split('|', 2)
+        owner = PRO_IDENTITY.match(identity.to_s)
+        return unless owner && queue&.match?(PRO_QUEUE)
+
+        ["#{Keys::QUEUE_PREFIX}#{queue}", owner[1], owner[2].to_i, owner[3]]
+      end
+
+      # `queue:<public>|<host>|<pid>|<nonce>|<idx>`, parsed from the right so a
+      # `|` inside the queue name is tolerated.
       #
       # With no known prefix to split on, both owner shapes are tried in
       # preference order and the first one leaving a real public queue behind
@@ -27,7 +59,7 @@ module Wurk
       # pipe and puts the real pid in the nonce slot (pipe-bearing queue).
       # Both misreads are refused: the leftover must be a real queue name and
       # the pseudo-nonce must be nonce-shaped (see wide_tail).
-      def parse_full(key)
+      def parse_wurk(key)
         parts = key.split('|')
         owner_tails(parts).each do |host, pid, nonce, width|
           public_q = parts[0...-width].join('|')
