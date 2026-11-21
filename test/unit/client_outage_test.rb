@@ -75,12 +75,13 @@ class ClientOutageTest < Wurk::Test::UnitCase
     Wurk::Client::Buffered.start_drainer!(interval: 0.02)
     pool.recover!
 
+    # A replay takes its entries out of the buffer before the push, so an empty
+    # buffer does not mean they are in Redis yet. Wait on the queue itself.
     deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + 3.0
-    until Wurk::Client::Buffered.buffer_size.zero? || ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) > deadline
-      sleep 0.02
-    end
+    sleep 0.02 until queue_length == 3 || ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) > deadline
 
-    assert_equal 0, Wurk::Client::Buffered.buffer_size, 'background drainer did not flush within 3s'
+    assert_equal 3, queue_length, 'background drainer did not deliver within 3s'
+    assert_equal 0, Wurk::Client::Buffered.buffer_size
 
     queued = @real_pool.with { |c| c.call('LRANGE', "queue:#{@queue}", 0, -1) }
     tags = queued.map { |s| JSON.parse(s)['args'].first }.reverse
@@ -89,6 +90,10 @@ class ClientOutageTest < Wurk::Test::UnitCase
   end
 
   private
+
+  def queue_length
+    @real_pool.with { |c| c.call('LLEN', "queue:#{@queue}") }
+  end
 
   def item(tag:)
     { 'class' => @class_name, 'args' => [tag], 'queue' => @queue }
