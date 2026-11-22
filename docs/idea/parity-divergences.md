@@ -162,8 +162,8 @@ remains unchanged.
 
 **Anchor:** [key generation](../../lib/wurk/fetcher/reliable.rb#L87-L95),
 [nonce lifetime](../../lib/wurk/component.rb#L20-L22),
-[current and legacy parsing](../../lib/wurk/fetcher/private_list_key.rb#L30-L52)
-and [tail shapes](../../lib/wurk/fetcher/private_list_key.rb#L56-L78),
+[current and legacy parsing](../../lib/wurk/fetcher/private_list_key.rb#L62-L84)
+and [tail shapes](../../lib/wurk/fetcher/private_list_key.rb#L70-L92),
 Pro §3.2 ([Pro §3.2 Algorithm — private queue naming](../target/sidekiq-pro.md#32-algorithm)).
 
 ## Orphan reclaim moves a job tail-to-tail, not `RPOPLPUSH`
@@ -315,7 +315,7 @@ changes the signal and hand-off ordering, not the purpose of RSS recycling.
 **Wurk:** `Fetcher::Reaper#orphaned?` fast-paths same-boot-generation
 private lists (host **and** `Component::PROCESS_NONCE` match) straight to
 `Process.kill(0, pid)` (`#local_pid_alive?`,
-`lib/wurk/fetcher/reaper.rb:265-276,293-303`). The nonce is
+`lib/wurk/fetcher/reaper.rb:265-276,297-307`). The nonce is
 minted once per process image and inherited unchanged across `fork`
 (`lib/wurk/component.rb:20-22`), so this group is every process forked from
 the current swarm boot, not a single pid. If the OS hands a *replacement*
@@ -342,7 +342,7 @@ component is bug-compatible with — carries the identical limitation, this is
 recorded as a deliberate, matched-parity gap rather than an intentional
 "improvement" left undone.
 
-**Anchor:** `lib/wurk/fetcher/reaper.rb:265-276,293-303`, `lib/wurk/component.rb:20-22`,
+**Anchor:** `lib/wurk/fetcher/reaper.rb:265-276,297-307`, `lib/wurk/component.rb:20-22`,
 `docs/reliability.md` (Reliable fetch → How "dead" is decided), Pro §3.2.
 
 ## Poison-pill counter resets on ACK, and a poison kill fires death handlers
@@ -483,7 +483,7 @@ Chain order verified in `test/unit/metrics_history_test.rb` and
 `lib/wurk/metrics/statsd.rb:165-184`, `lib/wurk/metrics/statsd.rb:214-219`,
 `lib/wurk/middleware/interrupt_handler.rb:38-40,53`,
 `lib/wurk/middleware/expiry.rb:66-68,115`,
-`lib/wurk.rb:347`, `lib/wurk.rb:363`, `lib/wurk.rb:370`,
+`lib/wurk.rb:348`, `lib/wurk.rb:364`, `lib/wurk.rb:371`,
 `docs/plans/2026/08/07/101-beyond-sidekiq/00-semantics-signoff.md` §1.
 
 ## OpenTelemetry adds `traceparent`/`tracestate` as top-level job-JSON keys, opt-in only
@@ -1414,8 +1414,8 @@ the +5 headroom names the background loops it covers. Sizes stay overridable
 **Wurk:** the setter stores `:redis_idle_timeout`
 (`lib/wurk/configuration.rb:272-273`), and every pool built from the
 configuration starts its own reaper thread on first checkout
-(`lib/wurk/redis_pool.rb:281-290`), sweeping every `min(timeout / 2, 10)`
-seconds through connection_pool's `#reap` (`lib/wurk/redis_pool.rb:322-327`).
+(`lib/wurk/redis_pool.rb:291-300`), sweeping every `min(timeout / 2, 10)`
+seconds through connection_pool's `#reap` (`lib/wurk/redis_pool.rb:332-337`).
 Pools outside the launcher — web, swarm supervisor — are reaped too, because
 the sweep is not tied to any heartbeat.
 
@@ -1434,7 +1434,7 @@ idle; the 10s floor keeps a short timeout from becoming a hot loop. Requires
 connection_pool >= 3.0 for `#reap` (`wurk.gemspec:52`), as Sidekiq 8.1 does.
 
 **Anchor:** `lib/wurk/configuration.rb:272-273`; `lib/wurk/redis_pool.rb:112-115`,
-`lib/wurk/redis_pool.rb:281-290`, `lib/wurk/redis_pool.rb:322-327`; free Config
+`lib/wurk/redis_pool.rb:291-300`, `lib/wurk/redis_pool.rb:332-337`; free Config
 surface ([free §4.2 Public methods — `reap_idle_redis_connections`](../target/sidekiq-free.md#42-public-methods)) and DEFAULTS
 ([free §4.1 DEFAULTS — `redis_idle_timeout`](../target/sidekiq-free.md#41-defaults)).
 
@@ -1444,7 +1444,7 @@ surface ([free §4.2 Public methods — `reap_idle_redis_connections`](../target
 `SortedSet#scan` block forms are mixed into the Data API at load time —
 `Wurk::API::Fast::QueueExt` is included into `Wurk::Queue`
 (`lib/wurk/api/fast.rb:39`) from the require in `lib/wurk.rb`
-(`lib/wurk.rb:380`) — with nothing to enable and nothing to buy. Scripts are
+(`lib/wurk.rb:381`) — with nothing to enable and nothing to buy. Scripts are
 `SCRIPT LOAD`ed once per pool and invoked by `EVALSHA`; `delete_job` returns
 the deleted payload's JSON or nil and raises `ArgumentError` on a blank jid
 (`lib/wurk/api/fast.rb:21`).
@@ -1464,7 +1464,7 @@ script's `LRANGE` blocking Redis for its duration, which is why it is an admin
 action, not a loop primitive.
 
 **Anchor:** `lib/wurk/api/fast.rb:21`, `lib/wurk/api/fast.rb:39`;
-`lib/wurk.rb:380`; Pro §11 ([Pro §11 Fast Lua API extensions](../target/sidekiq-pro.md#11-fast-lua-api-extensions)) and the
+`lib/wurk.rb:381`; Pro §11 ([Pro §11 Fast Lua API extensions](../target/sidekiq-pro.md#11-fast-lua-api-extensions)) and the
 implementation map ([Pro §13 implementation mapping — Lua API](../target/sidekiq-pro.md#13-wurk-implementation-checklist-mapping)).
 
 ## Search covers queue LISTs too, with explicit scan bounds
@@ -1887,12 +1887,12 @@ deploy, where accepting it would quietly change how often a queue is served.
 
 **Anchor:** `lib/wurk/capsule.rb`, `lib/wurk/topology.rb`; pinned by `test/unit/capsule_test.rb`.
 
-## A Redis outage after `perform` returned is not a job failure
+## A Redis failure after `perform` returned never runs the job again
 
-**Wurk:** when `perform` has returned and a server middleware's Redis write afterwards fails with a connection or pool error (or `LOADING`, `BUSY`, `TRYAGAIN`, `CLUSTERDOWN`), the Processor raises `JobRetry::StoreUnavailableAfterPerform`, up to 3 times per process for one jid (`Processor::STORE_REQUEUE_LIMIT`); after that the original error goes to the retry policy, so a store that stays broken cannot re-run `perform` forever. The retry layer lets it through, and the job is reported, put back on its queue and run again. It does not use a retry and never reaches the retry set, the dead set or the death handlers; like any internal exception, the run still counts in `stat:failed`. A Redis error reply after `perform` (`WRONGTYPE`, `OOM`) still goes through the retry policy.
+**Wurk:** once `perform` has returned, a Redis or connection-pool error from the server middleware unwind (a unique unlock, a batch ack), or a hard shutdown landing there, is not a job failure, at any `retry` setting. The job counts as processed and is ACKed; the error goes to the error handlers as `FinishedJobCleanup::BookkeepingFailed`, with the Redis error as its `cause`. It reaches neither the retry set, the dead set nor the death handlers. What the job still owes Redis (its sidekiq-unique-jobs locks, its batch's success ack) is held in the process and retried before each fetch until Redis answers. Any other exception from a middleware after `perform` still goes through the retry policy.
 
-**Spec:** upstream treats any exception out of the server middleware chain as a job failure, so a `retry: false` or last-attempt job whose batch ack hits an outage is killed and its batch is marked dead.
+**Spec:** upstream treats any exception out of the server middleware chain as a job failure, so a job whose unlock or batch ack hits an outage is retried and runs twice, or is killed and marks its batch dead.
 
-**Why:** the job did not fail; the store did. Counting the outage as a failure kills a job that succeeded and permanently suppresses its batch's `:success` callback. Re-running it is the same at-least-once delivery the reliable fetcher already gives a job whose ack is lost.
+**Why:** the job did not fail; the store did. A second run of a job that logged in to a bank or sent an email is the harm the caller's `retry: false` was written to prevent. A process that dies before its ACK lands still re-runs the job through the reaper: that is reliable fetch's at-least-once delivery, on every version and in Sidekiq Pro.
 
-**Anchor:** `lib/wurk/processor.rb`, `lib/wurk/job_retry.rb`; pinned by `test/unit/processor_test.rb`.
+**Anchor:** `lib/wurk/processor.rb`, `lib/wurk/finished_job_cleanup.rb`; pinned by `test/unit/processor_test.rb`, `test/unit/finished_job_cleanup_test.rb`.

@@ -1090,12 +1090,10 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     Wurk::Client::Buffered.start_drainer!(interval: 0.02)
     pool.recover!
 
-    deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + 3.0
-    until Wurk::Client::Buffered.buffer_size.zero? || ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) > deadline
-      sleep 0.02
-    end
-
-    assert_equal 0, Wurk::Client::Buffered.buffer_size, 'drainer did not flush buffer within 3s'
+    # A replay takes its entries out of the buffer before the push, so an empty
+    # buffer does not mean they are in Redis yet. Wait on the queue itself.
+    assert(wait_for(timeout: 3) { queue_length == 2 }, 'drainer did not deliver within 3s')
+    assert_equal 0, Wurk::Client::Buffered.buffer_size
     assert_equal [['a'], ['b']], queued_args.reverse
   end
 

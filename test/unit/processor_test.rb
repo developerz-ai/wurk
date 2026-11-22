@@ -657,57 +657,128 @@ class ProcessorTest < Wurk::Test::UnitCase
     @pool.with { |c| c.call('DEL', private_queue) }
   end
 
-  # `perform` returned, then bookkeeping after it (a batch's ack, a status
-  # row) lost Redis. That is no verdict on the job: on its last attempt it must
-  # not die (a batch would be marked dead and its success suppressed for good),
-  # so it goes back to run again, as an internal failure does.
-  def test_a_store_outage_after_perform_returned_is_not_a_job_failure
-    deaths = []
-    errors = capture_errors
-    @config.death_handlers << ->(job, ex) { deaths << [job['jid'], ex.class] }
-    @capsule.server_middleware.add(failing_after_yield_middleware, RedisClient::CannotConnectError.new('down'))
+  # `perform` returned, then bookkeeping after it (a unique unlock, a batch's
+  # ack) lost Redis. The work is done, and for a job that logs in to a bank or
+  # sends an email a second run is the harm: ACK it and report, at any retry.
+  [false, 0, true, 3].each do |retry_option|
+    define_method(:"test_a_store_outage_after_perform_runs_the_job_once_with_retry_#{retry_option}") do
+      deaths = []
+      errors = []
+      @config.error_handlers.replace([->(ex, ctx, _cfg) { errors << [ex, ctx] }])
+      @config.death_handlers << ->(job, ex) { deaths << [job['jid'], ex.class] }
+      @capsule.server_middleware.add(failing_after_yield_middleware, RedisClient::CannotConnectError.new('down'))
+      klass = define_worker_recording
+      payload = enqueue(class: klass.name, args: [1], retry: retry_option)
+
+      2.times do
+        @processor.process_one
+        settle_acks
+      end
+
+      assert_equal [[1]], klass.sink
+      assert_empty deaths
+      assert_equal 0, dead_count_for(payload['jid'])
+      assert_equal 0, llen(@public_queue)
+      assert_equal 0, llen(private_queue)
+      assert_equal(0, @pool.with { |c| c.call('ZCARD', Wurk::Keys::RETRY) })
+      error, context = errors.fetch(0)
+
+      assert_instance_of Wurk::FinishedJobCleanup::BookkeepingFailed, error
+      assert_instance_of RedisClient::CannotConnectError, error.cause
+      assert_includes error.message, payload['jid']
+      assert_equal payload['jid'], context[:job]['jid']
+    end
+  end
+
+  # Every Redis failure, including the ones a failover answers with.
+  [RedisClient::WrongTypeError.new('WRONGTYPE'), RedisClient::OutOfMemoryError.new('OOM'),
+   RedisClient::ReadOnlyError.new('READONLY'), ConnectionPool::TimeoutError.new('pool')].each do |failure|
+    define_method(:"test_#{failure.class.name.split('::').last}_after_perform_runs_the_job_once") do
+      capture_errors
+      deaths = []
+      @config.death_handlers << ->(job, _ex) { deaths << job['jid'] }
+      @capsule.server_middleware.add(failing_after_yield_middleware, failure)
+      klass = define_worker_recording
+      enqueue(class: klass.name, args: [1], retry: true)
+
+      2.times do
+        @processor.process_one
+        settle_acks
+      end
+
+      assert_equal [[1]], klass.sink
+      assert_empty deaths
+      assert_equal 0, llen(@public_queue)
+      assert_equal 0, llen(private_queue)
+      assert_equal(0, @pool.with { |c| c.call('ZCARD', Wurk::Keys::RETRY) })
+    end
+  end
+
+  # sidekiq-unique-jobs runs `perform` inside its own `Sidekiq.redis` block. The
+  # pool replays a block on a connect error, which here would mean `perform`.
+  def test_a_pool_block_wrapping_perform_is_not_replayed
+    capture_errors
+    failed = false
+    wrapper = Class.new do
+      include Wurk::Middleware::ServerMiddleware
+
+      define_method(:call) do |*, &block|
+        @pool_under_test.with do
+          block.call
+          next if failed
+
+          failed = true
+          raise RedisClient::CannotConnectError, 'down'
+        end
+      end
+
+      def initialize(pool) = @pool_under_test = pool
+    end
+    @capsule.server_middleware.add(wrapper, @pool)
     klass = define_worker_recording
-    payload = enqueue(class: klass.name, args: [1], retry: false)
+    enqueue(class: klass.name, args: [1], retry: false)
 
     @processor.process_one
     settle_acks
 
     assert_equal [[1]], klass.sink
-    assert_empty deaths
-    assert_equal 0, dead_count_for(payload['jid'])
-    assert_equal 1, llen(@public_queue), 'back on its queue to run again'
+    assert_equal 0, llen(@public_queue)
     assert_equal 0, llen(private_queue)
-    assert_equal [[Wurk::JobRetry::StoreUnavailableAfterPerform, 'Internal exception!']], errors
   end
 
-  # Bounded: a write that keeps failing while the requeue lands (a second
-  # Redis a middleware uses) must not re-run `perform` forever. After the
-  # limit the retry policy decides.
-  def test_a_store_outage_after_perform_requeues_a_bounded_number_of_times
-    deaths = []
+  # A hard shutdown landing in the unwind after `perform`: finished is finished.
+  def test_a_shutdown_after_perform_acks_the_job
     capture_errors
-    @config.death_handlers << ->(job, ex) { deaths << [job['jid'], ex.class] }
-    @capsule.server_middleware.add(failing_after_yield_middleware, RedisClient::CannotConnectError.new('down'))
+    @capsule.server_middleware.add(failing_after_yield_middleware, Wurk::Shutdown.new)
     klass = define_worker_recording
-    payload = enqueue(class: klass.name, args: [1], retry: false)
+    enqueue(class: klass.name, args: [1], retry: false)
 
-    4.times do
-      @processor.process_one
-      settle_acks
-    end
-
-    assert_equal 4, klass.sink.size
-    assert_equal [[payload['jid'], RedisClient::CannotConnectError]], deaths
-    assert_equal 0, llen(@public_queue)
-
-    # The limit holds per jid for the process: the same job back (say from
-    # the retry set) does not get a fresh set of requeues.
-    @pool.with { |c| c.call('LPUSH', @public_queue, Wurk.dump_json(payload)) }
     @processor.process_one
     settle_acks
 
-    assert_equal 2, deaths.size
+    assert_equal [[1]], klass.sink
     assert_equal 0, llen(@public_queue)
+    assert_equal 0, llen(private_queue)
+  end
+
+  # The ACK that cannot be sent stays held, so the live owner's reconcile does
+  # not take the finished job for a stranded one and run it again.
+  def test_a_finished_job_whose_ack_is_still_held_is_not_reconciled_back
+    capture_errors
+    @capsule.server_middleware.add(failing_after_yield_middleware, RedisClient::CannotConnectError.new('down'))
+    klass = define_worker_recording
+    enqueue(class: klass.name, args: [1], retry: false)
+    @processor.process_one
+    reconcile = Wurk::Fetcher::SelfReconcile.new(@config, confirm: 0)
+
+    2.times { assert_equal 0, reconcile.sweep }
+
+    assert_equal 1, llen(private_queue)
+    assert_equal 0, llen(@public_queue)
+    settle_acks
+
+    assert_equal 0, llen(private_queue)
+    assert_equal [[1]], klass.sink
   end
 
   # The same outage before `perform` ran is the job failing to run: the retry
@@ -724,22 +795,6 @@ class ProcessorTest < Wurk::Test::UnitCase
 
     assert_empty klass.sink
     assert_equal [[payload['jid'], RedisClient::CannotConnectError]], deaths
-    assert_equal 0, llen(@public_queue)
-  end
-
-  # Redis refusing the write on its merits is no outage: requeueing it would
-  # re-run `perform` every second for good.
-  def test_a_command_error_after_perform_returned_still_goes_through_the_retry_policy
-    deaths = []
-    @config.death_handlers << ->(job, ex) { deaths << [job['jid'], ex.class] }
-    @capsule.server_middleware.add(failing_after_yield_middleware, RedisClient::WrongTypeError.new('WRONGTYPE'))
-    klass = define_worker_recording
-    payload = enqueue(class: klass.name, args: [1], retry: false)
-
-    @processor.process_one
-    settle_acks
-
-    assert_equal [[payload['jid'], RedisClient::WrongTypeError]], deaths
     assert_equal 0, llen(@public_queue)
   end
 

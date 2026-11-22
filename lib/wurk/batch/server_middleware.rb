@@ -23,9 +23,9 @@ module Wurk
     # The success ack runs outside the job's rescue: once `perform` returned,
     # nothing the batch bookkeeping raises may be mistaken for the job failing,
     # or a job that already did its work is retried and runs twice. The ack
-    # itself is retried in-process and only raises (sending the job to retry,
-    # at-least-once) when Redis stays unreachable — a jid left in the live set
-    # would hold the batch open forever. The fire after it never raises: it is
+    # itself is retried in-process; when Redis stays unreachable it raises and
+    # the Processor hands the ack to FinishedJobCleanup, which sends it once
+    # Redis answers, without running the job again. The fire after it never raises: it is
     # re-driven in-process and then reported to the error handlers. Both wait
     # out a store that is not serving (Callbacks::STORE_OUTAGE_BUDGET): once
     # this job is ACKed nothing re-drives a fire that gave up.

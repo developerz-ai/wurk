@@ -111,14 +111,15 @@ Reading a list, as this check does, does not delay its reclaim.
   reaper intervals.
 - A dead owner's list that is still there several minutes after the heartbeat
   expired: check the worker logs for reaper errors, and check the name parses as one
-  of the two shapes above. Names in any other shape are skipped by the reaper.
+  of the shapes above or Sidekiq Pro's. Names in any other shape are skipped by the reaper.
 - A list in neither shape — a name another tool wrote under the `queue:`
   prefix, or one whose tail is not `<host>|<pid>|<index>` — is reported by the
   reaper's WARN and skipped: the warning names the key and how many jobs it
   holds, and the list is **never reclaimed automatically**. Its jobs stay where
-  they are until you move them back by hand, with the `LMOVE` loop below. (Pro's
-  own four-part name *is* one of the two shapes above: it is parsed and
-  reclaimed like Wurk's own, not skipped.)
+  they are until you move them back by hand, with the `LMOVE` loop below. (Sidekiq
+  Pro's `queue:sq|<identity>|<queue>` is parsed and reclaimed once its owner's
+  heartbeat is gone, unless the name also reads as a Wurk list: that one is
+  refused and warned about.)
 - Expect **one identical WARN per worker pid** for such a key. The reaper's "already
   reported" set is in-memory and per process, so each child reports the key for
   itself the first time one of its sweeps sees it; a later sweep reports it again only in a process that has

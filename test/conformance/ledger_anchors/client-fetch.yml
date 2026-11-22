@@ -48,13 +48,13 @@
     PROCESS_NONCE = SecureRandom.hex(6)
 
 - entry: "Private-list names include a process-image nonce"
-  anchor: "lib/wurk/fetcher/private_list_key.rb#L30-L52"
+  anchor: "lib/wurk/fetcher/private_list_key.rb#L62-L84"
   fragment: |-
-    def parse_full(key)
+    def parse_wurk(key)
       parts = key.split('|')
 
 - entry: "Private-list names include a process-image nonce"
-  anchor: "lib/wurk/fetcher/private_list_key.rb#L56-L78"
+  anchor: "lib/wurk/fetcher/private_list_key.rb#L70-L92"
   fragment: |-
     def wide_tail(parts)
       [parts[-4], parts[-3].to_i, parts[-2], 4] if parts.size >= 4 && integer?(parts[-3]) && nonce?(parts[-2])
@@ -147,7 +147,7 @@
       return !local_pid_alive?(pid) if nonce == process_nonce && host == hostname
 
 - entry: "Reaper liveness has a residual local pid-reuse blind spot — shared with `super_fetch`, not fixed"
-  anchor: "lib/wurk/fetcher/reaper.rb#L293-L303"
+  anchor: "lib/wurk/fetcher/reaper.rb#L297-L307"
   fragment: |-
     def local_pid_alive?(pid)
       ::Process.kill(0, pid)

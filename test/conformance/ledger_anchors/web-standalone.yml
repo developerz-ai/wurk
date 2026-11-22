@@ -8,7 +8,7 @@
   fragment: |-
     Wurk::Queue.include(Wurk::API::Fast::QueueExt)
 - entry: 'Fast Lua API ships free and loads by default'
-  anchor: 'lib/wurk.rb#L380'
+  anchor: 'lib/wurk.rb#L381'
   fragment: |-
     # Pro Fast API: Lua-backed Queue#delete_job / #delete_by_class, mixed into
 - entry: 'Search covers queue LISTs too, with explicit scan bounds'
