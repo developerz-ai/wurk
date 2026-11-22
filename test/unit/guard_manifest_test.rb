@@ -67,6 +67,22 @@ class GuardManifestTest < Minitest::Test
     assert_empty filters.fetch('code') - filters.fetch('ruby'), 'the code filter must stay inside `ruby`'
   end
 
+  # PR #952 changed only .mcp.json. Neither detect filter named it, so the PR
+  # skipped the required checks and merged green with a host the public-tree
+  # guard rejects on main.
+  ROOT_AGENT_CONFIG = %w[.coderabbit.yml .mcp.json .ui-debugger-mcp.json].freeze
+
+  def test_root_agent_config_cannot_skip_the_required_checks
+    ROOT_AGENT_CONFIG.each do |path|
+      assert File.file?(File.join(ROOT, path)), "#{path} is gone; update ROOT_AGENT_CONFIG"
+
+      %w[ruby code].each do |name|
+        assert_includes filters.fetch(name), path,
+                        "#{path} must be in the `#{name}` detect filter or a change to it can merge unchecked"
+      end
+    end
+  end
+
   # The required check must carry a verdict on a docs-only PR, or a guard failure there
   # could merge.
   def test_the_required_job_runs_the_guards_on_a_docs_only_change
