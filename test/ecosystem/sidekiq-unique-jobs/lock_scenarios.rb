@@ -279,9 +279,10 @@ module LockScenarios
     end
     reaper = Sidekiq.redis { |conn| SidekiqUniqueJobs::Orphans::RubyReaper.new(conn) }
 
-    check(reaper.belongs_to_job?(digest), 'reaper: a job in a dead worker\'s private list read as lockless')
+    check(!reaper.orphans.include?(digest), 'reaper: a job in a dead worker\'s private list read as lockless')
     Sidekiq.redis { |conn| conn.call('DEL', list) }
-    check(!reaper.belongs_to_job?(digest), 'reaper: a lock with no job left is no longer an orphan')
+    fresh = Sidekiq.redis { |conn| SidekiqUniqueJobs::Orphans::RubyReaper.new(conn) }
+    check(fresh.orphans.include?(digest), 'reaper: a lock with no job left is no longer an orphan')
     Sidekiq.redis { |conn| conn.call('ZREM', SidekiqUniqueJobs::DIGESTS, digest) }
   end
 

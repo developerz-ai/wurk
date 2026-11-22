@@ -1,14 +1,12 @@
 # frozen_string_literal: true
 
 require_relative 'keys'
+require_relative 'unique_jobs_compat/private_list_digests'
 
 module Wurk
   # Two corrections to sidekiq-unique-jobs, applied when a server boots with the
   # gem loaded. The gem cannot see what only the reliable fetcher knows.
   module UniqueJobsCompat
-    # Same MATCH the fetcher's Reaper uses: Wurk's and Sidekiq Pro's private lists.
-    PRIVATE_LISTS = "#{Keys::QUEUE_PREFIX}*|*".freeze
-    SCAN_COUNT = 1000
     RUN_SUFFIX = ':RUN'
     OOM = /\AOOM\b|\bout of memory\b/i
     VERSION_KEY = 'uniquejobs:live'
@@ -16,36 +14,23 @@ module Wurk
     # RubyReaper reads public queues, the retry and schedule sets and live
     # workers. A job in a dead worker's private list is in none of them until it
     # is reclaimed, so its lock read as orphaned and was deleted, and a duplicate
-    # ran beside the recovery. The list names are kept for the run (a list
-    # created later has a live owner), the payloads are read per digest, because
-    # a job may have moved since the last look.
+    # ran beside the recovery.
+    #
+    # The lists are read once before the gem classifies its digests and once
+    # after, so a run costs O(digests + jobs). Both reads are needed: a job
+    # fetched after the gem looked at its public queue is only in the second, and
+    # one reclaimed back to its queue after that look is only in the first. A
+    # failed read raises here, ahead of the gem's delete.
     module PrivateListsAreLive
-      def belongs_to_job?(digest)
-        super || in_private_list?(digest)
-      end
-
-      private
-
-      def in_private_list?(digest)
-        lists = (@wurk_private_lists ||= wurk_scan_private_lists)
-        return false if lists.empty?
-
-        base = digest.delete_suffix(RUN_SUFFIX)
-        replies = Wurk.redis { |c| c.pipelined { |p| lists.each { |list| p.call('LRANGE', list, 0, -1) } } }
-        replies.any? { |payloads| payloads.is_a?(::Array) && payloads.any? { |job| job.include?(base) } }
-      end
-
-      def wurk_scan_private_lists
-        cursor = '0'
-        lists = []
-        loop do
-          cursor, keys = Wurk.redis do |c|
-            c.call('SCAN', cursor, 'MATCH', PRIVATE_LISTS, 'COUNT', SCAN_COUNT, 'TYPE', 'list')
-          end
-          lists.concat(keys)
-          break if cursor == '0'
+      def orphans
+        before = PrivateListDigests.new.call
+        candidates = super
+        after = PrivateListDigests.new.call
+        UniqueJobsCompat.report_unreadable([before.unreadable, after.unreadable].max)
+        candidates.reject do |digest|
+          base = digest.delete_suffix(RUN_SUFFIX)
+          before.digests.include?(base) || after.digests.include?(base)
         end
-        lists.uniq
       end
     end
 
@@ -71,9 +56,27 @@ module Wurk
       def install
         return unless defined?(::SidekiqUniqueJobs::Orphans::RubyReaper) && defined?(::SidekiqUniqueJobs::UpdateVersion)
 
-        ::SidekiqUniqueJobs::Orphans::RubyReaper.prepend(PrivateListsAreLive)
+        guard_reaper(::SidekiqUniqueJobs::Orphans::RubyReaper)
         ::SidekiqUniqueJobs::UpdateVersion.singleton_class.prepend(VersionWriteIsOptional)
         true
+      end
+
+      def guard_reaper(reaper)
+        return reaper.prepend(PrivateListsAreLive) if reaper.method_defined?(:orphans)
+
+        Wurk.logger.error do
+          "sidekiq-unique-jobs #{gem_version} has no RubyReaper#orphans, so its reaper can delete the lock of a " \
+            'job in a private list. Set `config.reaper = :none` or use a supported version.'
+        end
+      end
+
+      def report_unreadable(count)
+        return unless count.positive?
+
+        Wurk.logger.warn do
+          "sidekiq-unique-jobs reaper: #{count} unreadable payload(s) in private lists; " \
+            'every lock they name was kept.'
+        end
       end
 
       def gem_version
