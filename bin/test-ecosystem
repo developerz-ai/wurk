@@ -133,6 +133,9 @@ for harness in "$ECOSYSTEM_DIR"/*/; do
     cd "$checkout/$subdir" &&
     unset RUBYOPT RUBYLIB BUNDLER_SETUP BUNDLER_VERSION BUNDLE_BIN_PATH \
           GEM_HOME GEM_PATH BUNDLE_GEMFILE BUNDLE_PATH &&
+    # Left by the outer `bundle exec`. A nested one restores from them, which
+    # drops the harness bundle from a `wurkswarm` binstub on Ruby 4.
+    for inherited in $(compgen -e | grep '^BUNDLER_ORIG_' || true); do unset "$inherited"; done &&
     export BUNDLE_GEMFILE="$harness_dir/Gemfile" \
            BUNDLE_IGNORE_CONFIG=true \
            BUNDLE_PATH="$checkout/.bundle/gems" \

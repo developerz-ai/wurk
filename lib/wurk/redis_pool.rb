@@ -114,9 +114,19 @@ module Wurk
     # this — Sidekiq reaps on its 10s heartbeat.
     REAP_MAX_INTERVAL = 10.0
 
+    # Thread variable the Processor bumps as it enters `perform`. A middleware
+    # can run `perform` inside a checkout (sidekiq-unique-jobs does), and a
+    # replay of that block would run the job again, so it is never replayed.
+    PERFORM_COUNT = :wurk_perform_count
+
     attr_reader :size, :url, :name, :pool_timeout, :client_config, :redis_idle_timeout
 
     class << self
+      def job_performing!
+        thread = ::Thread.current
+        thread.thread_variable_set(PERFORM_COUNT, thread.thread_variable_get(PERFORM_COUNT).to_i + 1)
+      end
+
       # A redis-client middleware every pool built from now on carries, after
       # any the host configured. Set only by the boot of a command that must not
       # write Redis (Preflight::RedisGuard); nil everywhere else.
@@ -342,13 +352,16 @@ module Wurk
     # Runs the block on the checked-out `conn`, retrying transient RedisClient
     # errors in place: the same slot is reused across retries (redis-client
     # redials a closed socket lazily), so a busy fetcher can't leak checkouts.
-    def run(conn, idempotent)
+    def run(conn, idempotent) # rubocop:disable Metrics/AbcSize
       attempts = 0
       odometer = conn.round_trips
+      performs = performs_on_this_thread
       begin
         attempts += 1
         yield conn
       rescue RedisClient::Error => e
+        raise if performs_on_this_thread != performs
+
         plan = retry_plan(e, attempts, idempotent, conn.round_trips != odometer)
         raise if plan == :propagate
 
@@ -362,6 +375,8 @@ module Wurk
         retry
       end
     end
+
+    def performs_on_this_thread = ::Thread.current.thread_variable_get(PERFORM_COUNT)
 
     # Pure classification of a RedisClient error against the attempt count, the
     # caller's apply-safety claim, and whether this attempt already completed a

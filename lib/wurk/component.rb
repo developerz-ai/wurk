@@ -170,6 +170,7 @@ module Wurk
     # `reraise: true` (used in tests / fail-fast boot). `oneshot: true`
     # clears the bucket after dispatch so the event can't fire twice.
     def fire_event(event, oneshot: true, reverse: false, reraise: false)
+      UniqueJobsCompat.install if event == :startup
       bucket = config[:lifecycle_events][event]
       return if bucket.nil? || bucket.empty?
 

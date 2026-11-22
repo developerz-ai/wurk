@@ -15,3 +15,6 @@ gem 'wurk', path: wurk_root
 
 # Upstream's Gemfile pins rails for its railtie/schedule-loader tests.
 gem 'rails', ENV.fetch('RAILS_VERSION', '~> 8.0')
+
+# Upstream's performance test requires it; no longer a default gem on Ruby 4.
+gem 'benchmark'

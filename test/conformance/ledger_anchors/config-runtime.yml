@@ -101,13 +101,13 @@
     REAP_MAX_INTERVAL = 10.0
 
 - entry: '`reap_idle_redis_connections` sweeps from a per-pool reaper thread, not the heartbeat'
-  anchor: lib/wurk/redis_pool.rb#L281-L290
+  anchor: lib/wurk/redis_pool.rb#L291-L300
   fragment: |-
     def ensure_reaper
     return if @reaper&.alive?
 
 - entry: '`reap_idle_redis_connections` sweeps from a per-pool reaper thread, not the heartbeat'
-  anchor: lib/wurk/redis_pool.rb#L322-L327
+  anchor: lib/wurk/redis_pool.rb#L332-L337
   fragment: |-
     def reap_loop
     interval = [@redis_idle_timeout / 2.0, REAP_MAX_INTERVAL].min

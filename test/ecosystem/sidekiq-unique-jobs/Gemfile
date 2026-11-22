@@ -11,5 +11,5 @@ wurk_root = File.expand_path('../../..', __dir__)
 gem 'sidekiq', path: File.join(wurk_root, 'ecosystem/sidekiq-shim')
 gem 'wurk', path: wurk_root
 
-%w[base64 benchmark bigdecimal mutex_m ostruct rack-session rack-test rake rspec rspec-its timecop toxiproxy
+%w[base64 benchmark bigdecimal irb mutex_m ostruct rack-session rack-test rake rspec rspec-its timecop toxiproxy
    rspec-html-matchers rspec-benchmark sinatra].each { |name| gem name }

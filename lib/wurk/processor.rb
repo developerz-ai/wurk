@@ -3,6 +3,7 @@
 require_relative 'component'
 require_relative 'context'
 require_relative 'dead_set'
+require_relative 'finished_job_cleanup'
 require_relative 'job_logger'
 require_relative 'job_retry'
 require_relative 'profiler'
@@ -41,39 +42,8 @@ module Wurk
     # escaping the retry layer comes from the payload itself (a `retry_count`
     # that is not a number, args that cannot be re-serialized into a retry) and
     # will fail the same way every time.
-    TRANSIENT_FAILURES = [RedisClient::Error, ConnectionPool::Error, ConnectionPool::TimeoutError,
-                          JobRetry::StoreUnavailableAfterPerform].freeze
+    TRANSIENT_FAILURES = [RedisClient::Error, ConnectionPool::Error, ConnectionPool::TimeoutError].freeze
     private_constant :TRANSIENT_FAILURES
-
-    # Redis not answering, or answering that it is not serving yet. Narrower than
-    # TRANSIENT_FAILURES on purpose: a refusal on the merits (WRONGTYPE, OOM)
-    # after `perform` would refuse the re-run's bookkeeping too, so requeueing it
-    # would re-run `perform` every REQUEUE_PAUSE for good.
-    STORE_UNAVAILABLE = [RedisClient::ConnectionError, ConnectionPool::TimeoutError].freeze
-    private_constant :STORE_UNAVAILABLE
-    STORE_NOT_SERVING = /\A(?:LOADING|BUSY|TRYAGAIN|CLUSTERDOWN)\b/
-    private_constant :STORE_NOT_SERVING
-
-    # How many times one process puts a job back for an outage after `perform`
-    # before the error goes to the retry policy after all. Unbounded, a write
-    # that keeps failing while the requeue lands (a second Redis a middleware
-    # talks to, a pool that stays exhausted) re-runs `perform` every
-    # REQUEUE_PAUSE for good. Process-local: the payload carries no counter.
-    STORE_REQUEUE_LIMIT = 3
-    STORE_REQUEUE_JIDS = 10_000
-    private_constant :STORE_REQUEUE_LIMIT, :STORE_REQUEUE_JIDS
-    @store_requeues = {}
-    @store_requeues_lock = ::Mutex.new
-
-    # True while `jid` has requeues left; counts this one.
-    def self.store_requeue?(jid)
-      @store_requeues_lock.synchronize do
-        count = @store_requeues.delete(jid).to_i + 1
-        @store_requeues.shift while @store_requeues.size >= STORE_REQUEUE_JIDS
-        @store_requeues[jid] = count
-        count <= STORE_REQUEUE_LIMIT
-      end
-    end
 
     # Pause after putting a job back on an internal failure. The job goes to the
     # tail, which is the next fetch, so without one a failure that persists
@@ -143,6 +113,7 @@ module Wurk
     # Single iteration: fetch one UoW, process it. Public so tests can drive
     # the loop step-by-step without spawning a thread.
     def process_one
+      FinishedJobCleanup.drain
       @job = fetch
       process(@job) if @job
       @job = nil
@@ -276,6 +247,7 @@ module Wurk
     # `respond_to?` because a config[:fetch_class] fetcher need not defer, and
     # the capsule has no fetcher at all if the launcher died before prepare!.
     def flush_acks
+      FinishedJobCleanup.give_up
       fetcher = @capsule.fetcher
       fetcher.flush_pending_acks if fetcher.respond_to?(:flush_pending_acks)
     rescue StandardError => e
@@ -414,11 +386,7 @@ module Wurk
       # slot and simply ACKs — the counter then ages out on its 72h TTL.
       uow.jid = job_hash['jid'] if uow.respond_to?(:jid=)
 
-      dispatch(job_hash, queue, jobstr) do |instance|
-        Thread.handle_interrupt(ALLOW_SHUTDOWN_INTERRUPTS) do
-          execute_job(instance, job_hash, queue)
-        end
-      end
+      dispatch(job_hash, queue, jobstr) { |instance| execute_job(instance, job_hash, queue) }
     end
 
     # Reported, never raised: this runs inside #process's ensure on the shutdown
@@ -483,23 +451,34 @@ module Wurk
       instance
     end
 
+    # Once `perform` has returned the job is done, whatever its unwind runs
+    # into. A Redis failure or a hard shutdown there must not run it again, at
+    # any retry setting: the job returns normally, so it is ACKed, and what it
+    # still owes Redis goes to FinishedJobCleanup. The rescues sit outside the
+    # interruptible scope, so a Shutdown cannot land between them and the ACK.
     def execute_job(instance, job_hash, queue)
       performed = false
-      @capsule.server_middleware.invoke(instance, job_hash, queue) do
-        result = instance.perform(*job_hash['args'])
-        performed = true
-        result
+      Thread.handle_interrupt(ALLOW_SHUTDOWN_INTERRUPTS) do
+        @capsule.server_middleware.invoke(instance, job_hash, queue) do
+          RedisPool.job_performing!
+          result = instance.perform(*job_hash['args'])
+          performed = true
+          result
+        end
       end
-    rescue StandardError => e
-      raise unless performed && store_unavailable?(e) && self.class.store_requeue?(job_hash['jid'])
+    rescue Wurk::Shutdown => e
+      raise unless performed
 
-      raise JobRetry::StoreUnavailableAfterPerform, "Redis unavailable after perform returned: #{e.class}: #{e.message}"
+      settle_finished_job(job_hash, e)
+    rescue StandardError => e
+      raise unless performed && FinishedJobCleanup.store_error?(e)
+
+      settle_finished_job(job_hash, e)
     end
 
-    def store_unavailable?(error)
-      return true if STORE_UNAVAILABLE.any? { |klass| error.is_a?(klass) }
-
-      error.is_a?(RedisClient::CommandError) && STORE_NOT_SERVING.match?(error.message.to_s)
+    def settle_finished_job(job_hash, error)
+      FinishedJobCleanup.settle(job_hash, error, pool: @capsule.redis_pool, config: @capsule.config)
+      nil
     end
 
     # Bookkeeping wrapper. Publishes the in-flight job to WORK_STATE so the
