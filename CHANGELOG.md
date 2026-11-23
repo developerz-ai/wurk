@@ -4,6 +4,10 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 Each release's notes live in their own file under [`docs/changelog/`](docs/changelog/); this page is the index, newest first. Not released yet: [`docs/changelog/unreleased.md`](docs/changelog/unreleased.md) ([diff since the last release][Unreleased]). A pull request with a user-visible change adds its line there.
 
+## [1.18.0] - 2026-11-23
+
+Run on `gem "wurk"` alone: sidekiq-cron, sidekiq-unique-jobs and rspec-sidekiq's enqueue matchers now ship natively, so an app drops those gems and the `sidekiq` shim gem without changing its code. `Sidekiq::Cron` keeps the gem's `cron_job:*` keys and `SidekiqUniqueJobs` the gem's `uniquejobs:*` keys and digest, so a fleet can mix gem and native processes during a rolling deploy. `require "wurk/rspec"` brings `have_enqueued_sidekiq_job` and `enqueue_sidekiq_job`. [Release notes](docs/changelog/1.18.0.md).
+
 ## [1.17.1] - 2026-11-21
 
 For teams moving off Sidekiq Pro: jobs in a dead Pro process's `queue:sq|<identity>|<queue>` private lists are now reclaimed, and a list whose owner still has a heartbeat is never touched. A Redis failure after `perform` returned no longer runs the job again. [Release notes](docs/changelog/1.17.1.md).
@@ -180,7 +184,8 @@ Releases publish to RubyGems through GitHub Actions OIDC trusted publishing, and
 
 First public (pre-1.0) release. [Release notes](docs/changelog/0.0.1.md).
 
-[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.17.1...HEAD
+[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.18.0...HEAD
+[1.18.0]: https://github.com/developerz-ai/wurk/compare/v1.17.1...v1.18.0
 [1.17.1]: https://github.com/developerz-ai/wurk/compare/v1.17.0...v1.17.1
 [1.17.0]: https://github.com/developerz-ai/wurk/compare/v1.16.0...v1.17.0
 [1.16.0]: https://github.com/developerz-ai/wurk/compare/v1.15.1...v1.16.0
