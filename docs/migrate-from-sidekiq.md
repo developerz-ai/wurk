@@ -556,8 +556,9 @@ the `sidekiq` shim gem can go too.
   the gem finds them as it left them.
 - **The gem left in the bundle wins**, and the native copy stands down.
 
-What is supported, option by option, and the few gem internals left out (the CLI,
-v6 lock upgrades; the Locks dashboard tab is not shipped yet): [unique jobs §13](unique-jobs.md#13-migrating-from-sidekiq-unique-jobs).
+`require "sidekiq_unique_jobs/web"` keeps the Locks, Expiring Locks and Changelogs tabs on
+Wurk's dashboard. What is supported, option by option, and the few gem internals left out (the
+CLI, v6 lock upgrades): [unique jobs §13](unique-jobs.md#13-migrating-from-sidekiq-unique-jobs).
 Verified against the real gem in the ecosystem job: its real-worker lock scenarios
 and boot check pass on the native copy, and a gem pod and a native pod share one
 Redis ([`test/ecosystem/sidekiq-unique-jobs-native/`](../test/ecosystem/sidekiq-unique-jobs-native/interop.rb)).

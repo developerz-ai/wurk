@@ -117,7 +117,7 @@ class UniqueJobsApiTest < Wurk::Test::UnitCase
     assert_empty lock.locked_jids
     lock.del
 
-    assert_nil lock.info
+    assert_predicate UJ::Lock.new(job['lock_digest']).info, :none?
     assert_equal 0, UJ::Digests.new.count
   end
 

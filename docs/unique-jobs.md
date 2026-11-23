@@ -477,7 +477,7 @@ logs once that it did. Nothing is ever locked twice.
 | A job deleted through the API (`Queue#clear`, `ScheduledSet#delete`, the dashboard) releases its lock | ✅ |
 | `Script::LuaError` | ✅ raised for a failed script, matched as the gem matches it |
 | `debug_lua`, `locksmith_executor`, `reaper_resurrector_*`, `raise_on_config_error` | accepted, no effect: no Lua debug log, no executor (a wait blocks on its own connection), the reaper campaigns every interval anyway |
-| `require "sidekiq_unique_jobs/web"` (the Locks tab) | ⏳ not yet: keep the require out until the tab ships |
+| `require "sidekiq_unique_jobs/web"` | ✅ the gem's Locks, Expiring Locks and Changelogs tabs on Wurk's dashboard, with their filter, paging, per-lock page and deletes |
 | `sidekiq_unique_jobs/testing`, `have_valid_sidekiq_options` | ❌ |
 | The `uniquejobs` CLI, upgrading v6 locks, the `uniquejobs:live` / `:dead` version keys | ❌ by design: nothing to upgrade from |
 
@@ -544,6 +544,7 @@ for the surrounding gem-by-gem mapping.
 - Custom `sidekiq_unique_context` requires the worker class to be **loaded** in
   the enqueuing process, or the default triple is used instead.
 - No dashboard surface for `unique_for:` locks. Use `Unique.locked?` or `redis-cli`.
+  (`lock:` locks have one: `require "sidekiq_unique_jobs/web"`, §13.)
 
 ---
 

@@ -24,12 +24,10 @@ module Wurk
         with_values ? entries : entries.keys
       end
 
-      def info
-        raw = UniqueJobs.redis { |conn| conn.call('GET', key.info) }
-        raw.nil? || raw.empty? ? nil : Wurk.load_json(raw)
-      end
-
-      def changelogs = Changelog.new.entries(pattern: "*#{key.digest}*")
+      def info = @info ||= LockInfo.new(key.info)
+      def locked = @locked ||= LockedJids.new(key.locked)
+      def changelog = @changelog ||= Changelog.new
+      def changelogs = changelog.entries(pattern: "*#{key.digest}*")
 
       # Drops one jid from the LOCKED hash, as the dashboard's per-job delete does.
       def unlock(job_id) = UniqueJobs.redis { |conn| conn.call('HDEL', key.locked, job_id) }
@@ -45,9 +43,36 @@ module Wurk
 
       def to_s
         "Lock status for #{key}\n  queued_jids: #{queued_jids}\n  primed_jids: #{primed_jids}\n  " \
-          "locked_jids: #{locked_jids}\n  info: #{info}"
+          "locked_jids: #{locked_jids}\n  info: #{info.value}"
       end
       alias inspect to_s
+
+      # `<digest>:INFO`, the JSON `lock_info: true` writes.
+      class LockInfo
+        def initialize(key)
+          @key = key
+        end
+
+        def value
+          return @value if defined?(@value)
+
+          raw = UniqueJobs.redis { |conn| conn.call('GET', @key) }
+          @value = raw.nil? || raw.empty? ? nil : Wurk.load_json(raw)
+        end
+
+        def none? = value.nil? || value.empty?
+        def present? = !none?
+        def [](field) = value.is_a?(::Hash) ? value[field.to_s] : nil
+      end
+
+      # `<digest>:LOCKED`, as the dashboard counts it.
+      class LockedJids
+        def initialize(key)
+          @key = key
+        end
+
+        def count = UniqueJobs.redis { |conn| conn.call('HLEN', @key) }
+      end
 
       # One lock type: the client side (`#lock`) and the server side (`#execute`).
       class BaseLock
