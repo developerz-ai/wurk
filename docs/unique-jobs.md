@@ -518,6 +518,63 @@ Quirks kept on purpose, because they are the gem's and a fleet mixes the two:
 script to find the job to replace, 50 entries at a time, as the gem's does. Redis
 waits for it, so on a long queue prefer `:reject` or `:reschedule`.
 
+### Renewing a long run's lock: `refresh_lock!` (Wurk only)
+
+The gem sets a lock's TTL once, when the lock is taken. A `perform` that can run
+longer than its `lock_ttl` loses the lock mid-run, so the only fix the gem offers
+is a TTL long enough for the slowest run, which a crashed run then also holds for.
+Wurk adds a renewal, so `lock_ttl` can be a crash bound instead:
+
+```ruby
+class ProcessAccountJob
+  include Sidekiq::Job
+  sidekiq_options lock: :while_executing, lock_ttl: 15 * 60, on_conflict: :reschedule
+
+  def perform(account_id)
+    each_batch(account_id) do |batch|
+      persist(batch)
+      # false: the lock expired or is another job's now; stop rather than write beside it.
+      raise "lost the lock for account #{account_id}" unless SidekiqUniqueJobs.refresh_lock!(self)
+    end
+  end
+end
+```
+
+`Wurk::UniqueJobs.refresh_lock!(job, ttl: nil) → true | false` (also
+`SidekiqUniqueJobs.refresh_lock!` with the native copy active):
+
+- `job` is the running job instance (`self` in `perform`), its jid, or its
+  payload hash. A jid or an instance is looked up among the unique jobs this
+  process is running, so it works inside `perform` or a thread `perform` started,
+  and raises `ArgumentError` anywhere else; a payload works from anywhere.
+- `ttl` is seconds (an Integer, a Float or an `ActiveSupport::Duration`). Left
+  out, it is the `lock_ttl` the payload carries, the TTL the lock was taken with
+  (for a scheduled job that includes the wait until `at`, as at push). Anything
+  but a positive number raises `ArgumentError`.
+- One Lua script, atomic: when the jid is still in the lock's `:LOCKED` hash, the
+  lock's keys (the digest, `:LOCKED`, `:INFO`) expire `ttl` from now, and an
+  `until_expired` lock's `uniquejobs:expiring_digests` score moves with them, so
+  the reaper sees the new expiry. Returns `true`. Otherwise it writes nothing and
+  returns `false`: a refresh never takes a lock, so one that comes after expiry,
+  or after another jid took the lock, cannot steal it back. The `:QUEUED` and
+  `:PRIMED` lists belong to waiters and keep their own expiry. A lock taken with
+  no TTL is left with none; the call only reports whether it is held.
+- `true` sets the remaining TTL to `ttl`, so a shorter `ttl` shortens it.
+
+Which lock a refresh renews during `perform`, per type:
+
+| `lock:` | Held during `perform` | `refresh_lock!` |
+|---|---|---|
+| `until_executed` (and aliases) | the push lock | renews it; `true` |
+| `while_executing` (and aliases), `while_executing_reject` | the runtime lock, `<digest>:RUN` | renews it; `true` |
+| `until_and_while_executing` | only the runtime lock: the push lock was released as `perform` started, so the next push is accepted mid-run | renews `<digest>:RUN`, never the push lock; `true` |
+| `until_expired` | the push lock, until its TTL | moves the expiry out; `true` |
+| `until_executing` (`while_enqueued`) | nothing: released before `perform` | `false` |
+| a type added with `config.add_lock` | its `lock_digest` | renews that digest when the jid holds it |
+
+`lock_limit:` above 1 keeps every holder's jid in one `:LOCKED` hash, so a renewal
+by any holder extends the expiry of all of them.
+
 ### And the Enterprise API
 
 `lock:` and `unique_for:` are separate locks with separate keys (`uniquejobs:*`

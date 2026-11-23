@@ -8,6 +8,7 @@ require_relative 'unique_jobs/job'
 require_relative 'unique_jobs/locksmith'
 require_relative 'unique_jobs/on_conflict'
 require_relative 'unique_jobs/lock'
+require_relative 'unique_jobs/lock_refresh'
 require_relative 'unique_jobs/digests'
 require_relative 'unique_jobs/middleware'
 require_relative 'unique_jobs/orphans'
@@ -26,6 +27,7 @@ module Wurk
   # - A waiting lock blocks on its own connection, not a concurrent-ruby future.
   # - The reaper reads each job once per run, not once per digest, and counts
   #   jobs in wurk's private lists as live (see Orphans::Reaper).
+  # - `refresh_lock!` renews a running job's lock (LockRefresh); the gem has none.
   # - No changelog debug logging (`debug_lua`), CLI, upgrade from v6 locks or
   #   version keys: there is nothing to upgrade from.
   module UniqueJobs
@@ -79,6 +81,13 @@ module Wurk
       ensure
         config.enabled = was if block_given?
       end
+
+      # Pushes out the TTL of the lock `job` holds while it runs: `job` is the
+      # running job instance (`self` in `perform`), its jid, or its payload.
+      # True when this jid still held the lock (now good for `ttl` seconds, by
+      # default the `lock_ttl` it was taken with); false when it no longer did,
+      # and then nothing is written. See LockRefresh.
+      def refresh_lock!(job, ttl: nil) = LockRefresh.new(job, ttl: ttl).call
 
       def reflections = @reflections ||= Reflections.new
       def reflect = yield(reflections)
