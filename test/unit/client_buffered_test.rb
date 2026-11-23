@@ -1085,16 +1085,26 @@ class ClientBufferedTest < Wurk::Test::UnitCase
 
     assert_equal 2, Wurk::Client::Buffered.buffer_size
 
-    # Once the pool recovers and the drainer ticks, both payloads land in the
-    # live queue without another push.
-    Wurk::Client::Buffered.start_drainer!(interval: 0.02)
+    # Drive the drainer's own tick by hand: a 0.02s thread racing a wall-clock
+    # poll on a shared Dragonfly can finish after the deadline even though the
+    # drain path is correct. A Queue barrier makes the tick's return explicit;
+    # no clock decides whether delivery happened.
+    Wurk::Client::Buffered.start_drainer!(interval: 30.0)
+    drainer = Wurk::Client::Buffered.instance_variable_get(:@drainer)
     pool.recover!
+    finished = Queue.new
+    tick = Thread.new do
+      drainer.send(:tick)
+      finished << true
+    end
 
-    # A replay takes its entries out of the buffer before the push, so an empty
-    # buffer does not mean they are in Redis yet. Wait on the queue itself.
-    assert(wait_for(timeout: 3) { queue_length == 2 }, 'drainer did not deliver within 3s')
+    assert finished.pop, 'the drainer tick never returned'
+    tick.join
+
     assert_equal 0, Wurk::Client::Buffered.buffer_size
     assert_equal [['a'], ['b']], queued_args.reverse
+  ensure
+    Wurk::Client.reliable_push_drainer_stop!
   end
 
   # K1 pattern: a drain that raises is reported and the thread keeps ticking.
