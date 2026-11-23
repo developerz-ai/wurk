@@ -1,0 +1,12 @@
+# frozen_string_literal: true
+
+# The "new pod": wurk and nothing else. No sidekiq-unique-jobs, so
+# `SidekiqUniqueJobs` and `require "sidekiq-unique-jobs"` resolve to Wurk::UniqueJobs.
+
+source 'https://rubygems.org'
+
+wurk_root = File.expand_path('../../..', __dir__)
+gem 'sidekiq', path: File.join(wurk_root, 'ecosystem/sidekiq-shim')
+gem 'wurk', path: wurk_root
+
+gem 'rake'

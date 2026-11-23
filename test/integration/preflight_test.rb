@@ -340,8 +340,6 @@ class PreflightTest < Wurk::Test::UnitCase
   end
 
   def test_app_option_loads_a_file_and_lists_ignored_locks
-    skip 'sidekiq-unique-jobs is loaded here' if defined?(::SidekiqUniqueJobs)
-
     Dir.mktmpdir do |dir|
       path = File.join(dir, 'locked_app.rb')
       File.write(path, <<~RUBY)

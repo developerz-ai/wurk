@@ -48,7 +48,7 @@ There is **no `WURK_CONCURRENCY`** env var, and `WURK_COUNT` only applies to the
 
 ## Gems you can probably delete
 
-`sidekiq-cron` → `config.periodic`. `sidekiq-unique-jobs` → `unique_for:` / `unique_until:`. `sentry-sidekiq` → `Wurk::Sentry`. Batches, rate limiters, and encryption are built in, so `sidekiq-pro` and `sidekiq-ent` go too. Gems you keep are covered under [[Compatibility and Divergences]] — `sidekiq-cron`, `sidekiq-unique-jobs`, `sidekiq-failures` and `sentry-sidekiq` run their own suites against Wurk in CI (exclusions in `test/ecosystem/README.md`), through the `sidekiq` shim gem.
+`sidekiq-cron` → `config.periodic`. `sidekiq-unique-jobs` → drop it and keep the code: Wurk carries its `lock:` DSL natively, on the gem's own keys (or move to `unique_for:` / `unique_until:`). `sentry-sidekiq` → `Wurk::Sentry`. Batches, rate limiters, and encryption are built in, so `sidekiq-pro` and `sidekiq-ent` go too. Gems you keep are covered under [[Compatibility and Divergences]] — `sidekiq-cron`, `sidekiq-unique-jobs`, `sidekiq-failures` and `sentry-sidekiq` run their own suites against Wurk in CI (exclusions in `test/ecosystem/README.md`), through the `sidekiq` shim gem.
 
 ## Cutover checklist
 

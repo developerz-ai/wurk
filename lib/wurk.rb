@@ -57,6 +57,7 @@ require_relative 'wurk/batch_set'
 require_relative 'wurk/limiter'
 require_relative 'wurk/unique'
 require_relative 'wurk/unique_jobs_compat'
+Wurk::UniqueJobsCompat.activate_native
 require_relative 'wurk/debounce'
 require_relative 'wurk/throttle'
 require_relative 'wurk/queue_slot'

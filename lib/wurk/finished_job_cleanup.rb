@@ -101,12 +101,13 @@ module Wurk
       # until_and_while_executing job takes its base lock back when an error
       # crosses it, on top of the `:RUN` lock it may still hold.
       def release_unique_locks(job)
-        digests(job).each { |digest| ::SidekiqUniqueJobs::Locksmith.new(job.merge('lock_digest' => digest)).unlock }
+        locksmith = UniqueJobsCompat.locksmith_class
+        digests(job).each { |digest| locksmith.new(job.merge('lock_digest' => digest)).unlock }
       end
 
       def digests(job)
         digest = job['lock_digest']
-        return [] unless digest && job['lock'].to_s != KEEPS_LOCK && defined?(::SidekiqUniqueJobs::Locksmith)
+        return [] unless digest && job['lock'].to_s != KEEPS_LOCK && UniqueJobsCompat.locksmith_class
 
         base = digest.delete_suffix(RUN_SUFFIX)
         [base, "#{base}#{RUN_SUFFIX}"]

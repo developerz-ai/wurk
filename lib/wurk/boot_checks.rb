@@ -69,17 +69,19 @@ module Wurk
       end
     end
 
-    # Without the gem's middleware the option does nothing: the "unique" job
-    # simply enqueues twice. Only classes the app has loaded by now are seen.
-    def warn_on_ignored_locks(logger)
-      return if defined?(::SidekiqUniqueJobs)
+    # Without a unique-jobs client middleware the option does nothing: the
+    # "unique" job simply enqueues twice. Either copy's counts, the gem's or
+    # Wurk's native one. Only classes the app has loaded by now are seen.
+    def warn_on_ignored_locks(logger, chain = Wurk.configuration.client_middleware)
+      return if UniqueJobsCompat.client_middleware?(chain)
 
       classes = locked_job_classes
       return if classes.empty?
 
       logger.warn do
-        'These jobs set `lock:` but sidekiq-unique-jobs is not loaded, so the option does nothing and ' \
-          "duplicates will run: #{listing(classes)}. Keep the gem, or move them to `unique_for:`."
+        'These jobs set `lock:` but no client middleware takes their locks, so the option does nothing and ' \
+          "duplicates will run: #{listing(classes)}. Add it once, in an initializer: " \
+          '`chain.add SidekiqUniqueJobs::Middleware::Client` (docs/unique-jobs.md).'
       end
     end
 

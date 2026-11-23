@@ -1,0 +1,9 @@
+# Wurk's native SidekiqUniqueJobs, with the gem absent from the bundle:
+# - the sidekiq-unique-jobs harness's real-worker lock scenarios and boot check,
+#   unchanged, now running on the native copy;
+# - interop.rb: a pod running the real gem and a pod running the native copy on
+#   one Redis, each honoring and releasing the other's locks.
+# The gem's own rspec suite is not run here: its support files drive the gem's
+# internals (its Lua scripts by name, a redis-rb style connection, SimulateLock),
+# not the `lock:` DSL. The sidekiq-unique-jobs harness runs it against the gem.
+bundle exec ruby "$harness_dir/../sidekiq-unique-jobs/lock_scenarios.rb" && bundle exec ruby "$harness_dir/../sidekiq-unique-jobs/boot_check.rb" && bundle exec ruby "$harness_dir/interop.rb"
