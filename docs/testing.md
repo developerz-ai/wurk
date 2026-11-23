@@ -419,6 +419,49 @@ for this if you patched Sidekiq's internals yourself.
 
 ---
 
+## 11. rspec-sidekiq's matchers: `require "wurk/rspec"`
+
+`rspec-sidekiq` declares `add_dependency "sidekiq"`, so keeping it keeps the
+shim gem. Its two enqueue matchers ship with Wurk instead, same names and chains
+as rspec-sidekiq 5.x. Opt in from the spec helper (nothing else loads it):
+
+```ruby
+# spec/rails_helper.rb
+require "wurk/rspec"   # includes Wurk::RSpecMatchers in every example group
+Sidekiq::Testing.fake!
+
+# spec/jobs/order_job_spec.rb
+expect(OrderJob).to have_enqueued_sidekiq_job(order.id, kind_of(Integer))
+expect(OrderJob).to have_enqueued_sidekiq_job(order.id).on("mail").in(5.minutes)
+expect { order.complete! }.to enqueue_sidekiq_job(ReceiptJob).with(order.id).once
+expect { order.cancel! }.not_to enqueue_sidekiq_job(ReceiptJob)
+```
+
+| Chain | Means |
+|---|---|
+| `have_enqueued_sidekiq_job(*args)` | `JobClass.jobs` holds a match; no args means any |
+| `enqueue_sidekiq_job(JobClass = all)` | the block pushed a match; jobs already queued do not count |
+| `.with(*args)` | arguments as a message expectation sees them: `anything`, `kind_of`, `hash_including`, … |
+| `.on(queue)` | the job's queue |
+| `.at(time)`, `.in(interval)` | the job's `at`, to the whole second; either also takes a matcher (`be_within(5).of(t)`) |
+| `.immediately` | no `at` |
+| `.once`, `.twice`, `.thrice`, `.exactly(n)`, `.at_least(n)`, `.at_most(n)`, `.times`, `.never` | the number of matching jobs |
+
+Expected symbols and hash keys are stringified, as the JSON round trip does to the
+job; an argument matcher sees the job as JSON left it, so `hash_including("to" => x)`
+matches and `hash_including(to: x)` does not. An ActiveJob job is refused with a pointer
+to ActiveJob's own `have_enqueued_job`.
+
+One difference from the gem: `require "wurk/rspec"` does not switch fake mode on
+(rspec-sidekiq required `sidekiq/testing`, which does). Set the mode yourself, as above.
+rspec-sidekiq's other matchers (`be_processed_in`, `be_retryable`, `be_unique`,
+`save_backtrace`, `be_expired_in`) are not provided: assert on `JobClass.get_sidekiq_options` instead.
+
+The implementation is a port, with credit, of the in-house replacement an adopter
+wrote when it dropped the gem.
+
+---
+
 ## Related
 
 - [Migrating from Sidekiq](migrate-from-sidekiq.md) — the full swap checklist.

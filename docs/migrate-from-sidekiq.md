@@ -673,6 +673,7 @@ What to replace before removing the shim, gem by gem:
 | `sentry-sidekiq` | `Wurk::Sentry` ([`docs/sentry.md`](sentry.md#coming-from-report_after_job_retries--true)) | delete `config.sidekiq.*`, add `Wurk::Sentry.install!(config)` |
 | `sidekiq-failures` | the retry and dead sets, `Sidekiq::Stats#failed` | drop `require "sidekiq/failures/web"`; `UNLINK failed` after your rollback window |
 | `sidekiq-unique-jobs` | `unique_for:` ([§6](#sidekiq-unique-jobs--native-unique_for--unique_until)) | per job class |
+| `rspec-sidekiq` | `require "wurk/rspec"` ([testing](testing.md#11-rspec-sidekiqs-matchers-require-wurkrspec)) | the require; set fake mode yourself |
 | `opentelemetry-instrumentation-sidekiq` | keep it: it declares no `sidekiq` dependency | none |
 
 After deleting the shim line and running `bundle install`, `bundle info sidekiq` must report that
@@ -693,7 +694,7 @@ Keeping any of these requires the [`sidekiq` shim gem](../ecosystem/sidekiq-shim
 | `sidekiq-failures` | ✅ upstream suite (less the ERB home-page test) and a real worker boot in CI | [§10](#10-sidekiq-7x-proenterprise-apps-keeping-the-add-on-gems) |
 | `sentry-sidekiq` | ✅ upstream suite and a real worker boot in CI; native preferred | [§10](#10-sidekiq-7x-proenterprise-apps-keeping-the-add-on-gems), or [`Wurk::Sentry`](sentry.md) |
 | `opentelemetry-instrumentation-sidekiq` | ⚠️ smoke-tested by hand | [§10](#10-sidekiq-7x-proenterprise-apps-keeping-the-add-on-gems), or native [telemetry](telemetry.md) |
-| `rspec-sidekiq` | ⚠️ smoke-tested by hand | [§10](#10-sidekiq-7x-proenterprise-apps-keeping-the-add-on-gems) |
+| `rspec-sidekiq` | ⚠️ smoke-tested by hand | [§10](#10-sidekiq-7x-proenterprise-apps-keeping-the-add-on-gems), or native [`require "wurk/rspec"`](testing.md#11-rspec-sidekiqs-matchers-require-wurkrspec) |
 | `sidekiq-status` | ❓ untested | `Sidekiq::WebHelpers::SAFE_QPARAMS`, which its web extension mutates, now exists, but the gem's web specs have not been measured (see `docs/idea/14-ecosystem-compat.md`). Wurk's native `track:` (`Wurk::Status`, `status:<jid>`) is the supported path; the two use different keys and never read each other |
 | `sidekiq-scheduler` | ❓ untested | prefer native `config.periodic` |
 | `sidekiq-throttled` | ❓ untested | it patches Sidekiq's fetch classes to requeue throttled jobs, and Wurk's reliable fetcher is not one of them; prefer native [rate limiting](rate-limiting.md) |
