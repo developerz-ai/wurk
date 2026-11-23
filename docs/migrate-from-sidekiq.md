@@ -647,6 +647,39 @@ loop. Full setup, options, and a `sentry-sidekiq` migration table:
 
 To also hear about a failure before its last attempt (about 21 days in on the default schedule), use `Wurk::Sentry.install!(config, report_after_attempts: 3)`. A process that does not call `install!` can still drop Wurk's retry signals with `config.excluded_exceptions += Wurk::Sentry.excluded_exceptions`. Using Bugsnag or another reporter? See [Other error reporters](sentry.md#other-error-reporters).
 
+### Dropping the shim: a Gemfile with `wurk` alone
+
+The `sidekiq` shim gem exists only to satisfy an add-on's `add_dependency "sidekiq"`.
+Once no gem in the bundle declares one, remove it and keep a single line:
+
+```ruby
+# Gemfile
+gem "wurk"
+```
+
+Bundler then resolves no `sidekiq` gem at all (`bundle info sidekiq` reports it is not
+in the bundle), and nothing changes at runtime: `require "wurk"` (which `Bundler.require`
+does) defines the whole `Sidekiq::*` surface, and the `require "sidekiq…"` paths apps write
+are files in wurk's own `lib/`: `sidekiq`, `sidekiq/api`, `sidekiq/capsule`, `sidekiq/job_retry`,
+`sidekiq/testing`, `sidekiq/web`, `sidekiq/cron`, `sidekiq/cron/web`, `sidekiq-cron`, and the rest
+listed in [`docs/target/sidekiq-free.md`](target/sidekiq-free.md). The `sidekiq` and `sidekiqswarm`
+commands ship with wurk. `test/unit/wurk_alone_bundle_test.rb` holds both claims.
+
+What to replace before removing the shim, gem by gem:
+
+| Gem | Replace with | App change |
+|---|---|---|
+| `sidekiq-cron` | native `Sidekiq::Cron` ([§6](#sidekiq-cron--native-sidekiqcron-or-periodic-loops)) | none; the entries and their state stay in Redis |
+| `sentry-sidekiq` | `Wurk::Sentry` ([`docs/sentry.md`](sentry.md#coming-from-report_after_job_retries--true)) | delete `config.sidekiq.*`, add `Wurk::Sentry.install!(config)` |
+| `sidekiq-failures` | the retry and dead sets, `Sidekiq::Stats#failed` | drop `require "sidekiq/failures/web"`; `UNLINK failed` after your rollback window |
+| `sidekiq-unique-jobs` | `unique_for:` ([§6](#sidekiq-unique-jobs--native-unique_for--unique_until)) | per job class |
+| `opentelemetry-instrumentation-sidekiq` | keep it: it declares no `sidekiq` dependency | none |
+
+After deleting the shim line and running `bundle install`, `bundle info sidekiq` must report that
+the gem is not in the bundle. If it finds one, a gem left behind pulled real Sidekiq back in; wurk's
+boot check names it at startup, or list them with
+`bundle exec ruby -e 'puts Bundler.load.specs.select { |s| s.dependencies.any? { |d| d.name == "sidekiq" } }.map(&:name)'`.
+
 ### Quick reference — other ecosystem gems
 
 Keeping any of these requires the [`sidekiq` shim gem](../ecosystem/sidekiq-shim/README.md).
