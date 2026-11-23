@@ -124,4 +124,46 @@ class UniqueJobsWebTest < Wurk::Test::UnitCase
 
     assert_equal [['Locks', 'Expiring Locks', 'Changelogs'], 'Wurk::UniqueJobs::Web'], Marshal.load(data) # rubocop:disable Security/MarshalLoad -- our own child
   end
+
+  # The helpers the views call, on the inputs a browser can send: no filter, a
+  # zero or negative count, a param outside the gem's allow-list, and every
+  # shape of args and timestamp a stored lock can hold.
+  class HelperHost
+    include Wurk::UniqueJobs::Web::Helpers
+
+    attr_accessor :params
+
+    def initialize(params) = @params = params
+    def url_params(key) = @params[key]
+    def h(text) = CGI.escapeHTML(text.to_s)
+    def truncate(text, max) = text.to_s[0, max]
+    def to_display(arg) = arg.inspect
+  end
+
+  def test_helpers_default_and_escape_what_a_browser_sends
+    host = HelperHost.new('filter' => '', 'count' => '-5', 'cursor' => '7')
+    host.page_params
+
+    paging = host.instance_eval { [@filter, @count, @current_cursor, @prev_cursor] }
+
+    assert_equal ['*', 100, 7, 0], paging
+    linked = HelperHost.new('filter' => '', 'count' => '-5', 'cursor' => '7', 'evil' => 'x')
+
+    assert_equal 'filter=&count=-5&cursor=8', linked.cparams(cursor: 8)
+  end
+
+  def test_helpers_render_every_stored_args_and_time_shape
+    host = HelperHost.new({})
+
+    assert_equal 'Invalid job payload, args is nil', host.display_lock_args(nil)
+    assert_equal 'Invalid job payload, args must be an Array, not Hash', host.display_lock_args({})
+    assert_equal '1, &quot;a&lt;b&quot;', host.display_lock_args([1, 'a<b'])
+    assert_equal '&quot;ab', host.display_lock_args(['abc'], 3)
+    assert_nil host._safe_relative_time(nil)
+    stamp = '2026-11-22T10:00:00Z'
+
+    [Time.utc(2026, 11, 22, 10), Time.utc(2026, 11, 22, 10).to_f, stamp].each do |time|
+      assert_includes host._safe_relative_time(time), %(datetime="#{stamp}")
+    end
+  end
 end

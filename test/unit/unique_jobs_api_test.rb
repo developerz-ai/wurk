@@ -283,6 +283,19 @@ class UniqueJobsApiTest < Wurk::Test::UnitCase
     assert_raises(UJ::InvalidArgument) { UJ::Locksmith.new(job).execute }
   end
 
+  # The gem's guards on a blocking wait: a negative wait raises once the job is
+  # queued for the lock, a non-integer one before Redis is asked.
+  def test_a_blocking_wait_must_be_a_positive_integer
+    locksmith = UJ::Locksmith.new(UJ::Job.prepare(item(Jobs::Plain, 1)))
+
+    assert_raises(UJ::InvalidArgument) { locksmith.lock(wait: -1) }
+    Wurk.redis do |conn|
+      assert_raises(UJ::InvalidArgument) { locksmith.send(:pop_queued, conn, 1.5) }
+    end
+  ensure
+    locksmith.delete!
+  end
+
   def test_until_expired_reports_a_run_it_could_not_lock
     failed = []
     UJ.reflect { |on| on.execution_failed { |_item| failed << :failed } }
