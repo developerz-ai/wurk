@@ -148,6 +148,11 @@ class UniqueJobsWebTest < Wurk::Test::UnitCase
     lock!(1)
 
     assert_includes body(get('/expiring_locks')), 'uniquejobs:soon'
+    Wurk.redis { |c| c.call('SET', 'uniquejobs:soon', 'jid') }
+    post('/locks/uniquejobs:soon/delete')
+
+    assert_nil UJ::ExpiringDigests.new.score('uniquejobs:soon'), 'an expiring-only digest was not deletable'
+    assert_equal(0, Wurk.redis { |c| c.call('EXISTS', 'uniquejobs:soon') })
     assert_includes body(get('/changelogs')), 'queue_and_lock.lua'
     post('/changelogs/delete_all')
 
