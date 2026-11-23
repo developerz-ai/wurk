@@ -1,5 +1,1 @@
 # Unreleased
-
-### Added
-
-- **sidekiq-unique-jobs, native: `refresh_lock!` renews a running job's lock.** `Wurk::UniqueJobs.refresh_lock!(job, ttl: nil)` (also `SidekiqUniqueJobs.refresh_lock!`), called from `perform` with `self`, the jid or the payload, pushes out the expiry of the lock the job still holds and returns `true`, or writes nothing and returns `false` once the lock has expired or belongs to another jid: one Lua script on declared keys, so Dragonfly runs it, and it never takes a lock. `while_executing` and `until_and_while_executing` renew their `<digest>:RUN` runtime lock, `until_executed` and `until_expired` their push lock (moving `until_expired`'s reaper expiry too), `until_executing` holds nothing during `perform` and gets `false`. `ttl` defaults to the `lock_ttl` the lock was taken with, so `lock_ttl` can bound a crashed run instead of covering the slowest one. The gem has no equivalent ([unique jobs §13](../unique-jobs.md#renewing-a-long-runs-lock-refresh_lock-wurk-only)).
