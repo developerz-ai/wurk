@@ -134,9 +134,8 @@ module Wurk
 
         # Whole: the run is skipped above MAX_QUEUE_LENGTH queued jobs.
         def read_list(key)
-          UniqueJobs.redis do |conn|
-            conn.call('LRANGE', key, 0, -1)
-          end.each { |payload| collect(payload, @result.queued) }
+          payloads = UniqueJobs.redis { |conn| conn.call('LRANGE', key, 0, -1) }
+          payloads.each { |payload| collect(payload, @result.queued) }
         end
 
         def read_running
