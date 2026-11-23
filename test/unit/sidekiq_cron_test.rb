@@ -327,6 +327,54 @@ class SidekiqCronTest < Wurk::Test::UnitCase
     assert_equal ['0 3 * * *', 'schedule'], [found.cron, found.source]
   end
 
+  def test_the_startup_hook_loads_the_file_unless_disabled
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, 'schedule.yml')
+      File.write(path, { 'from_file' => entry }.to_yaml)
+      Sidekiq::Cron.configure do |c|
+        c.cron_schedule_file = path
+        c.enabled = false
+      end
+      Wurk::SidekiqCron::ScheduleLoader.on_startup
+
+      refute Sidekiq::Cron::Job.exists?('from_file')
+      Sidekiq::Cron.configure { |c| c.enabled = true }
+      Wurk::SidekiqCron::ScheduleLoader.on_startup
+    end
+
+    assert Sidekiq::Cron::Job.exists?('from_file')
+  end
+
+  def test_poller_thread_migrates_legacy_entries_and_stops_on_terminate
+    redis('HSET', 'cron_job:legacy', 'name', 'legacy', 'cron', '* * * * *', 'klass', 'X')
+    redis('SADD', 'cron_jobs', 'cron_job:legacy')
+    poller = Wurk::SidekiqCron::Poller.new(Wurk.configuration)
+    thread = poller.start
+
+    assert_same thread, poller.start
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 10
+    sleep 0.05 until Sidekiq::Cron::Job.exists?('legacy') || Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+
+    assert Sidekiq::Cron::Job.exists?('legacy')
+    poller.terminate
+
+    refute_predicate thread, :alive?
+  end
+
+  def test_a_failed_migration_is_reported_and_the_poller_keeps_running
+    errors = []
+    poller = Wurk::SidekiqCron::Poller.new(Wurk.configuration)
+    poller.define_singleton_method(:handle_exception) { |e, ctx| errors << [e.message, ctx[:context]] }
+    original = Sidekiq::Cron::Job.method(:migrate_old_jobs_if_needed!)
+    Sidekiq::Cron::Job.define_singleton_method(:migrate_old_jobs_if_needed!) { raise 'redis gone' }
+
+    poller.send(:migrate)
+
+    assert_equal [['redis gone', 'sidekiq-cron-migrate']], errors
+  ensure
+    Sidekiq::Cron::Job.define_singleton_method(:migrate_old_jobs_if_needed!, original) if original
+  end
+
   def test_configuration_validates_like_the_gem
     assert_raises(ArgumentError) { Sidekiq::Cron.configure { |c| c.natural_cron_parsing_mode = :loose } }
     assert_raises(ArgumentError) { Sidekiq::Cron.configure { |c| c.cron_poll_process_count = 0 } }

@@ -10,6 +10,15 @@ module Wurk
     # entries, ERB allowed. Runs on `:startup` in server processes only, and
     # not at all with `enabled = false`.
     class ScheduleLoader
+      # The `:startup` hook: nothing when the gem owns Sidekiq::Cron, when
+      # `enabled` is false, or when there is no schedule file.
+      def self.on_startup
+        return unless SidekiqCron.active? && SidekiqCron.configuration.enabled
+
+        loader = new
+        loader.load_schedule if loader.has_schedule_file?
+      end
+
       def load_schedule
         case schedule
         when ::Hash then Job.load_from_hash!(schedule, source: 'schedule')
@@ -38,11 +47,4 @@ module Wurk
   end
 end
 
-Wurk.configure_server do |config|
-  config.on(:startup) do
-    next unless Wurk::SidekiqCron.active? && Wurk::SidekiqCron.configuration.enabled
-
-    loader = Wurk::SidekiqCron::ScheduleLoader.new
-    loader.load_schedule if loader.has_schedule_file?
-  end
-end
+Wurk.configure_server { |config| config.on(:startup) { Wurk::SidekiqCron::ScheduleLoader.on_startup } }
