@@ -109,13 +109,16 @@ class JobSetTest < Wurk::Test::UnitCase
   # ZSCAN returns a non-zero cursor (multi-page)
   # once the ZSET exceeds Redis's listpack encoding threshold
   # (zset-max-listpack-entries default 128), so the loop iterates without
-  # breaking on the first page.
+  # breaking on the first page. SCAN may yield a member twice while the new
+  # hashtable is still rehashing (documented Redis behaviour, and Sidekiq's
+  # scan passes repeats through too), so the count is of distinct jids.
   def test_scan_spans_multiple_pages
-    150.times { |i| add_member(score: i.to_f, jid: format('pagescan%03d', i)) }
+    jids = Array.new(150) { |i| format('pagescan%03d', i) }
+    jids.each_with_index { |jid, i| add_member(score: i.to_f, jid: jid) }
 
-    yielded = @set.scan('pagescan', 10).to_a
+    yielded = @set.scan('pagescan', 10).map(&:jid)
 
-    assert_equal 150, yielded.size
+    assert_equal jids, yielded.uniq.sort
   end
 
   # --- each --------------------------------------------------------------
