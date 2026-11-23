@@ -33,3 +33,6 @@ substituting a dependency by name.
 Used by wurk's own ecosystem-compat CI: `bin/rake test:ecosystem` runs real
 ecosystem gems' test suites against wurk through this shim
 (see `test/ecosystem/`).
+
+**When no add-on in the bundle depends on `sidekiq` any more, remove this gem** and keep
+`gem "wurk"` alone: [Dropping the shim](../../docs/migrate-from-sidekiq.md#dropping-the-shim-a-gemfile-with-wurk-alone).

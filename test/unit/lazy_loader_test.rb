@@ -162,7 +162,10 @@ class LazyLoaderTest < Wurk::Test::UnitCase
       print JSON.dump(sidekiq_aliases)
     RUBY
 
-    assert_equal ALIASES.except('Sidekiq::Rails::Reloader').keys.sort, result.keys.sort
+    # Sidekiq::Cron is the native sidekiq-cron, not an alias of a lazy target:
+    # it has no Wurk-side autoload (CompatAliasesTest), and the walk loads it.
+    assert_equal ALIASES.except('Sidekiq::Rails::Reloader').keys.sort, (result.keys - ['Sidekiq::Cron']).sort
+    assert_equal 'Wurk::SidekiqCron', result['Sidekiq::Cron']
   end
 
   # On Ruby 3.2 a plain `require` of an autoload's file does not take that
@@ -263,7 +266,9 @@ class LazyLoaderTest < Wurk::Test::UnitCase
       print JSON.dump(pending)
     RUBY
 
-    assert_empty result
+    # The one autoload eager loading must leave alone: loading the native
+    # sidekiq-cron starts its poller, so only an app that names Sidekiq::Cron does.
+    assert_equal ['Sidekiq::Cron'], result
   end
 
   # A constant eager_load! adds to a namespace `require "wurk"` already loaded

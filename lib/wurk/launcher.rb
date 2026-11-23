@@ -62,7 +62,7 @@ module Wurk
     KILL_JOIN = 0.25
 
     attr_accessor :managers, :poller, :periodic_poller, :metrics_rollup, :queue_rollup, :metrics_flusher, :history,
-                  :queue_consumers
+                  :queue_consumers, :sidekiq_cron_poller
 
     def initialize(config, embedded: false)
       @config = config
@@ -361,7 +361,7 @@ module Wurk
     # history snapshotter is opt-in and an embedded boot may have stripped the
     # rest.
     def start_periodic_components
-      [@poller, @leader, @periodic_poller, @metrics_rollup,
+      [@poller, @leader, @periodic_poller, @sidekiq_cron_poller, @metrics_rollup,
        @queue_rollup, @queue_consumers, @metrics_flusher, @history].compact.each(&:start)
     end
 
@@ -369,8 +369,8 @@ module Wurk
     # for it (the flusher also writes its last window): side by side, every loop
     # hears the stop whatever another is stuck on. Returns the threads.
     def stop_periodic_components
-      stops = [@metrics_flusher, @periodic_poller, @metrics_rollup, @queue_rollup, @queue_consumers,
-               @history].compact.map { |t| [t.class, -> { t.terminate }] }
+      stops = [@metrics_flusher, @periodic_poller, @sidekiq_cron_poller, @metrics_rollup, @queue_rollup,
+               @queue_consumers, @history].compact.map { |t| [t.class, -> { t.terminate }] }
       stops << ['reaper', -> { @reaper.stop }] if @reaper
       stops.map do |label, stop|
         Thread.new { teardown_step(label, &stop) }.tap { |thread| thread.report_on_exception = false }
@@ -545,6 +545,8 @@ module Wurk
     #
     #   poller / reaper   every process, work shared through Redis
     #   periodic_poller   leader only enqueues — that is the exactly-once guard
+    #   sidekiq_cron_poller  native sidekiq-cron (Wurk::SidekiqCron), only when
+    #                     loaded and the gem is not; leader only, like the above
     #   metrics_rollup    leader only writes the cluster-total chart buckets
     #                     (cadence: `config.metrics_rollup_interval`)
     #   queue_rollup      leader only writes the `qm|…` per-queue gauges
@@ -558,11 +560,20 @@ module Wurk
       # Not @cron_poller: sidekiq-cron's Launcher prepend assigns that ivar and
       # owns its lifecycle. Both pollers run, each over its own registrations.
       @periodic_poller = Wurk::Cron::Poller.new(@config)
+      @sidekiq_cron_poller = Wurk::SidekiqCron::Poller.new(@config) if sidekiq_cron_polls?
       @metrics_rollup = Wurk::Metrics::Rollup.new(@config)
       @queue_rollup = Wurk::Metrics::QueueRollup.new(@config)
       @queue_consumers = Wurk::QueueConsumers::Watch.new(@config)
       @metrics_flusher = Wurk::Metrics::Flusher.new(@config)
       @history = Wurk::History.new(@config) if @config.history_enabled?
+    end
+
+    # The app loaded `Sidekiq::Cron` and it is wurk's: the gem, when bundled,
+    # prepends its own poller onto this class. A poll interval of 0 turns it
+    # off, as in the gem.
+    def sidekiq_cron_polls?
+      defined?(Wurk::SidekiqCron) && Wurk::SidekiqCron.active? &&
+        Wurk::SidekiqCron.configuration.cron_poll_interval.to_i.positive?
     end
 
     # Filled in by #run. Declared up front so #initialize reads as the full

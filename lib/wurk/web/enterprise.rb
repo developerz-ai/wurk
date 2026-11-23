@@ -202,11 +202,22 @@ module Wurk
           Wurk::Cron::LoopSet.new.fetch(lid)
         end
 
+        # The rows the Cron page lists: every loop, then every native
+        # sidekiq-cron entry (`Wurk::SidekiqCron::WebRows`) when that is loaded.
+        def rows(now = ::Time.now)
+          loops = list.map { |lp| Wurk::Api::Serializers.cron_row(lp, now.to_i) }
+          sidekiq_cron? ? loops + Wurk::SidekiqCron::WebRows.rows(now) : loops
+        end
+
         def pause(lid)
+          return Wurk::SidekiqCron::WebRows.pause(lid) if sidekiq_cron_row?(lid)
+
           set_paused(lid, '1')
         end
 
         def unpause(lid)
+          return Wurk::SidekiqCron::WebRows.unpause(lid) if sidekiq_cron_row?(lid)
+
           set_paused(lid, '0')
         end
 
@@ -215,6 +226,8 @@ module Wurk
         # own queue/retry. Returns the new jid, or nil
         # when the loop doesn't exist.
         def enqueue_now(lid)
+          return Wurk::SidekiqCron::WebRows.enqueue_now(lid) if sidekiq_cron_row?(lid)
+
           loop_obj = fetch(lid)
           return nil unless loop_obj
 
@@ -224,6 +237,8 @@ module Wurk
         # Spec §8.0.1+: per-loop history list at `loop-history:{lid}`. Each
         # entry is a `[fired_at, jid]` tuple (LPUSH'd by the poller).
         def history(lid)
+          return Wurk::SidekiqCron::WebRows.history(lid) if sidekiq_cron_row?(lid)
+
           loop_obj = fetch(lid)
           return [] unless loop_obj
 
@@ -236,6 +251,14 @@ module Wurk
 
           Wurk.redis { |c| c.call('HSET', "#{Wurk::Cron::LOOP_PREFIX}#{lid}", 'paused', value) }
           true
+        end
+
+        def sidekiq_cron?
+          !defined?(Wurk::SidekiqCron).nil? && Wurk::SidekiqCron.active?
+        end
+
+        def sidekiq_cron_row?(lid)
+          sidekiq_cron? && Wurk::SidekiqCron::WebRows.id?(lid)
         end
       end
 

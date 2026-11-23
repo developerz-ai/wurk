@@ -93,7 +93,8 @@ require 'json'
 # real parallelism via a fork-based swarm. Every public class is also exposed
 # under its `Sidekiq::*` name (see {Sidekiq}) — except `Sidekiq::Cron` and
 # `Sidekiq::Status`, deliberately not aliased (#204): those namespaces belong
-# to the third-party sidekiq-cron / sidekiq-status gems, not to Sidekiq.
+# to the third-party sidekiq-cron / sidekiq-status gems, not to Sidekiq. Without
+# the sidekiq-cron gem, `Sidekiq::Cron` is the native {Wurk::SidekiqCron}.
 #
 # Start here:
 #   * {Wurk::Worker} / `Sidekiq::Job` — define and enqueue jobs.

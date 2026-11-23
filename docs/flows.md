@@ -291,7 +291,8 @@ alias only after checking: upstream Sidekiq defines no `Flow` anywhere in
 `lib/` at the pinned parity SHA, RubyGems has no `sidekiq-flow` or
 `sidekiq_flow` gem, and the only public `Sidekiq::Flow` in the wild is
 nested under a different gem's own `Sidekiq` module. Same precedent-check as
-`Sidekiq::Cron` and `Sidekiq::Status`.
+`Sidekiq::Cron` and `Sidekiq::Status`, the namespaces of the sidekiq-cron and
+sidekiq-status gems.
 
 ## See also
 

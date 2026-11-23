@@ -26,6 +26,7 @@ One reason to change per class. Don't blur these. Each class's header comment is
 | CLI / Embedded | Standalone argument/config loading and boot entrypoints (worker, `run_swarm`, `run_api`); Embedded starts the Launcher stack inside a host Ruby process without swarm supervision. Neither requires the Rails engine | `lib/wurk/cli.rb`, `lib/wurk/embedded.rb` |
 | Scheduled | Polling and promotion of due `retry` / `schedule` entries through Client; not retry policy or periodic cron registration | `lib/wurk/scheduled.rb` |
 | Cron | Periodic registration, cron parsing and leader-gated enqueue ticks; creates periodic work rather than promoting delayed jobs | `lib/wurk/cron.rb` |
+| SidekiqCron | Native sidekiq-cron (`Sidekiq::Cron` when that gem is not bundled): the gem's name-keyed `cron_job:<ns>:<name>` store, its `:enqueued` ZADD fire gate, a leader-gated poller and the dashboard rows. Shares only the parser and the leader with Cron | `lib/wurk/sidekiq_cron.rb`, `lib/wurk/sidekiq_cron/`, `lib/sidekiq/cron.rb` |
 | Leader | Best-effort Redis lease election and fencing token; not strict mutual exclusion, so consumers needing it must guard their writes | `lib/wurk/leader.rb` |
 | Heartbeat | Redis process/work heartbeat schema, slot refresh and queued-signal reads; returns signals to Launcher, which retains lifecycle and signal dispatch | `lib/wurk/heartbeat.rb` |
 | JobRetry | Failure policy, backoff, retry metadata, exhaustion hooks and dead-set routing; Scheduled later promotes retries, Processor still owns execution | `lib/wurk/job_retry.rb` |

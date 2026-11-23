@@ -10,7 +10,7 @@
 
 ## Three pillars
 
-- **Drop-in.** Same Redis key schema, job JSON, and Ruby DSL. Every `Wurk::*` class with an upstream Sidekiq counterpart is also exposed under its `Sidekiq::*` name (`Sidekiq::Job`, `Sidekiq::Worker`, `Sidekiq::Batch`, `Sidekiq::Limiter`, `Sidekiq.configure_server`, `Sidekiq::Client`, `Sidekiq::Pro::Web`, `Sidekiq::Enterprise`). `Sidekiq::Cron` and `Sidekiq::Status` are deliberately absent: third-party gems own those namespaces. Existing jobs, initializers, `sidekiq_options`, and live Redis data keep working. `Sidekiq.pro?` / `Sidekiq.ent?` return `false` (Wurk advertises as free OSS) — never gate behavior on them.
+- **Drop-in.** Same Redis key schema, job JSON, and Ruby DSL. Every `Wurk::*` class with an upstream Sidekiq counterpart is also exposed under its `Sidekiq::*` name (`Sidekiq::Job`, `Sidekiq::Worker`, `Sidekiq::Batch`, `Sidekiq::Limiter`, `Sidekiq.configure_server`, `Sidekiq::Client`, `Sidekiq::Pro::Web`, `Sidekiq::Enterprise`). `Sidekiq::Status` is deliberately absent and `Sidekiq::Cron` is left to the sidekiq-cron gem when it is bundled: third-party gems own those namespaces. Existing jobs, initializers, `sidekiq_options`, and live Redis data keep working. `Sidekiq.pro?` / `Sidekiq.ent?` return `false` (Wurk advertises as free OSS) — never gate behavior on them.
 - **Free.** Pro + Enterprise feature parity in one gem. No tiers, no flags, no license check.
 - **Parallel.** A fork-based swarm gives real multi-core parallelism from one supervisor, and reliable fetch is the default. The latest published paired comparison against stock Sidekiq (2026-08-07) found parity on CPU and I/O, with Wurk behind on noop and boot; it does not establish today's gem performance. Reproduce with `rake bench:vs_sidekiq`; see the benchmarks doc.
 
@@ -44,7 +44,7 @@ Sidekiq has no equivalent for any of these, and each is Wurk-only: using it ties
 
 ## Third-party gem mappings
 
-- `sidekiq-cron` → native `config.periodic { |mgr| mgr.register("*/5 * * * *", MyJob) }`. There is no `Sidekiq::Cron::Job` shim by design.
+- `sidekiq-cron` → drop the gem and keep the code: without it, `Sidekiq::Cron` is Wurk's native sidekiq-cron, same `Sidekiq::Cron::Job` API and the same `cron_job:<namespace>:<name>` Redis keys, so entries and their enabled/disabled state carry over ([docs/periodic-jobs.md](https://github.com/developerz-ai/wurk/blob/main/docs/periodic-jobs.md)). Or port to `config.periodic { |mgr| mgr.register("*/5 * * * *", MyJob) }`.
 - `sidekiq-unique-jobs` → drop the gem and keep the code: Wurk carries sidekiq-unique-jobs 8.x natively (`lock:`, `on_conflict:`, `SidekiqUniqueJobs.configure`, the middleware) on the gem's own `uniquejobs:*` keys, so a fleet can drop it pod by pod. Or move to the Enterprise API: `Sidekiq::Enterprise.unique!` once, then `sidekiq_options unique_for: 600, unique_until: :success`. [docs/unique-jobs.md §13](https://github.com/developerz-ai/wurk/blob/main/docs/unique-jobs.md#13-migrating-from-sidekiq-unique-jobs).
 - `sidekiq-cron`, `sidekiq-unique-jobs`, `sidekiq-failures` and `sentry-sidekiq` are exercised by their own upstream suites against Wurk in CI, plus a real-worker boot check, with the exclusions in [`test/ecosystem/README.md`](https://github.com/developerz-ai/wurk/blob/main/test/ecosystem/README.md).
 - `sidekiq-scheduler`, `sidekiq-status`, `sidekiq-throttled` are untested against Wurk; their suites are target additions (with known blockers) tracked in [docs/idea/14-ecosystem-compat.md](https://github.com/developerz-ai/wurk/blob/main/docs/idea/14-ecosystem-compat.md).

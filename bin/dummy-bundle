@@ -9,7 +9,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 root="$PWD"
-root_path="$(bundle config get path --parseable 2>/dev/null | sed -n 's/^path=//p' | head -1)"
+root_path="$( { bundle config get path --parseable 2>/dev/null || true; } | sed -n 's/^path=//p' | head -1)"
 
 cd test/dummy
 if [ -n "$root_path" ]; then

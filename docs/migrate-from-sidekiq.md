@@ -450,12 +450,23 @@ boot run against Wurk in the [`ecosystem` CI job](../.github/workflows/ecosystem
 and exclusions in [`test/ecosystem/`](../test/ecosystem/README.md)). The state of the rest is in
 [`docs/idea/14-ecosystem-compat.md`](idea/14-ecosystem-compat.md).
 
-### `sidekiq-cron` → native periodic jobs
+### `sidekiq-cron` → native `Sidekiq::Cron`, or periodic loops
 
-Wurk has Enterprise-grade periodic jobs built in. Register them in a `config.periodic`
-block at boot. By design there is **no `Sidekiq::Cron::Job` shim** ([#204](https://github.com/developerz-ai/wurk/issues/204));
-real Sidekiq never defined that constant, and faking it would break the drop-in
-contract.
+Two native routes; neither needs the gem or the shim.
+
+**Keep the code: native `Sidekiq::Cron`.** Remove `gem "sidekiq-cron"` and change
+nothing else. Without the gem in the bundle, `Sidekiq::Cron` is Wurk's own
+implementation of it ([periodic jobs](periodic-jobs.md#sidekiq-cron-natively-sidekiqcron)):
+the same `Sidekiq::Cron::Job` API, `Sidekiq::Cron.configure` knobs and schedule
+YAML, over the same `cron_jobs:<namespace>` / `cron_job:<namespace>:<name>` keys. The
+entries already in Redis keep their enabled/disabled state, so there is no data to
+move, and old pods running the gem can overlap new pods running Wurk: both gate a
+fire on the same `:enqueued` member, so an occurrence is pushed once. If nothing in
+your code names `Sidekiq::Cron` (the gem used to load from Bundler alone, for
+example to read `config/schedule.yml`), add `require "sidekiq-cron"` to an
+initializer: the native poller only runs once `Sidekiq::Cron` is loaded.
+
+**Port to loops: `config.periodic`.** Register the schedule in code instead.
 
 ```ruby
 # sidekiq-cron (old):                       # Wurk (native):
@@ -470,15 +481,18 @@ contract.
 `mgr.register(cron, JobClass, **opts)` takes a standard 5-field cron string and the
 worker class; `tz:` sets the timezone. Periodic state lives in the `periodic` / `loops:<lid>`
 Redis keys and is visible in the dashboard. `mgr.load_file` and `mgr.load_hash` take
-sidekiq-cron's YAML shape directly.
+sidekiq-cron's YAML shape directly. A loop is keyed by a hash of its schedule, not by
+name, so a pause does not follow an edited schedule the way a sidekiq-cron `status` does.
 
-**One difference to plan for: late ticks.** A native slot more than max(90s, 1.5× tick) late is
-skipped and logged, not fired. sidekiq-cron's `reschedule_grace_period` can fire a missed tick
+**One difference to plan for on the loop route: late ticks.** A loop slot more than
+max(90s, 1.5× tick) late is skipped and logged, not fired (native `Sidekiq::Cron` keeps
+the gem's `reschedule_grace_period`). sidekiq-cron's `reschedule_grace_period` can fire a missed tick
 later than that. A cutover gap past 90s can therefore skip a tick the gem would have caught, so
 list what is due inside your window (a daily billing run, say) and fire it by hand if it passes.
 
-#### Moving a live sidekiq-cron schedule
+#### Moving a live sidekiq-cron schedule to loops
 
+Only for the loop route; native `Sidekiq::Cron` reads the schedule where it is.
 sidekiq-cron keeps its schedule in Redis — `cron_jobs:<namespace>` SETs of
 `cron_job:<namespace>:<name>` HASHes (one `cron_jobs` SET of `cron_job:<name>` on
 releases before namespaces) — while Wurk's loops live in `periodic` / `loops:<lid>`.
@@ -648,6 +662,40 @@ loop. Full setup, options, and a `sentry-sidekiq` migration table:
 
 To also hear about a failure before its last attempt (about 21 days in on the default schedule), use `Wurk::Sentry.install!(config, report_after_attempts: 3)`. A process that does not call `install!` can still drop Wurk's retry signals with `config.excluded_exceptions += Wurk::Sentry.excluded_exceptions`. Using Bugsnag or another reporter? See [Other error reporters](sentry.md#other-error-reporters).
 
+### Dropping the shim: a Gemfile with `wurk` alone
+
+The `sidekiq` shim gem exists only to satisfy an add-on's `add_dependency "sidekiq"`.
+Once no gem in the bundle declares one, remove it and keep a single line:
+
+```ruby
+# Gemfile
+gem "wurk"
+```
+
+Bundler then resolves no `sidekiq` gem at all (`bundle info sidekiq` reports it is not
+in the bundle), and nothing changes at runtime: `require "wurk"` (which `Bundler.require`
+does) defines the whole `Sidekiq::*` surface, and the `require "sidekiq…"` paths apps write
+are files in wurk's own `lib/`: `sidekiq`, `sidekiq/api`, `sidekiq/capsule`, `sidekiq/job_retry`,
+`sidekiq/testing`, `sidekiq/web`, `sidekiq/cron`, `sidekiq/cron/web`, `sidekiq-cron`, and the rest
+listed in [`docs/target/sidekiq-free.md`](target/sidekiq-free.md). The `sidekiq` and `sidekiqswarm`
+commands ship with wurk. `test/unit/wurk_alone_bundle_test.rb` holds both claims.
+
+What to replace before removing the shim, gem by gem:
+
+| Gem | Replace with | App change |
+|---|---|---|
+| `sidekiq-cron` | native `Sidekiq::Cron` ([§6](#sidekiq-cron--native-sidekiqcron-or-periodic-loops)) | none; the entries and their state stay in Redis |
+| `sentry-sidekiq` | `Wurk::Sentry` ([`docs/sentry.md`](sentry.md#coming-from-report_after_job_retries--true)) | delete `config.sidekiq.*`, add `Wurk::Sentry.install!(config)` |
+| `sidekiq-failures` | the retry and dead sets, `Sidekiq::Stats#failed` | drop `require "sidekiq/failures/web"`; `UNLINK failed` after your rollback window |
+| `sidekiq-unique-jobs` | native `SidekiqUniqueJobs` ([§6](#sidekiq-unique-jobs--drop-the-gem-keep-the-code)) | none; the locks stay in Redis under the gem's keys |
+| `rspec-sidekiq` | `require "wurk/rspec"` ([testing](testing.md#11-rspec-sidekiqs-matchers-require-wurkrspec)) | the require; set fake mode yourself |
+| `opentelemetry-instrumentation-sidekiq` | keep it: it declares no `sidekiq` dependency | none |
+
+After deleting the shim line and running `bundle install`, `bundle info sidekiq` must report that
+the gem is not in the bundle. If it finds one, a gem left behind pulled real Sidekiq back in; wurk's
+boot check names it at startup, or list them with
+`bundle exec ruby -e 'puts Bundler.load.specs.select { |s| s.dependencies.any? { |d| d.name == "sidekiq" } }.map(&:name)'`.
+
 ### Quick reference — other ecosystem gems
 
 Keeping any of these requires the [`sidekiq` shim gem](../ecosystem/sidekiq-shim/README.md).
@@ -656,12 +704,12 @@ Keeping any of these requires the [`sidekiq` shim gem](../ecosystem/sidekiq-shim
 
 | Gem | Status on Wurk | Notes |
 |---|---|---|
-| `sidekiq-cron` | ✅ upstream suite and a real worker boot in CI | [§10](#10-sidekiq-7x-proenterprise-apps-keeping-the-add-on-gems), or native `config.periodic` |
+| `sidekiq-cron` | ✅ upstream suite, a real worker boot, and an interop run beside native `Sidekiq::Cron` in CI | [§10](#10-sidekiq-7x-proenterprise-apps-keeping-the-add-on-gems), or native [`Sidekiq::Cron`](periodic-jobs.md#sidekiq-cron-natively-sidekiqcron) / `config.periodic` |
 | `sidekiq-unique-jobs` | ✅ upstream suite (less one Toxiproxy spec file) and a real worker boot in CI; native copy preferred | drop it, keep the code ([§6](#sidekiq-unique-jobs--drop-the-gem-keep-the-code)), or keep it ([§10](#10-sidekiq-7x-proenterprise-apps-keeping-the-add-on-gems)) |
 | `sidekiq-failures` | ✅ upstream suite (less the ERB home-page test) and a real worker boot in CI | [§10](#10-sidekiq-7x-proenterprise-apps-keeping-the-add-on-gems) |
 | `sentry-sidekiq` | ✅ upstream suite and a real worker boot in CI; native preferred | [§10](#10-sidekiq-7x-proenterprise-apps-keeping-the-add-on-gems), or [`Wurk::Sentry`](sentry.md) |
 | `opentelemetry-instrumentation-sidekiq` | ⚠️ smoke-tested by hand | [§10](#10-sidekiq-7x-proenterprise-apps-keeping-the-add-on-gems), or native [telemetry](telemetry.md) |
-| `rspec-sidekiq` | ⚠️ smoke-tested by hand | [§10](#10-sidekiq-7x-proenterprise-apps-keeping-the-add-on-gems) |
+| `rspec-sidekiq` | ⚠️ smoke-tested by hand | [§10](#10-sidekiq-7x-proenterprise-apps-keeping-the-add-on-gems), or native [`require "wurk/rspec"`](testing.md#11-rspec-sidekiqs-matchers-require-wurkrspec) |
 | `sidekiq-status` | ❓ untested | `Sidekiq::WebHelpers::SAFE_QPARAMS`, which its web extension mutates, now exists, but the gem's web specs have not been measured (see `docs/idea/14-ecosystem-compat.md`). Wurk's native `track:` (`Wurk::Status`, `status:<jid>`) is the supported path; the two use different keys and never read each other |
 | `sidekiq-scheduler` | ❓ untested | prefer native `config.periodic` |
 | `sidekiq-throttled` | ❓ untested | it patches Sidekiq's fetch classes to requeue throttled jobs, and Wurk's reliable fetcher is not one of them; prefer native [rate limiting](rate-limiting.md) |
@@ -791,7 +839,7 @@ Sidekiq worker exiting and the first Wurk worker fetching. That gap is normally
 seconds to a minute. Native periodic ticks that fall inside it are not backfilled, which
 the Enterprise spec also says ([§2.6](target/sidekiq-ent.md#26-semantics--edge-cases)).
 sidekiq-cron with a grace period behaves differently: see
-[late ticks](#sidekiq-cron--native-periodic-jobs).
+[late ticks](#sidekiq-cron--native-sidekiqcron-or-periodic-loops).
 
 #### Rolling cutover: stock Sidekiq 8 only
 
@@ -940,8 +988,8 @@ read-only check of the server too (version, eviction policy, live peers).
       samples). Wurk sends a job with `encrypt` set and no Wurk envelope to the dead set unrun.
       Do not retry one holding foreign ciphertext: a retry seals the argument as it stands, and
       `perform` then receives the ciphertext.
-- [ ] `config.periodic` blocks kept as they are; sidekiq-cron entries moved
-      ([§6](#moving-a-live-sidekiq-cron-schedule)).
+- [ ] `config.periodic` blocks kept as they are; sidekiq-cron entries kept on native `Sidekiq::Cron` or moved
+      ([§6](#moving-a-live-sidekiq-cron-schedule-to-loops)).
 - [ ] Process command lines can stay: `sidekiq` and `sidekiqswarm` ship as aliases of `wurk` and
       `wurkswarm` ([§3](#3-running-a-worker-process)). `config/sidekiq.yml` is still
       discovered. `SIDEKIQ_MAXMEM_MB`, `SIDEKIQ_LEADER` and `SIDEKIQ_COUNT` are honoured.

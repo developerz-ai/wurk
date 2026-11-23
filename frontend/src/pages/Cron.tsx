@@ -21,6 +21,8 @@ interface CronLoop {
   lid: string;
   schedule: string;
   klass: string;
+  // A sidekiq-cron entry's name; periodic loops have none.
+  label?: string;
   queue: string;
   tz: string | null;
   paused: boolean;
@@ -122,7 +124,12 @@ export default function Cron() {
                           <td style={{ 'font-family': 'monospace', 'font-size': '12px' }} title={loop.tz ?? undefined}>
                             {loop.schedule}
                           </td>
-                          <td title={loop.klass}>{truncate(loop.klass, 32)}</td>
+                          <td title={loop.klass}>
+                            {truncate(loop.klass, 32)}
+                            <Show when={loop.label}>
+                              <div style={{ color: 'var(--text-muted)', 'font-size': '11px' }}>{loop.label}</div>
+                            </Show>
+                          </td>
                           <td>{loop.queue}</td>
                           <td style={{ color: 'var(--text-muted)' }}>
                             {loop.last_fire_at ? relativeTime(loop.last_fire_at) : '—'}

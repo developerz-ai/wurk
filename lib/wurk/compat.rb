@@ -1,10 +1,10 @@
 # frozen_string_literal: true
 
 # Sidekiq aliases. This is the drop-in contract — every public Wurk::*
-# class is exposed under its Sidekiq::* name except two deliberate
-# exclusions, `Sidekiq::Cron` and `Sidekiq::Status` (#204): those namespaces
-# belong to the third-party sidekiq-cron / sidekiq-status gems, not to
-# Sidekiq itself. Never break the rest.
+# class is exposed under its Sidekiq::* name except two namespaces that
+# belong to third-party gems (#204): `Sidekiq::Status` is never defined, and
+# `Sidekiq::Cron` is wurk's native sidekiq-cron only when that gem is not
+# bundled. Never break the rest.
 #
 # Spec: docs/target/sidekiq-{free,pro,ent}.md.
 
@@ -17,13 +17,13 @@ require_relative 'loader'
 # {Wurk.configure_server}; `Sidekiq::Batch`, `Sidekiq::Limiter`,
 # `Sidekiq::Client`, `Sidekiq::Pro::Web`, `Sidekiq::Enterprise` all resolve to
 # their Wurk implementations. This alias surface is the drop-in contract and is
-# never broken. Two names are deliberately NOT aliased (#204): `Sidekiq::Cron`
-# and `Sidekiq::Status` — those namespaces belong to the third-party
-# sidekiq-cron / sidekiq-status gems. `sidekiq-cron` owns `Sidekiq::Cron`, and
-# squatting it made the gem's own Poller/Job classes collide at load;
-# `sidekiq-status` opens `module Sidekiq::Status`, which resolves the constant
-# instead of defining it, so the alias would hand the gem {Wurk::Status} to
-# reopen and clobber. The guard comments at `CronParser` and `Status` below
+# never broken. Two names belong to third-party gems (#204): `Sidekiq::Cron`
+# and `Sidekiq::Status`. `sidekiq-cron` owns `Sidekiq::Cron` when it is
+# bundled — squatting it made the gem's own Poller/Job classes collide at
+# load — so wurk's native one (Wurk::SidekiqCron) is only an autoload, and
+# only when the gem is absent. `sidekiq-status` opens `module Sidekiq::Status`,
+# which resolves the constant instead of defining it, so the alias would hand
+# the gem {Wurk::Status} to reopen and clobber. The guard comments at `CronParser` and `Status` below
 # carry the full rationale.
 #
 # @example The same code targets Sidekiq or Wurk unchanged
@@ -175,10 +175,13 @@ module Sidekiq
   # and iterable_job.rb require subfiles that reopen the class before defining
   # it, which a direct require would turn into a circular one.
   #
-  # No `Sidekiq::Cron` alias on purpose (#204): real Sidekiq never defines it
-  # — that namespace belongs to the third-party sidekiq-cron gem, and squatting
-  # it made the gem's own classes (Poller, Job) collide at load. Wurk's native
-  # periodic surface is `Sidekiq::Periodic` (Ent parity) / `Wurk::Cron`.
+  # `Sidekiq::Cron` is not an alias (#204): real Sidekiq never defines it —
+  # that namespace belongs to the sidekiq-cron gem, and squatting it made the
+  # gem's own classes (Poller, Job) collide at load. With the gem bundled it is
+  # left alone. Without it, the name autoloads wurk's native sidekiq-cron
+  # (Wurk::SidekiqCron, lib/sidekiq/cron.rb), so an app that dropped the gem
+  # keeps its `Sidekiq::Cron::Job` calls and its Redis state. Wurk's Ent
+  # periodic surface is `Sidekiq::Periodic` / `Wurk::Cron`.
   #
   # `Flow` is a Wurk extra, not parity — aliased because nothing else claims
   # the name. Checked before adding it, the way `Sidekiq::Cron` (#204) and
@@ -199,6 +202,7 @@ module Sidekiq
     Deploy: 'compat/deploy', Encryption: 'compat/encryption'
   )
   Wurk::LazyLoader.register(Pro, Web: 'compat/web', BatchStatus: 'compat/web')
+  autoload :Cron, File.expand_path('../sidekiq/cron.rb', __dir__) unless Gem.loaded_specs.key?('sidekiq-cron')
 
   # Top-level Sidekiq.configure_server / configure_client / redis / logger
   # delegate to Wurk's class methods. Third-party gems treat these as the

@@ -12,6 +12,7 @@ set -euo pipefail
 #   prepare — optional: edits the fresh checkout (hardcoded Redis, mostly)
 #   adapter.rb — optional: test-only shim, exported as ECOSYSTEM_ADAPTER
 #   boot_check.rb — optional: the gem in real workers, after its suite
+#   interop.rb — optional: the gem beside wurk's native equivalent, one Redis
 #
 # Checkouts are cloned (cached) into test/ecosystem/.checkouts/ (gitignored).
 #
@@ -147,7 +148,9 @@ for harness in "$ECOSYSTEM_DIR"/*/; do
     eval "$command" &&
     # A gem's own suite rarely boots a real worker, so it can stay green while
     # the gem does nothing in production. boot_check.rb covers that path.
-    { [ ! -f "$harness_dir/boot_check.rb" ] || bundle exec ruby "$harness_dir/boot_check.rb"; }
+    { [ ! -f "$harness_dir/boot_check.rb" ] || bundle exec ruby "$harness_dir/boot_check.rb"; } &&
+    # Where wurk ships a native equivalent, the two share one fleet mid-rollout.
+    { [ ! -f "$harness_dir/interop.rb" ] || bundle exec ruby "$harness_dir/interop.rb"; }
   ) &
   suite_pid=$!
   if ! wait "$suite_pid"; then
