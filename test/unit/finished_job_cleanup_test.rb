@@ -50,15 +50,13 @@ class FinishedJobCleanupTest < Wurk::Test::UnitCase
     Wurk::FinishedJobCleanup.reset!
     FakeLocksmith.calls = []
     FakeLocksmith.failing = false
-    Object.const_set(:SidekiqUniqueJobs, Module.new) unless defined?(::SidekiqUniqueJobs)
-    @stubbed = !defined?(::SidekiqUniqueJobs::Locksmith)
-    ::SidekiqUniqueJobs.const_set(:Locksmith, FakeLocksmith) if @stubbed
+    @locksmith_class = Wurk::UniqueJobsCompat.method(:locksmith_class)
+    use_locksmith(FakeLocksmith)
   end
 
   def teardown
     Wurk::FinishedJobCleanup.reset!
-    ::SidekiqUniqueJobs.send(:remove_const, :Locksmith) if @stubbed
-    Object.send(:remove_const, :SidekiqUniqueJobs) if @stubbed && ::SidekiqUniqueJobs.constants.empty?
+    Wurk::UniqueJobsCompat.define_singleton_method(:locksmith_class, @locksmith_class)
     @config.reset_redis_pools!
   ensure
     super
@@ -185,14 +183,16 @@ class FinishedJobCleanupTest < Wurk::Test::UnitCase
     Wurk::FinishedJobCleanup.drain
   end
 
+  # The live copy's Locksmith, gem or native, is what the cleanup unlocks with.
+  def use_locksmith(klass)
+    Wurk::UniqueJobsCompat.define_singleton_method(:locksmith_class) { klass }
+  end
+
   def with_locksmith(klass)
-    original = ::SidekiqUniqueJobs::Locksmith
-    ::SidekiqUniqueJobs.send(:remove_const, :Locksmith)
-    ::SidekiqUniqueJobs.const_set(:Locksmith, klass)
+    use_locksmith(klass)
     yield
   ensure
-    ::SidekiqUniqueJobs.send(:remove_const, :Locksmith)
-    ::SidekiqUniqueJobs.const_set(:Locksmith, original)
+    use_locksmith(FakeLocksmith)
   end
 
   def silence_constant(name, value)

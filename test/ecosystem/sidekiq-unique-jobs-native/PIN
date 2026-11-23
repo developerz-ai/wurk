@@ -1,0 +1,5 @@
+# The gem the interop's "old pod" runs, at the sidekiq-unique-jobs harness's own
+# pin: the native implementation is held to this version's keys and digests.
+repo: https://github.com/mhenrixon/sidekiq-unique-jobs
+ref: v8.1.0
+sha: 4e57de89f3ac817b876c6b5d57050e05accad2d6

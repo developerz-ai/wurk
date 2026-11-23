@@ -190,13 +190,13 @@ module Wurk
       end
 
       def ignored_locks
-        return if defined?(::SidekiqUniqueJobs)
+        return if UniqueJobsCompat.client_middleware?(Wurk.configuration.client_middleware)
 
         classes = BootChecks.locked_job_classes
         return if classes.empty?
 
-        @report.warning('ignored_lock', "#{classes.size} class(es) set `lock:` with sidekiq-unique-jobs not loaded, " \
-                                        "so duplicates run: #{BootChecks.listing(classes)}.")
+        @report.warning('ignored_lock', "#{classes.size} class(es) set `lock:` with no unique-jobs client " \
+                                        "middleware installed, so duplicates run: #{BootChecks.listing(classes)}.")
       end
     end
   end

@@ -39,6 +39,8 @@ which must name DB 15 and not the local default port; anything else aborts. Afte
 Current matrix:
 - sidekiq-cron (v2.4.0)
 - sidekiq-unique-jobs (v8.1.0), without the one spec file that needs Toxiproxy
+- sidekiq-unique-jobs-native: no gem in the bundle; that harness's lock scenarios and
+  boot check on Wurk's native copy, and `interop.rb`, a gem pod and a native pod on one Redis
 - sidekiq-failures (1.1.0), without the test for upstream's ERB home page
 - sentry-sidekiq (6.5.0)
 

@@ -483,7 +483,7 @@ Chain order verified in `test/unit/metrics_history_test.rb` and
 `lib/wurk/metrics/statsd.rb:165-184`, `lib/wurk/metrics/statsd.rb:214-219`,
 `lib/wurk/middleware/interrupt_handler.rb:38-40,53`,
 `lib/wurk/middleware/expiry.rb:66-68,115`,
-`lib/wurk.rb:349`, `lib/wurk.rb:365`, `lib/wurk.rb:372`,
+`lib/wurk.rb:350`, `lib/wurk.rb:366`, `lib/wurk.rb:373`,
 `docs/plans/2026/08/07/101-beyond-sidekiq/00-semantics-signoff.md` §1.
 
 ## OpenTelemetry adds `traceparent`/`tracestate` as top-level job-JSON keys, opt-in only
@@ -1444,7 +1444,7 @@ surface ([free §4.2 Public methods — `reap_idle_redis_connections`](../target
 `SortedSet#scan` block forms are mixed into the Data API at load time —
 `Wurk::API::Fast::QueueExt` is included into `Wurk::Queue`
 (`lib/wurk/api/fast.rb:39`) from the require in `lib/wurk.rb`
-(`lib/wurk.rb:382`) — with nothing to enable and nothing to buy. Scripts are
+(`lib/wurk.rb:383`) — with nothing to enable and nothing to buy. Scripts are
 `SCRIPT LOAD`ed once per pool and invoked by `EVALSHA`; `delete_job` returns
 the deleted payload's JSON or nil and raises `ArgumentError` on a blank jid
 (`lib/wurk/api/fast.rb:21`).
@@ -1464,7 +1464,7 @@ script's `LRANGE` blocking Redis for its duration, which is why it is an admin
 action, not a loop primitive.
 
 **Anchor:** `lib/wurk/api/fast.rb:21`, `lib/wurk/api/fast.rb:39`;
-`lib/wurk.rb:382`; Pro §11 ([Pro §11 Fast Lua API extensions](../target/sidekiq-pro.md#11-fast-lua-api-extensions)) and the
+`lib/wurk.rb:383`; Pro §11 ([Pro §11 Fast Lua API extensions](../target/sidekiq-pro.md#11-fast-lua-api-extensions)) and the
 implementation map ([Pro §13 implementation mapping — Lua API](../target/sidekiq-pro.md#13-wurk-implementation-checklist-mapping)).
 
 ## Search covers queue LISTs too, with explicit scan bounds

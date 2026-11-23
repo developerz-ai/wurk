@@ -252,7 +252,8 @@ class UniqueJobsCompatTest < Wurk::Test::UnitCase
   end
 
   def test_install_without_the_gem_does_nothing
-    assert_nil Wurk::UniqueJobsCompat.install unless defined?(::SidekiqUniqueJobs::Orphans::RubyReaper)
+    assert_nil Wurk::UniqueJobsCompat.install
+    assert Object.autoload?(:SidekiqUniqueJobs), 'asking loaded the native copy'
   end
 
   private

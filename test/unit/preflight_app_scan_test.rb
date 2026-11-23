@@ -131,8 +131,17 @@ class PreflightAppScanTest < Wurk::Test::UnitCase
   end
 
   # The pins in lib/ are what test/ecosystem runs; a bump there must move them.
+  # A `-native` harness pins the gem Wurk's native copy is held to, not a plugin
+  # an app runs: sidekiq-unique-jobs-native must name the sidekiq-unique-jobs pin.
   def test_the_tested_plugin_versions_match_the_ecosystem_pins
-    pins = Dir[File.join(ECOSYSTEM, '*', 'PIN')].to_h do |path|
+    paths = Dir[File.join(ECOSYSTEM, '*', 'PIN')]
+    native, plugins = paths.partition { |path| File.basename(File.dirname(path)).end_with?('-native') }
+    native.each do |path|
+      gem = File.basename(File.dirname(path)).delete_suffix('-native')
+
+      assert_equal File.read(File.join(ECOSYSTEM, gem, 'PIN'))[/^sha: (\S+)$/, 1], File.read(path)[/^sha: (\S+)$/, 1]
+    end
+    pins = plugins.to_h do |path|
       [File.basename(File.dirname(path)), File.read(path)[/^ref: v?(\S+)$/, 1]]
     end
 

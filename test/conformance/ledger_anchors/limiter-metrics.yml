@@ -100,17 +100,17 @@
     Wurk.configuration.server_middleware.add(Wurk::Middleware::Expiry)
 
 - entry: 'An interrupted `IterableJob` run books `p` + `ms`, never `f` (#394, resolved in PR1)'
-  anchor: lib/wurk.rb#L349
+  anchor: lib/wurk.rb#L350
   fragment: |-
     Wurk.configuration.server_middleware.add(Wurk::Limiter::ServerMiddleware)
 
 - entry: 'An interrupted `IterableJob` run books `p` + `ms`, never `f` (#394, resolved in PR1)'
-  anchor: lib/wurk.rb#L365
+  anchor: lib/wurk.rb#L366
   fragment: |-
     Wurk.configuration.server_middleware.add(Wurk::Metrics::Statsd)
 
 - entry: 'An interrupted `IterableJob` run books `p` + `ms`, never `f` (#394, resolved in PR1)'
-  anchor: lib/wurk.rb#L372
+  anchor: lib/wurk.rb#L373
   fragment: |-
     Wurk.configuration.server_middleware.add(Wurk::Metrics::History)
 

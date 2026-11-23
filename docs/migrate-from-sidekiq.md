@@ -415,7 +415,7 @@ Define jobs exactly as before — `include Sidekiq::Job` (or `Sidekiq::Worker`) 
 | `pool:` | ✅ | selects the client Redis pool; stripped from the stored payload |
 | `track:` (`true` / `false`) | ➕ Wurk extra | opt into `Wurk::Status` — a `status:<jid>` row carrying state, progress, timings, result and error. Default `false`: a class that doesn't opt in writes nothing and costs nothing. Lifetime via `status_ttl` / `status_retention`. A worker that also sets `encrypt: true` records everything but the result — see [encryption](encryption.md#interactions) |
 | `collapse:` (`{ policy: :debounce, wait:, max_wait: }` / `{ policy: :throttle, slot: }`) | ➕ Wurk extra | collapse repeat enqueues of one identity: **debounce** keeps the *last* payload and fires after `wait` seconds of quiet (capped at `max_wait` from the first enqueue), **throttle** admits one per epoch-aligned `slot` and drops the rest. `perform_async` returns `nil` for every debounced push and for a dropped throttled one; an admitted throttled push returns its jid as usual. The policy is stripped from the stored payload, so a promoted or retried job is enqueued rather than judged a second time. Mutually exclusive with `unique_for:`, rejected at class definition; not available on `perform_bulk` |
-| `lock:` | ⚠️ only with the gem | **Silently ignored without `sidekiq-unique-jobs`:** every push enqueues, so duplicates run. `wurk` and `wurkswarm` log a WARN at boot naming the loaded classes, and `wurk preflight --app` lists them. Keep the gem ([§10](#10-sidekiq-7x-proenterprise-apps-keeping-the-add-on-gems)) or move each class ([§6](#sidekiq-unique-jobs--native-unique_for--unique_until)) |
+| `lock:` and the rest of sidekiq-unique-jobs' options | ✅ native, gem or not | Wurk carries sidekiq-unique-jobs 8.x on the gem's own keys: drop the gem and keep the code ([§6](#sidekiq-unique-jobs--drop-the-gem-keep-the-code)). Nothing locks until `SidekiqUniqueJobs::Middleware::Client` is in the chain, as with the gem; `wurk` and `wurkswarm` log a WARN at boot naming the loaded classes that set `lock:` without it, and `wurk preflight --app` lists them |
 
 Custom retry hooks are unchanged: `sidekiq_retry_in { |count, ex, msg| … }` and
 `sidekiq_retries_exhausted { |msg, ex| … }`. The retry backoff formula matches
@@ -425,8 +425,8 @@ Sidekiq: `count**4 + 15 + rand(10 * (count + 1))` seconds.
 
 - **Unique jobs:** enable with `Sidekiq::Enterprise.unique!`, then
   `sidekiq_options unique_for: 10.minutes, unique_until: :success` (or `:start`).
-  *(This is Enterprise's API — not the `sidekiq-unique-jobs` gem's `lock:` DSL; see
-  [§6](#6-third-party-gem-mappings) for the gem mapping.)*
+  *(This is Enterprise's API. The `sidekiq-unique-jobs` gem's `lock:` DSL is native
+  too, separately: [§6](#sidekiq-unique-jobs--drop-the-gem-keep-the-code).)*
 - **Encryption:** `Sidekiq::Enterprise::Crypto.enable(active_version: 1) { |v| key }`,
   then `sidekiq_options encrypt: true` (the last arg is encrypted).
 - **Batches:** `Sidekiq::Batch.new` with `on(:success/:complete/:death)`, nesting,
@@ -553,9 +553,34 @@ procedure:
 Outside Rails the same task is available after `require "wurk/rake_tasks"` in your
 `Rakefile`; it uses the Redis connection your client config points at.
 
-### `sidekiq-unique-jobs` → native `unique_for:` / `unique_until:`
+### `sidekiq-unique-jobs` → drop the gem, keep the code
 
-Activate Enterprise uniqueness once, then declare it per worker:
+**No code change.** Wurk ships sidekiq-unique-jobs 8.x natively, on the gem's own
+Redis keys and digest. Remove the gem from the Gemfile; the `lock:` options, the
+initializer that adds `SidekiqUniqueJobs::Middleware::Client` / `::Server`, the
+`SidekiqUniqueJobs.configure` block and calls such as
+`SidekiqUniqueJobs::Digests.new.delete_by_digest` keep working. With that gem gone
+(and `sidekiq-cron`, `sidekiq-failures`, `sentry-sidekiq` replaced the same way),
+the `sidekiq` shim gem can go too.
+
+- **No migration, no lock gap.** A lock written by a pod still on the gem is honored
+  by a pod on Wurk native, and the reverse, so the removal rolls out pod by pod
+  like any other deploy. A job either side pushed is run and unlocked by either.
+- **Nothing to unlink, before or after.** The locks are the gem's own; a rollback to
+  the gem finds them as it left them.
+- **The gem left in the bundle wins**, and the native copy stands down.
+
+`require "sidekiq_unique_jobs/web"` keeps the Locks, Expiring Locks and Changelogs tabs on
+Wurk's dashboard. What is supported, option by option, and the few gem internals left out (the
+CLI, v6 lock upgrades): [unique jobs §13](unique-jobs.md#13-migrating-from-sidekiq-unique-jobs).
+Verified against the real gem in the ecosystem job: its real-worker lock scenarios
+and boot check pass on the native copy, and a gem pod and a native pod share one
+Redis ([`test/ecosystem/sidekiq-unique-jobs-native/`](../test/ecosystem/sidekiq-unique-jobs-native/interop.rb)).
+
+#### Or move to the Enterprise API
+
+`Sidekiq::Enterprise.unique!` with `sidekiq_options unique_for:, unique_until:` is a
+separate, simpler lock ([unique jobs §1–12](unique-jobs.md)):
 
 ```ruby
 # config/initializers/wurk.rb
@@ -568,18 +593,15 @@ class ChargeJob
 end
 ```
 
-Mapping from `sidekiq-unique-jobs`:
-
-| `sidekiq-unique-jobs` | Wurk native |
+| `sidekiq-unique-jobs` | Enterprise API |
 |---|---|
 | `lock: :until_executed` | `unique_until: :success` (lock held through retries, released on success) |
 | `lock: :until_executing` | `unique_until: :start` (lock released as the job starts) |
-| `lock: :while_executing` | **No equivalent.** This lock lets every push through and stops two copies running at once. `unique_until: :start` does neither: it drops duplicate pushes and allows concurrent runs. Use a [concurrent limiter](rate-limiting.md) inside `perform`, or keep the gem |
-| `lock: :until_and_while_executing` | **No equivalent.** `unique_until: :start` covers only the enqueue half. Add a concurrent limiter for the execution half, or keep the gem |
-| `lock_ttl` | `unique_for: <seconds>`, required here (also accepts an `ActiveSupport::Duration`). The lock ends at that TTL whether or not the job has run |
+| `lock: :while_executing`, `:until_and_while_executing` | **No equivalent**: `unique_until: :start` drops duplicate pushes and allows concurrent runs. Stay on `lock:`, or add a [concurrent limiter](rate-limiting.md) inside `perform` |
+| `lock_ttl` | `unique_for: <seconds>`, required here (also accepts an `ActiveSupport::Duration`) |
 | `lock_timeout` | No equivalent: a duplicate is dropped at once, never waited on |
-| `on_conflict: :reject`, `:log` | The default: `perform_async` returns `nil` and logs. The gem's `:reject` also sends the duplicate to the dead set, which Wurk does not do |
-| `on_conflict: :reschedule`, `:raise`, `:replace` | **No equivalent.** A duplicate is dropped, so a job relying on `:reschedule` to run again later loses that run. Keep the gem, or schedule the follow-up in your own code |
+| `on_conflict: :reject`, `:log` | The default: `perform_async` returns `nil` and logs. Nothing goes to the dead set |
+| `on_conflict: :reschedule`, `:raise`, `:replace` | **No equivalent.** Stay on `lock:` |
 | `lock_args_method` / custom uniqueness args | define `self.sidekiq_unique_context(job)` on the worker, returning any JSON-serializable value |
 
 > ⚠️ Unique jobs and encryption are **mutually exclusive on the same worker** — each
@@ -587,31 +609,24 @@ Mapping from `sidekiq-unique-jobs`:
 
 #### Moving off sidekiq-unique-jobs during a cutover
 
-There is no import for sidekiq-unique-jobs, by design. Its locks live under
-`uniquejobs:*` with its own digest algorithm, Wurk's under `unique:<digest>`; they
-are disjoint, and Wurk never reads or releases the gem's locks.
+Dropping the gem for Wurk's native `lock:` copy needs nothing here: same keys, both
+directions. What follows is for classes moved to the Enterprise API.
 
-What that means if you drop the gem in the cutover:
+The two APIs keep separate locks, `uniquejobs:*` and `unique:<digest>`, and the
+Enterprise one never reads the other's.
 
-- Every class must be moved first. A class still saying `lock:` has **no uniqueness at all**
-  on Wurk: that is not one extra run but every duplicate, indefinitely. The boot WARN and
-  `wurk preflight --app` list them.
-- Jobs that were enqueued under a gem lock and are still in a queue, in `schedule` or in
-  `retry` run normally. The gem's `lock*` payload fields are inert to Wurk.
-- For a class you moved, a new enqueue takes a fresh `unique:` lock and does not see a job
-  enqueued under the gem's lock before the cutover. The race is one extra run per identity,
-  for as long as such a job is outstanding. If that is unacceptable for a class (payments,
-  outbound messages), drain its scheduled and retry entries first, or make the job idempotent
-  ([reliability](reliability.md#idempotency-is-yours)).
-- **Leftover gem locks are harmless on Wurk and harmful on the way back.** Wurk does not release
-  them, so after a rollback to the gem, `perform_async` for that identity returns `nil` and the
-  job is silently not enqueued, until the lock's TTL. Verified on stock 7.3.10 with sidekiq-unique-jobs
-  8.1.0 and a 2h `lock_ttl`. Before starting Sidekiq on a rollback:
-  `redis-cli -u "$REDIS_URL" --scan --pattern 'uniquejobs:*' | xargs -r -n 500 redis-cli -u "$REDIS_URL" UNLINK`.
-  The trade: a job already queued can then be enqueued once more.
-
-If you keep the gem instead, its locks carry over in both directions
-([§10](#10-sidekiq-7x-proenterprise-apps-keeping-the-add-on-gems)) and there is nothing to unlink.
+- A class you moved takes a fresh `unique:` lock on its next enqueue and does not see
+  a job enqueued under a `uniquejobs:` lock before the cutover. The race is one extra
+  run per identity, for as long as such a job is outstanding. If that is unacceptable
+  for a class (payments, outbound messages), drain its scheduled and retry entries
+  first, or make the job idempotent ([reliability](reliability.md#idempotency-is-yours)).
+- **Leftover `uniquejobs:` locks of a moved class are harmful on the way back.**
+  Nothing releases them, so after a rollback to the gem, `perform_async` for that
+  identity returns `nil` and the job is silently not enqueued, until the lock's TTL.
+  Verified on stock 7.3.10 with sidekiq-unique-jobs 8.1.0 and a 2h `lock_ttl`. Before
+  starting Sidekiq on a rollback, unlink them (`--scan --pattern 'uniquejobs:*'`, as in
+  [§9.5](#95-rollback) step 5). The trade: a job already queued can then
+  be enqueued once more.
 
 ### `sentry-sidekiq` → native `Wurk::Sentry`
 
@@ -672,7 +687,7 @@ What to replace before removing the shim, gem by gem:
 | `sidekiq-cron` | native `Sidekiq::Cron` ([§6](#sidekiq-cron--native-sidekiqcron-or-periodic-loops)) | none; the entries and their state stay in Redis |
 | `sentry-sidekiq` | `Wurk::Sentry` ([`docs/sentry.md`](sentry.md#coming-from-report_after_job_retries--true)) | delete `config.sidekiq.*`, add `Wurk::Sentry.install!(config)` |
 | `sidekiq-failures` | the retry and dead sets, `Sidekiq::Stats#failed` | drop `require "sidekiq/failures/web"`; `UNLINK failed` after your rollback window |
-| `sidekiq-unique-jobs` | `unique_for:` ([§6](#sidekiq-unique-jobs--native-unique_for--unique_until)) | per job class |
+| `sidekiq-unique-jobs` | native `SidekiqUniqueJobs` ([§6](#sidekiq-unique-jobs--drop-the-gem-keep-the-code)) | none; the locks stay in Redis under the gem's keys |
 | `rspec-sidekiq` | `require "wurk/rspec"` ([testing](testing.md#11-rspec-sidekiqs-matchers-require-wurkrspec)) | the require; set fake mode yourself |
 | `opentelemetry-instrumentation-sidekiq` | keep it: it declares no `sidekiq` dependency | none |
 
@@ -690,7 +705,7 @@ Keeping any of these requires the [`sidekiq` shim gem](../ecosystem/sidekiq-shim
 | Gem | Status on Wurk | Notes |
 |---|---|---|
 | `sidekiq-cron` | ✅ upstream suite, a real worker boot, and an interop run beside native `Sidekiq::Cron` in CI | [§10](#10-sidekiq-7x-proenterprise-apps-keeping-the-add-on-gems), or native [`Sidekiq::Cron`](periodic-jobs.md#sidekiq-cron-natively-sidekiqcron) / `config.periodic` |
-| `sidekiq-unique-jobs` | ✅ upstream suite (less one Toxiproxy spec file) and a real worker boot in CI | [§10](#10-sidekiq-7x-proenterprise-apps-keeping-the-add-on-gems), or native `unique_for:` |
+| `sidekiq-unique-jobs` | ✅ upstream suite (less one Toxiproxy spec file) and a real worker boot in CI; native copy preferred | drop it, keep the code ([§6](#sidekiq-unique-jobs--drop-the-gem-keep-the-code)), or keep it ([§10](#10-sidekiq-7x-proenterprise-apps-keeping-the-add-on-gems)) |
 | `sidekiq-failures` | ✅ upstream suite (less the ERB home-page test) and a real worker boot in CI | [§10](#10-sidekiq-7x-proenterprise-apps-keeping-the-add-on-gems) |
 | `sentry-sidekiq` | ✅ upstream suite and a real worker boot in CI; native preferred | [§10](#10-sidekiq-7x-proenterprise-apps-keeping-the-add-on-gems), or [`Wurk::Sentry`](sentry.md) |
 | `opentelemetry-instrumentation-sidekiq` | ⚠️ smoke-tested by hand | [§10](#10-sidekiq-7x-proenterprise-apps-keeping-the-add-on-gems), or native [telemetry](telemetry.md) |
@@ -903,7 +918,7 @@ wurk preflight --redis-url "$REDIS_URL"              # text; --json for machines
 | Timestamp shapes and `retry_for` jobs, sampled | Seconds or ms per field; what a rollback will misread |
 | In-flight `b-*` with no `callbacks` field | Batches that will fire no callback on Wurk |
 | `encrypt` payloads without a Wurk envelope | Jobs Wurk will send to the dead set unrun |
-| `uniquejobs:*` and `unique:*` counts, SHA1-length digests | Locks to carry, or that Wurk will not see |
+| `uniquejobs:*` and `unique:*` counts, SHA1-length digests | Locks to carry: `uniquejobs:*` carry to Wurk's native `lock:` as they are; SHA1-length (v6) digests are not upgraded |
 
 It prints the Redis it read (host, port, DB, never credentials): check it is the one you meant. An empty keyspace is a finding, not "clean". Exit status is `0` clean, `1` findings, `2` could not run. It samples (`--sample`, default 100 per
 queue or set) and stops at `--limit` keys (default 2M), saying so and returning 1: a truncated
@@ -1207,10 +1222,11 @@ Rolling back is the same drain in reverse, plus one check that is not optional.
    in one may sit there forever. After a clean stop the scan prints nothing; if it prints
    anything (a SIGKILLed Wurk process), move it back with the same `LMOVE` loop, with no
    worker running.
-5. **If you dropped `sidekiq-unique-jobs`, unlink its locks now.** Otherwise jobs are silently
-   not enqueued until the locks' TTL ([details](#moving-off-sidekiq-unique-jobs-during-a-cutover)):
+5. **If you moved `lock:` classes to `unique_for:`, unlink the gem's locks now.** Otherwise jobs are
+   silently not enqueued until the locks' TTL ([details](#moving-off-sidekiq-unique-jobs-during-a-cutover)):
    `redis-cli -u "$REDIS_URL" --scan --pattern 'uniquejobs:*' | xargs -r -n 500 redis-cli -u "$REDIS_URL" UNLINK`.
-   If you kept the gem, skip this: locks carried both ways in testing.
+   If you kept the gem, or dropped it for Wurk's native `lock:`, skip this: those locks are the
+   gem's own and carry both ways.
 6. **Start Sidekiq.**
 7. **Know what you will see on 7.x, and what does not carry back.**
    - Timestamps Wurk wrote read wrongly: negative latency, year-58807 dates, and `retry_for` ignored

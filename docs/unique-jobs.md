@@ -17,9 +17,10 @@ keeps working on the one-line gem swap, and the Redis key layout
 (`unique:<sha256>`) is unchanged, so locks written by Sidekiq Enterprise are
 honored by Wurk and vice versa.
 
-> **Not the `sidekiq-unique-jobs` gem.** That gem's `lock:` DSL is a different
-> API. Wurk's native surface is `unique_for:` / `unique_until:` — see
-> [§ Migrating from sidekiq-unique-jobs](#13-migrating-from-sidekiq-unique-jobs).
+> **Coming from the `sidekiq-unique-jobs` gem?** Its `lock:` DSL is a different
+> API, and Wurk ships that one natively too, on the gem's own Redis keys: drop the
+> gem from the Gemfile and change nothing else. See
+> [§13](#13-migrating-from-sidekiq-unique-jobs). §§1–12 are the Enterprise API.
 
 ---
 
@@ -400,11 +401,116 @@ end
 
 ## 13. Migrating from sidekiq-unique-jobs
 
-The gem still works against Wurk (it runs in the ecosystem CI suite), but the
-native path has no extra dependency and no separate lock store. Swap
-`Sidekiq::Enterprise.unique!` in and translate:
+**Drop the gem; change no code.** Wurk carries sidekiq-unique-jobs 8.x natively
+(`Wurk::UniqueJobs`): the `lock:` DSL, every option, the global config, the
+middleware and the classes apps call. With the gem gone from the bundle,
+`SidekiqUniqueJobs` and `require "sidekiq-unique-jobs"` / `"sidekiq_unique_jobs"`
+resolve to it, so the gem's usual initializer runs unchanged:
 
-| `sidekiq-unique-jobs` | Wurk native |
+```ruby
+# config/initializers/sidekiq.rb, exactly as written for the gem
+Sidekiq.configure_server do |config|
+  config.client_middleware { |chain| chain.add SidekiqUniqueJobs::Middleware::Client }
+  config.server_middleware { |chain| chain.add SidekiqUniqueJobs::Middleware::Server }
+  SidekiqUniqueJobs::Server.configure(config)
+end
+
+Sidekiq.configure_client do |config|
+  config.client_middleware { |chain| chain.add SidekiqUniqueJobs::Middleware::Client }
+end
+
+SidekiqUniqueJobs.configure do |config|
+  config.lock_ttl = 2.hours.to_i
+  config.reaper = :ruby
+end
+```
+
+As with the gem, nothing locks until that middleware is in the chain; a boot WARN
+(and `wurk preflight --app`) names the classes that set `lock:` when it is not.
+Load Wurk first (`require "sidekiq"`, which Bundler does): the require paths are
+Wurk's, added when it loads.
+
+### Same keys, same digest: a rolling deploy needs nothing
+
+The native copy writes and reads what the gem 8.1 writes and reads, byte for byte:
+
+- `uniquejobs:<md5>` from `"uniquejobs:" + MD5(JSON(sorted class, queue,
+  lock_args[, apartment]))` (SHA3-256 under `digest_algorithm = :modern`), and
+  `lock_digest`, `lock_args`, `lock_ttl`, `lock_timeout`, `lock_prefix` in the payload;
+- the STRING holding the jid, `:QUEUED` / `:PRIMED` lists, `:LOCKED` hash, `:INFO`,
+  `<digest>:RUN:*` for runtime locks, the `uniquejobs:digests` and
+  `uniquejobs:expiring_digests` sorted sets, `uniquejobs:changelog`, and the
+  `uniquejobs:reaper` key that elects one reaper per fleet.
+
+So a lock taken by a pod still on the gem holds against a pod on Wurk native, and
+the reverse; a job either one pushed is run and unlocked by either one. Deploy the
+gem removal like any other change. `test/ecosystem/sidekiq-unique-jobs-native/interop.rb`
+proves it on every ecosystem run: a pod running the real gem and a pod running
+the native copy share one Redis and check each other's digests, push locks,
+runs and releases, `while_executing` reschedules, `until_and_while_executing`
+runtime locks, scheduled jobs, retries and deaths.
+
+With the gem **in** the bundle, the gem owns `SidekiqUniqueJobs` and the native
+copy stands down: a native middleware left in a chain passes every job through and
+logs once that it did. Nothing is ever locked twice.
+
+### What is supported
+
+| `sidekiq-unique-jobs` | Native |
+|---|---|
+| `lock: :until_executed` (and `:until_completed`, `:until_performed`, `:until_processed`, `:until_successfully_completed`) | ✅ locked at push, unlocked after `perform` returns; kept across a failure and its retries |
+| `lock: :until_executing` (`:while_enqueued`) | ✅ unlocked just before `perform`; taken back if `perform` raises |
+| `lock: :while_executing` (`:around_perform`, `:while_busy`, `:while_working`), `:while_executing_reject` | ✅ no push lock; a runtime lock on `<digest>:RUN` around `perform` |
+| `lock: :until_and_while_executing` | ✅ the push lock, handed to a runtime lock as `perform` starts |
+| `lock: :until_expired` | ✅ held until `lock_ttl`, whatever `perform` does |
+| `config.add_lock`, `config.add_strategy` | ✅ |
+| `lock_args_method:` a Proc or a Symbol; a `lock_args` / `unique_args` class method; the same in `default_job_options` | ✅ the method sees the args after a JSON round trip. A String is ignored, as by the gem |
+| `lock_ttl:` (Integer, String, Proc, Symbol, Duration), `config.lock_ttl` | ✅ plus the wait until `at` for a scheduled job |
+| `lock_timeout:`, `config.lock_timeout` | ✅ how long a runtime lock waits for the holder; `nil` waits 1 s, as the gem does, and a wait is capped at 5 s |
+| `lock_prefix:`, `lock_limit:`, `lock_info:` | ✅ |
+| `on_conflict:` `:log`, `:reject` (to the dead set, death handlers not called), `:reschedule` (`schedule_in:`, default 5 s), `:raise` (`SidekiqUniqueJobs::Conflict`), `:replace`, and `{ client:, server: }` | ✅ |
+| `unique_across_queues:`, `unique_across_workers:`, the `apartment` field | ✅ |
+| `config.enabled`, `logger`, `logger_enabled`, `max_history`, `digest_algorithm`, `on_conflict` | ✅ |
+| `config.reaper` (`:ruby`, `:lua`, `:none`), `reaper_count`, `reaper_interval`, `reaper_timeout` | ✅ see below |
+| `SidekiqUniqueJobs::Server.configure`, its death handler, `after_unlock`, `SidekiqUniqueJobs.reflect { … }` | ✅ |
+| `Digests` / `ExpiringDigests` (`entries`, `page`, `count`, `delete_by_digest`, `delete_by_pattern`), `Locksmith`, `LockDigest`, `Lock`, `Unlockable`, `Changelog`, `Lock::Validator::DEPRECATED_KEYS`, `validate_worker` | ✅ |
+| A job deleted through the API (`Queue#clear`, `ScheduledSet#delete`, the dashboard) releases its lock | ✅ |
+| `Script::LuaError` | ✅ raised for a failed script, matched as the gem matches it |
+| `debug_lua`, `locksmith_executor`, `reaper_resurrector_*`, `raise_on_config_error` | accepted, no effect: no Lua debug log, no executor (a wait blocks on its own connection), the reaper campaigns every interval anyway |
+| `require "sidekiq_unique_jobs/web"` | ✅ the gem's Locks, Expiring Locks and Changelogs tabs on Wurk's dashboard, with their filter, paging, per-lock page and deletes |
+| `sidekiq_unique_jobs/testing`, `have_valid_sidekiq_options` | ❌ |
+| The `uniquejobs` CLI, upgrading v6 locks, the `uniquejobs:live` / `:dead` version keys | ❌ by design: nothing to upgrade from |
+
+Quirks kept on purpose, because they are the gem's and a fleet mixes the two:
+
+- `until_executed` + `on_conflict: :reschedule` pushes the duplicate again with no
+  lock; when it runs it needs the lock, so it runs only if the holder is done by
+  then, and is dropped otherwise.
+- `on_conflict: :reject` is reported by the gem's validator as wrong for the client
+  side, and still sends the duplicate to the dead set there.
+- A job whose lock went to another jid while it waited does not run.
+
+### Differences that change nothing in Redis
+
+- **Lua that names every key it touches.** The gem's `:replace` script reads
+  `uniquejobs:digests` without declaring it, which Dragonfly and a strict Redis
+  refuse with `Script::LuaError`; the native scripts (`lib/wurk/lua/unique_jobs_*.lua`)
+  declare every key. The gem's version-upgrade scripts are not carried at all.
+- **The reaper is bounded.** It reads every queue, private list, schedule, retry set
+  and running job once per run, twice to catch a job moving between two reads,
+  instead of once per digest. It counts a dead worker's private list as live (the
+  gem cannot see those). At most `reaper_count` digests per run, stopping at
+  `reaper_timeout`; skipped when the queues hold more than 1,000 jobs, as the gem
+  skips it. One process runs it, the one holding `uniquejobs:reaper`, gem or native.
+- **A runtime lock's wait blocks its own connection**, not a thread pool's.
+
+### And the Enterprise API
+
+`lock:` and `unique_for:` are separate locks with separate keys (`uniquejobs:*`
+and `unique:*`). Moving a class from one to the other is an ordinary change, not a
+migration step:
+
+| `sidekiq-unique-jobs` | Wurk Enterprise API |
 |---|---|
 | `lock: :until_executed` | `unique_until: :success` (held through retries, released on success) |
 | `lock: :until_executing` / `:while_executing` | `unique_until: :start` (released just before `perform`) |
@@ -412,9 +518,7 @@ native path has no extra dependency and no separate lock store. Swap
 | `lock_args_method` / custom uniqueness args | `def self.sidekiq_unique_context(job)` on the worker |
 | other `lock:` modes (`:until_and_while_executing`, `:until_expired`, …) | no equivalent — only `:success` and `:start` exist |
 
-Run one deploy with both disabled to drain in-flight locks, or accept that the
-gem's old lock keys (a different namespace) simply expire on their own — Wurk
-never reads them. See [§6 of the migration guide](migrate-from-sidekiq.md#6-third-party-gem-mappings)
+See [§6 of the migration guide](migrate-from-sidekiq.md#6-third-party-gem-mappings)
 for the surrounding gem-by-gem mapping.
 
 ---
@@ -439,7 +543,8 @@ for the surrounding gem-by-gem mapping.
   duplicate becomes enqueueable.
 - Custom `sidekiq_unique_context` requires the worker class to be **loaded** in
   the enqueuing process, or the default triple is used instead.
-- No dashboard surface for locks. Use `Unique.locked?` or `redis-cli`.
+- No dashboard surface for `unique_for:` locks. Use `Unique.locked?` or `redis-cli`.
+  (`lock:` locks have one: `require "sidekiq_unique_jobs/web"`, §13.)
 
 ---
 

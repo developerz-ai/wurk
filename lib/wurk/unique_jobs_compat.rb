@@ -4,10 +4,18 @@ require_relative 'keys'
 require_relative 'unique_jobs_compat/private_list_digests'
 
 module Wurk
-  # Two corrections to sidekiq-unique-jobs, applied when a server boots with the
-  # gem loaded. The gem cannot see what only the reliable fetcher knows.
+  # sidekiq-unique-jobs, either way: Wurk's native copy of it (Wurk::UniqueJobs,
+  # answering to `SidekiqUniqueJobs` when the gem is not in the bundle), and two
+  # corrections to the gem itself, applied when a server boots with the gem
+  # loaded. The gem cannot see what only the reliable fetcher knows.
   module UniqueJobsCompat
+    GEM = 'sidekiq-unique-jobs'
     RUN_SUFFIX = ':RUN'
+    # Holds `sidekiq_unique_jobs.rb`, `sidekiq-unique-jobs.rb` and the gem's
+    # other entry points, so an app's `require` of them loads the native copy.
+    REQUIRE_PATH = File.expand_path('unique_jobs/require', __dir__)
+    # The client middleware of either copy, by name, so neither is loaded to ask.
+    CLIENT_MIDDLEWARE = %w[SidekiqUniqueJobs::Middleware::Client Wurk::UniqueJobs::Middleware::Client].freeze
     OOM = /\AOOM\b|\bout of memory\b/i
     VERSION_KEY = 'uniquejobs:live'
 
@@ -53,7 +61,40 @@ module Wurk
     end
 
     class << self
+      # The gem in the bundle (or already loaded) owns `SidekiqUniqueJobs` and its
+      # require paths; without it the native copy takes both. The path goes last
+      # on $LOAD_PATH, so it never shadows a gem installed later.
+      # Returns which copy owns the name: :gem or :native.
+      def activate_native
+        LazyLoader.register(Wurk, UniqueJobs: 'unique_jobs') unless Wurk.const_defined?(:UniqueJobs, false)
+        return :gem if gem_present?
+
+        ::Object.autoload(:SidekiqUniqueJobs, File.expand_path('unique_jobs/sidekiq_unique_jobs', __dir__))
+        $LOAD_PATH.push(REQUIRE_PATH) unless $LOAD_PATH.include?(REQUIRE_PATH)
+        :native
+      end
+
+      def gem_present?
+        return true if ::Gem.loaded_specs.key?(GEM)
+
+        defined?(::SidekiqUniqueJobs) == 'constant' && ::Object.autoload?(:SidekiqUniqueJobs).nil? &&
+          !(defined?(::Wurk::UniqueJobs) && ::SidekiqUniqueJobs.equal?(::Wurk::UniqueJobs))
+      end
+
+      # Whether a chain runs either copy's client middleware.
+      def client_middleware?(chain) = chain.any? { |entry| CLIENT_MIDDLEWARE.include?(entry.klass.name) }
+
+      # The Locksmith of whichever copy is live: the gem's when it is loaded, else
+      # the native one. nil when the gem is in the bundle but not yet required.
+      def locksmith_class
+        return ::Wurk::UniqueJobs::Locksmith unless gem_present?
+
+        ::SidekiqUniqueJobs::Locksmith if defined?(::SidekiqUniqueJobs::Locksmith)
+      end
+
       def install
+        # Asked first: `defined?(::SidekiqUniqueJobs::…)` would load the native copy.
+        return unless gem_present?
         return unless defined?(::SidekiqUniqueJobs::Orphans::RubyReaper) && defined?(::SidekiqUniqueJobs::UpdateVersion)
 
         guard_reaper(::SidekiqUniqueJobs::Orphans::RubyReaper)
@@ -80,7 +121,7 @@ module Wurk
       end
 
       def gem_version
-        defined?(::SidekiqUniqueJobs::VERSION) ? ::SidekiqUniqueJobs::VERSION : 'unknown'
+        gem_present? && defined?(::SidekiqUniqueJobs::VERSION) ? ::SidekiqUniqueJobs::VERSION : 'unknown'
       end
     end
   end

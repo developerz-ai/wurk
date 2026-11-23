@@ -1,0 +1,10 @@
+# frozen_string_literal: true
+
+# The "old pod": the real sidekiq-unique-jobs at the pinned checkout, on wurk.
+
+source 'https://rubygems.org'
+
+wurk_root = File.expand_path('../../../..', __dir__)
+gem 'sidekiq', path: File.join(wurk_root, 'ecosystem/sidekiq-shim')
+gem 'sidekiq-unique-jobs', path: ENV.fetch('ECOSYSTEM_CHECKOUT')
+gem 'wurk', path: wurk_root
