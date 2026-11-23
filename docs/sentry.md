@@ -356,6 +356,39 @@ an explicit `install!`, which is the same opt-in shape as
 | starts a Sentry transaction (Performance) | scope only; see [`docs/metrics.md`](metrics.md) |
 | job `args` included in the event context | never included |
 
+### Coming from `report_after_job_retries = true`
+
+That setting is the default here, so it has no counterpart: Wurk defines no
+`config.sidekiq` on Sentry's configuration, and the line raises `NoMethodError`
+once `sentry-sidekiq` is gone. Delete it rather than shim it. What it promised,
+and what usually sits beside it, maps like this:
+
+| With `sentry-sidekiq` | With `Wurk::Sentry.install!(config)` |
+|---|---|
+| `config.sidekiq.report_after_job_retries = true`: one event, on the last attempt | the default: one event, on the last attempt (`retry: false` / `0`: the first) |
+| a hand-written death handler for jobs `sidekiq_retry_in` kills (`:kill`) early, because the gem never reported them ([sentry-ruby#1556](https://github.com/getsentry/sentry-ruby/issues/1556)) | built in: `Wurk::Sentry::DeathHandler` reports an early `:kill` or `:discard` once, tagged `wurk_context: dead`, and skips a death the last attempt already reported. Delete the hand-written one, or it reports a second time |
+| `config.excluded_exceptions += %w[Sidekiq::Shutdown]` | still valid (`Sidekiq::Shutdown` is `Wurk::Shutdown`), and `install!` adds the retry machinery's own signals in the server process. Keep it for the web process, or use `+= Wurk::Sentry.excluded_exceptions` |
+| `Sentry.configure_scope` inside `perform` | lands on the event: the middleware captures inside the job's scope |
+
+The change in a Rails app:
+
+```diff
+ # config/initializers/sentry.rb
+ Sentry.init do |config|
+-  config.sidekiq.report_after_job_retries = true
+   config.excluded_exceptions += %w[Sidekiq::Shutdown]
+ end
+
+ # config/initializers/wurk.rb (server processes)
++require "wurk/sentry"
++Wurk.configure_server { |config| Wurk::Sentry.install!(config) }
+-Sidekiq.configure_server { |config| config.death_handlers << MySentryDeathHandler.new }
+```
+
+`test/unit/sentry_report_after_retries_test.rb` pins the table's first two
+rows through the real retry path: a `retry: 2` job reports on its third attempt
+only, an early `:kill` or `:discard` reports once, a shutdown never.
+
 **Expect your issue volume to drop.** `report_after_job_retries` defaults to
 `false` in `sentry-sidekiq`, so a stock setup reports all 25 attempts of a
 failing job; Wurk reports one. Combined with the transport-noise filter, a
