@@ -49,6 +49,10 @@ group :test do
   # (#618). Cap json at 2.x for that leg only; json 2.x still runs on 4.0.
   gem 'json', '< 3' if rails_version.to_s.start_with?('7.1')
   gem 'sqlite3'
+  # The matchers in lib/wurk/rspec.rb run on rspec-expectations and rspec-mocks;
+  # an app that requires them already has both. Never a gemspec dependency.
+  gem 'rspec-expectations', require: false
+  gem 'rspec-mocks', require: false
   # Exercises Wurk::IterableJob::CsvEnumerator. Not a runtime dep — the gem
   # only touches CSV when the host has loaded it (`defined?(::CSV)` guard).
   gem 'csv'

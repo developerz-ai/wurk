@@ -19,7 +19,7 @@ require_relative '../boot_check_support'
 module Interop
   WURK_ROOT = File.expand_path('../../..', __dir__)
   QUEUE = 'interop'
-  # Every distinct schedule shape Treasury's production file uses, plus names,
+  # Every distinct schedule shape one adopter's production file uses, plus names,
   # aliases and a zone with DST.
   CRONS = [
     '*/5 * * * * America/Caracas', '0 6 * * * America/Caracas', '5-55/10 * * * * America/Caracas',
