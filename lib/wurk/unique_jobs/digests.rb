@@ -107,6 +107,11 @@ module Wurk
         UniqueJobs.redis { |conn| Script.call(:unique_jobs_delete_by_digest, conn, keys: keys) }
       end
 
+      # A page of locks, with each row's info and locked count read in one pipeline.
+      def page(...)
+        super.tap { |(_size, _cursor, locks)| Lock.preload(locks) }
+      end
+
       private
 
       def digest_keys(digest)

@@ -13,4 +13,5 @@
 
 ### Fixed
 
+- **sidekiq-unique-jobs, native: the Locks tabs delete only by POST, and only a listed digest.** A GET to a delete route, from a read-only dashboard or another site's link, no longer drops locks, and `/locks/queue:default/delete` no longer unlinks an app key. Pages are capped at 1,000 rows and read in one pipeline; the reaper skips a run above 100,000 scheduled plus retrying jobs; `SortedEntry#delete` / `ScheduledSet#delete` return the set's result; `wurk preflight --app` no longer tells you to UNLINK `uniquejobs:*` when dropping the gem ([unique jobs §13](../unique-jobs.md#13-migrating-from-sidekiq-unique-jobs)).
 - `bin/dummy-bundle` (run by `bin/setup`) no longer exits 1 under `pipefail` when Bundler has no `path` configured.

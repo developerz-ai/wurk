@@ -7,8 +7,11 @@ module Wurk
   module UniqueJobs
     # The gem's Locks, Expiring Locks and Changelogs tabs, on Wurk's dashboard
     # through its extension renderer: `require "sidekiq_unique_jobs/web"`, as
-    # with the gem. Same routes, same pages. The views are the gem's, MIT
-    # licensed (Copyright (c) 2017 Mikael Henriksson), with every value escaped.
+    # with the gem. The gem's routes and pages, except that every delete is a
+    # POST, not a GET: the dashboard's read-only mode and same-origin check
+    # guard POSTs, and a GET could be fired from a link or an image on any
+    # site. The views are the gem's, MIT licensed (Copyright (c) 2017 Mikael
+    # Henriksson), with every value escaped.
     module Web
       VIEWS = File.expand_path('web/views', __dir__)
       TABS = ['Locks', 'Expiring Locks', 'Changelogs'].freeze
@@ -35,7 +38,7 @@ module Wurk
           erb(unique_template(:changelogs))
         end
 
-        app.get('/changelogs/delete_all') do
+        app.post('/changelogs/delete_all') do
           changelog.clear
           redirect "#{root_path}changelogs"
         end
@@ -57,12 +60,12 @@ module Wurk
       end
 
       def self.delete_routes(app)
-        app.get('/locks/delete_all') do
+        app.post('/locks/delete_all') do
           delete_all_locks
           redirect "#{root_path}locks"
         end
 
-        app.get('/locks/:digest/delete') do
+        app.post('/locks/:digest/delete') do
           delete_lock(route_params(:digest))
           redirect "#{root_path}locks"
         end
@@ -74,22 +77,30 @@ module Wurk
           erb(unique_template(:lock))
         end
 
-        app.get('/locks/:digest/jobs/:job_id/delete') do
+        app.post('/locks/:digest/jobs/:job_id/delete') do
           @lock = Lock.new(route_params(:digest))
-          @lock.unlock(route_params(:job_id))
+          @lock.unlock(route_params(:job_id)) if known_digest?(@lock.key.digest)
           redirect "#{root_path}locks/#{@lock.key}"
         end
       end
 
       module Helpers
         SAFE_CPARAMS = %w[filter count cursor prev_cursor poll direction].freeze
+        # The gem takes any page size; a row is two reads, so a page is capped.
+        MAX_PAGE_SIZE = 1_000
 
         def delete_all_locks
           digests.delete_by_pattern('*', count: digests.count)
           expiring_digests.delete_by_pattern('*', count: expiring_digests.count)
         end
 
+        # A URL segment names the key the delete unlinks, so only a digest the
+        # tabs list is deleted: never `queue:default` or another app key.
+        def known_digest?(digest) = !(digests.score(digest) || expiring_digests.score(digest)).nil?
+
         def delete_lock(digest)
+          return unless known_digest?(digest)
+
           digests.delete_by_digest(digest)
           expiring_digests.delete_by_digest(digest)
         end
@@ -104,6 +115,7 @@ module Wurk
           @filter = '*' if @filter.empty?
           @count = (url_params('count') || 100).to_i
           @count = 100 unless @count.positive?
+          @count = [@count, MAX_PAGE_SIZE].min
           @current_cursor = url_params('cursor').to_i
           @prev_cursor = url_params('prev_cursor').to_i
         end

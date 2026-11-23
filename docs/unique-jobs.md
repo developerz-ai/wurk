@@ -477,7 +477,7 @@ logs once that it did. Nothing is ever locked twice.
 | A job deleted through the API (`Queue#clear`, `ScheduledSet#delete`, the dashboard) releases its lock | ✅ |
 | `Script::LuaError` | ✅ raised for a failed script, matched as the gem matches it |
 | `debug_lua`, `locksmith_executor`, `reaper_resurrector_*`, `raise_on_config_error` | accepted, no effect: no Lua debug log, no executor (a wait blocks on its own connection), the reaper campaigns every interval anyway |
-| `require "sidekiq_unique_jobs/web"` | ✅ the gem's Locks, Expiring Locks and Changelogs tabs on Wurk's dashboard, with their filter, paging, per-lock page and deletes |
+| `require "sidekiq_unique_jobs/web"` | ✅ the gem's Locks, Expiring Locks and Changelogs tabs on Wurk's dashboard, with their filter, paging, per-lock page and deletes (deletes are POSTs, see below) |
 | `sidekiq_unique_jobs/testing`, `have_valid_sidekiq_options` | ❌ |
 | The `uniquejobs` CLI, upgrading v6 locks, the `uniquejobs:live` / `:dead` version keys | ❌ by design: nothing to upgrade from |
 
@@ -501,8 +501,22 @@ Quirks kept on purpose, because they are the gem's and a fleet mixes the two:
   instead of once per digest. It counts a dead worker's private list as live (the
   gem cannot see those). At most `reaper_count` digests per run, stopping at
   `reaper_timeout`; skipped when the queues hold more than 1,000 jobs, as the gem
-  skips it. One process runs it, the one holding `uniquejobs:reaper`, gem or native.
+  skips it (and above a schedule and retry bound, below). One process runs it, the one holding `uniquejobs:reaper`, gem or native.
 - **A runtime lock's wait blocks its own connection**, not a thread pool's.
+- **The dashboard tabs delete only by POST**, and only a digest they list. The gem's
+  deletes are GETs, which pass the dashboard's read-only mode and can be fired by a
+  link or an image on another site; and its delete unlinks whatever key the URL
+  names. A page shows at most 1,000 locks, each row's info and count read in one
+  pipeline for the page.
+- **`SortedEntry#delete` and `ScheduledSet#delete` return what the set's delete
+  returned**, so a delete that lost a race says so. The gem returns the entry.
+- **The reaper also skips a run when the schedule and retry sets hold more than
+  100,000 jobs between them.** It reads both whole, twice, to know a lock is free;
+  above that it leaves every lock to its TTL rather than block on the read.
+
+`on_conflict: :replace` walks the queue, the schedule and the retry set inside one
+script to find the job to replace, 50 entries at a time, as the gem's does. Redis
+waits for it, so on a long queue prefer `:reject` or `:reschedule`.
 
 ### And the Enterprise API
 

@@ -37,7 +37,7 @@
         <tbody>
           <tr class="lock-row">
             <td>
-              <form action="<%= root_path %>locks/<%= h lock.key %>/delete" method="get">
+              <form action="<%= root_path %>locks/<%= h lock.key %>/delete" method="post">
                 <%= csrf_tag %>
                 <input name="lock" value="<%= h lock.key %>" type="hidden" />
                 <input class="btn btn-danger btn-xs" type="submit" name="delete" value="<%= t('Delete') %>" data-confirm="<%= t('AreYouSure') %>" />
@@ -53,7 +53,8 @@
       <% end %>
     </table>
 
-    <form action="<%= root_path %>locks/delete_all" method="get">
+    <form action="<%= root_path %>locks/delete_all" method="post">
+      <%= csrf_tag %>
       <input class="btn btn-danger btn-xs" type="submit" name="delete_all" value="<%= t('DeleteAll') %>" data-confirm="<%= t('AreYouSure') %>" />
     </form>
   </div>

@@ -67,7 +67,7 @@
           <td><%= h job_id %></td>
           <td><%= _safe_relative_time(time.to_f) %></td>
           <td>
-            <form action="<%= root_path %>locks/<%= h @lock.key %>/jobs/<%= h job_id %>/delete" method="get">
+            <form action="<%= root_path %>locks/<%= h @lock.key %>/jobs/<%= h job_id %>/delete" method="post">
               <%= csrf_tag %>
               <input class="btn btn-danger btn-xs flip" type="submit" name="delete" value="<%= t('Unlock') %>" data-confirm="<%= t('AreYouSure') %>" />
             </form>
@@ -103,7 +103,7 @@
     <% end %>
   </div>
 </div>
-<form action="<%= root_path %>locks/<%= h @lock.key %>/delete" method="get">
+<form action="<%= root_path %>locks/<%= h @lock.key %>/delete" method="post">
   <%= csrf_tag %>
   <a class="btn btn-default btn-xs" href="<%= root_path %>locks"><%= t('GoBack') %></a>
   <input class="btn btn-danger btn-xs flip" type="submit" name="delete" value="<%= t('Delete') %>" data-confirm="<%= t('AreYouSure') %>" />

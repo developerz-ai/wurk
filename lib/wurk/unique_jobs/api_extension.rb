@@ -20,10 +20,13 @@ module Wurk
         nil
       end
 
+      # Each delete returns what the set's own delete returned, so a caller is
+      # told when a concurrent delete got there first. The gem returns the entry.
       module SortedEntry
         def delete
-          APIExtension.release(item) if super
-          item
+          deleted = super
+          APIExtension.release(item) if deleted
+          deleted
         end
 
         private
@@ -39,8 +42,9 @@ module Wurk
       module ScheduledSet
         def delete(score, job_id)
           entry = find_job(job_id)
-          APIExtension.release(entry.item) if super && entry
-          entry
+          deleted = super
+          APIExtension.release(entry.item) if deleted && entry
+          deleted
         end
       end
 
