@@ -50,7 +50,9 @@ group :test do
   gem 'json', '< 3' if rails_version.to_s.start_with?('7.1')
   gem 'sqlite3'
   # The matchers in lib/wurk/rspec.rb run on rspec-expectations and rspec-mocks;
-  # an app that requires them already has both. Never a gemspec dependency.
+  # an app that requires them already has both, and rspec-core runs one real
+  # spec in RSpecMatchersTest. Never a gemspec dependency.
+  gem 'rspec-core', require: false
   gem 'rspec-expectations', require: false
   gem 'rspec-mocks', require: false
   # Exercises Wurk::IterableJob::CsvEnumerator. Not a runtime dep — the gem

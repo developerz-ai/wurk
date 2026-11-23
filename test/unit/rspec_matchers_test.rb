@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require_relative '../test_helper'
+require 'open3'
+require 'rbconfig'
 require 'wurk/rspec'
 
 # `require "wurk/rspec"`: rspec-sidekiq 5.x's have_enqueued_sidekiq_job and
@@ -74,7 +76,9 @@ class RSpecMatchersTest < Wurk::Test::UnitCase
     MailJob.perform_at(at, 3)
 
     expect(MailJob).to have_enqueued_sidekiq_job(1).on('mail').immediately
-    expect(MailJob).to have_enqueued_sidekiq_job(2).on(:bulk).in(300)
+    # Whole seconds on both sides: a second boundary between the push and the
+    # matcher would fail `.in(300)`, so the exact form is shown with `.at`.
+    expect(MailJob).to have_enqueued_sidekiq_job(2).on(:bulk).in(be_within(2).of(Time.now + 300))
     expect(MailJob).to have_enqueued_sidekiq_job(3).at(at)
     expect(MailJob).to have_enqueued_sidekiq_job(3).at(be_within(5).of(at))
     expect(MailJob).not_to have_enqueued_sidekiq_job(2).immediately
@@ -101,7 +105,7 @@ class RSpecMatchersTest < Wurk::Test::UnitCase
     expect { MailJob.perform_async(3) }.not_to enqueue_sidekiq_job(MailJob).with(1)
     expect { OtherJob.perform_async }.not_to enqueue_sidekiq_job(MailJob)
     expect { OtherJob.perform_async }.to enqueue_sidekiq_job
-    expect { MailJob.perform_in(60, 4) }.to enqueue_sidekiq_job(MailJob).with(4).in(60)
+    expect { MailJob.perform_in(60, 4) }.to enqueue_sidekiq_job(MailJob).with(4).in(be_within(2).of(Time.now + 60))
   end
 
   def test_negation_says_how_many_matched
@@ -124,6 +128,29 @@ class RSpecMatchersTest < Wurk::Test::UnitCase
     error = assert_raises(ArgumentError) { expect(Sidekiq::Worker).to have_enqueued_sidekiq_job }
 
     assert_match(/use have_enqueued_job/, error.message)
+  end
+
+  # What an app gets from the require alone, in a real RSpec run.
+  def test_the_require_includes_the_matchers_in_every_example_group
+    spec = <<~RUBY
+      require 'rspec/core'
+      require 'wurk/rspec'
+      Sidekiq::Testing.fake!
+      class RequireOnlyJob; include Sidekiq::Job; end
+      RSpec.describe('a spec with no include') do
+        it('sees both matchers') do
+          expect { RequireOnlyJob.perform_async(1) }.to enqueue_sidekiq_job(RequireOnlyJob).with(1)
+          expect(RequireOnlyJob).to have_enqueued_sidekiq_job(1)
+        end
+      end
+      exit RSpec::Core::Runner.run([])
+    RUBY
+    out, err, status = Open3.capture3({ 'BUNDLE_GEMFILE' => File.expand_path('../../Gemfile', __dir__) },
+                                      RbConfig.ruby, '-rbundler/setup', '-I', File.expand_path('../../lib', __dir__),
+                                      '-e', spec)
+
+    assert_predicate status, :success?, "#{out}\n#{err}"
+    assert_match(/1 example, 0 failures/, out)
   end
 
   def test_composes_and_describes
