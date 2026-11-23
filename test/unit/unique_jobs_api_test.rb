@@ -414,7 +414,9 @@ class UniqueJobsApiTest < Wurk::Test::UnitCase
     out = StringIO.new
     UJ.logger = Logger.new(out)
     manager = UJ::Orphans::Manager
+    original = manager.method(:tick)
     manager.instance_variable_set(:@stop, false)
+    manager.instance_variable_set(:@wake, Thread::Queue.new)
     manager.define_singleton_method(:tick) do
       instance_variable_set(:@stop, true)
       raise RedisClient::CannotConnectError, 'down'
@@ -423,7 +425,7 @@ class UniqueJobsApiTest < Wurk::Test::UnitCase
 
     assert_match(/uniquejobs reaper: RedisClient::CannotConnectError: down/, out.string)
   ensure
-    manager.singleton_class.send(:remove_method, :tick)
+    manager.define_singleton_method(:tick, original)
   end
 
   # With the gem loaded instead, a native middleware does nothing and says so once.

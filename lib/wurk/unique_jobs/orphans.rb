@@ -188,6 +188,7 @@ module Wurk
 
             @stop = false
             @owner = false
+            @wake = ::Thread::Queue.new
             @thread = ::Thread.new { run }
             @thread.name = 'wurk-unique-jobs-reaper'
             @thread
@@ -197,9 +198,10 @@ module Wurk
             return unless @thread
 
             @stop = true
-            @thread.wakeup if @thread.alive?
+            @wake << :stop
             @thread.join(5)
             UniqueJobs.redis { |conn| conn.call('DEL', UNIQUE_REAPER) } if @owner
+            @owner = false
             @thread = nil
           end
 
@@ -223,7 +225,8 @@ module Wurk
               rescue StandardError => e
                 UniqueJobs.logger.warn("uniquejobs reaper: #{e.class}: #{e.message}")
               end
-              sleep(interval) unless @stop
+              # A queue, not `sleep`: a stop that lands before the wait still ends it.
+              @wake.pop(timeout: interval) unless @stop
             end
           end
 

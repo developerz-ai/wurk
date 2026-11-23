@@ -32,10 +32,7 @@ module Wurk
       def initialize(job_hash = {})
         @type = job_hash[LOCK]&.to_sym
         @job = UniqueJobs.safe_constantize(job_hash[CLASS])
-        @limit = job_hash.fetch(LOCK_LIMIT, 1)&.to_i
-        @timeout = job_hash.fetch(LOCK_TIMEOUT, 0)&.to_i
-        @ttl = job_hash.fetch(LOCK_TTL) { job_hash.fetch(LOCK_EXPIRATION, nil) }.to_i
-        @pttl = ttl * 1_000
+        read_timing(job_hash)
         @lock_info = job_hash.fetch(LOCK_INFO) { UniqueJobs.config.lock_info }
         @on_conflict = job_hash.fetch(ON_CONFLICT) { UniqueJobs.config.on_conflict }
         @errors = job_hash.fetch('errors') { {} }
@@ -58,6 +55,13 @@ module Wurk
       def on_server_conflict = @on_server_conflict ||= conflict_for('server')
 
       private
+
+      def read_timing(job_hash)
+        @limit = job_hash.fetch(LOCK_LIMIT, 1)&.to_i
+        @timeout = job_hash.fetch(LOCK_TIMEOUT, 0)&.to_i
+        @ttl = job_hash.fetch(LOCK_TTL) { job_hash.fetch(LOCK_EXPIRATION, nil) }.to_i
+        @pttl = ttl * 1_000
+      end
 
       def conflict_for(origin)
         return on_conflict unless on_conflict.is_a?(::Hash)
