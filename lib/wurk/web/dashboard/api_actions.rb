@@ -246,8 +246,7 @@ module Wurk
         end
 
         def cron
-          now = ::Time.now.to_i
-          render json: ::Wurk::Cron::LoopSet.new.map { |lp| ::Wurk::Api::Serializers.cron_row(lp, now) }
+          render json: ::Wurk::Web::Enterprise::Periodic.rows
         end
 
         def pause_cron   = render_cron_action(::Wurk::Web::Enterprise::Periodic.pause(params[:lid].to_s))

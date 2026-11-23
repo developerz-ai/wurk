@@ -18,6 +18,11 @@ Each `<gem>/` subdirectory is a thin harness — no vendored gem source:
   something no production code can observe. Says why at the top.
 - `boot_check.rb` — the gem loaded into the real executables, asserting it did its
   job. A suite can stay green without a Launcher ever booting.
+- `interop.rb` — optional, where wurk ships a native equivalent: the real gem and
+  wurk's own code against one Redis, as a fleet mid-rollout runs them. sidekiq-cron's
+  drives `native_peer.rb` in wurk's own bundle (no gem) and checks shared state, the
+  same fire slot as fugit, one push per occurrence, and that wurk stands down when
+  the gem is bundled.
 
 `bin/test-ecosystem` clones each pin into `.checkouts/` (gitignored, cached),
 checks out the SHA, and runs the gem's own `rake test` under the overlay

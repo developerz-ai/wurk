@@ -62,6 +62,7 @@ class SidekiqRequireShimsTest < Wurk::Test::UnitCase
   # must fail completeness until its isolated require probe is registered here.
   OTHER_PATHS = %w[
     sidekiq
+    sidekiq-cron
     sidekiq-pro
     sidekiq-ent
     sidekiq-ent/periodic/testing
@@ -69,6 +70,8 @@ class SidekiqRequireShimsTest < Wurk::Test::UnitCase
     sidekiq/api
     sidekiq/cli
     sidekiq/client
+    sidekiq/cron
+    sidekiq/cron/web
     sidekiq/job
     sidekiq/job_retry
     sidekiq/launcher
@@ -149,6 +152,9 @@ class SidekiqRequireShimsTest < Wurk::Test::UnitCase
   EXPECTED = SUPPORTED.merge(
     'sidekiq/api' => 'Sidekiq::WorkSet',
     'sidekiq/cli' => 'Sidekiq::CLI',
+    'sidekiq-cron' => 'Wurk::SidekiqCron::Poller',
+    'sidekiq/cron' => 'Wurk::SidekiqCron::Job',
+    'sidekiq/cron/web' => 'Wurk::SidekiqCron::WebRows',
     'sidekiq/middleware/i18n' => 'Sidekiq::Middleware::I18n::Client',
     'sidekiq/middleware/current_attributes' => 'Sidekiq::CurrentAttributes::Save',
     'sidekiq/middleware/server/statsd' => 'Sidekiq::Middleware::Server::Statsd',

@@ -66,7 +66,7 @@ Swarm (parent; forks, supervises) → Launcher (per worker process) → Manager 
 
 User-facing code (mount, controllers, views, generators, assets) lives in the engine. Non-user-facing (swarm, fetcher, processor, client, middleware) lives in plain Ruby under `lib/`. **Standalone mode must run without loading the engine.**
 
-Sidekiq aliases — every `Wurk::*` class with an upstream Sidekiq counterpart is exposed under its `Sidekiq::*` name (`Sidekiq::Worker`, `Sidekiq::Batch`, `Sidekiq.configure_server`, `Sidekiq::Limiter`, …; `lib/wurk/compat.rb` is the list). The alias is the drop-in contract. Never break it. Deliberately not aliased: `Sidekiq::Cron` and `Sidekiq::Status`, namespaces third-party gems own (#204). Wurk-only extras and internals (`Wurk::API`, `Wurk::Swarm`, `Wurk::Topology`) get no alias unless nothing else claims the name; check before adding one.
+Sidekiq aliases — every `Wurk::*` class with an upstream Sidekiq counterpart is exposed under its `Sidekiq::*` name (`Sidekiq::Worker`, `Sidekiq::Batch`, `Sidekiq.configure_server`, `Sidekiq::Limiter`, …; `lib/wurk/compat.rb` is the list). The alias is the drop-in contract. Never break it. Deliberately not aliased: `Sidekiq::Cron` and `Sidekiq::Status`, namespaces third-party gems own (#204); `Sidekiq::Cron` is the native `Wurk::SidekiqCron` only while the sidekiq-cron gem is not bundled. Wurk-only extras and internals (`Wurk::API`, `Wurk::Swarm`, `Wurk::Topology`) get no alias unless nothing else claims the name; check before adding one.
 
 ## Boot ordering (do not reorder)
 

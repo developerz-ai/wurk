@@ -15,9 +15,11 @@ leader ticks once a minute, and exactly one process in the cluster enqueues.
 The Sidekiq Enterprise names are aliases of the same objects:
 `Sidekiq::Periodic` → `Wurk::Cron`, `Sidekiq::Periodic::LoopSet`,
 `Sidekiq::Periodic::ConfigTester`, `Sidekiq::Periodic.fire!`, and
-`Sidekiq::CronParser` → `Wurk::Cron::Parser`. There is deliberately **no
-`Sidekiq::Cron`** constant — that namespace belongs to the third-party
-`sidekiq-cron` gem, and squatting it breaks the gem when it runs alongside Wurk.
+`Sidekiq::CronParser` → `Wurk::Cron::Parser`. `Sidekiq::Cron` is **not** an
+alias of these: that namespace belongs to the `sidekiq-cron` gem. When the gem is
+bundled Wurk leaves it alone; when it is not, `Sidekiq::Cron` is Wurk's native
+sidekiq-cron ([below](#sidekiq-cron-natively-sidekiqcron)), so an app can drop
+the gem and keep its `Sidekiq::Cron::Job` code and its Redis state.
 
 ---
 
@@ -370,16 +372,85 @@ file to require; `ConfigTester` ships loaded with the rest of `Wurk::Cron`.
 
 ---
 
+## sidekiq-cron, natively (`Sidekiq::Cron`)
+
+An app that used the `sidekiq-cron` gem can remove it from the `Gemfile` and keep
+everything else: `Sidekiq::Cron::Job.load_from_hash!`, the schedule YAML, the
+`Sidekiq::Cron.configure` initializer, `require "sidekiq/cron/web"`, and the
+entries already in Redis, with their enabled/disabled state. No import, no data
+migration. `Sidekiq::Cron` is `Wurk::SidekiqCron`, autoloaded on first use (or by
+`require "sidekiq/cron"` / `require "sidekiq-cron"`).
+
+**How it is built.** A store of its own, in the gem's keyspace, not a layer over
+the loops above. A loop is keyed by a hash of its schedule, class and options
+(its `lid`); a sidekiq-cron entry is keyed by its **name**, and the gem's pods
+read only their own keys. Mapping one onto the other would mean a second copy of
+the enable/disable state and a translation while old and new pods overlap, so
+the native code reads and writes exactly what sidekiq-cron 2.3/2.4 does, and the
+two stores share only the crontab parser and the cluster leader:
+
+| Key | Type | Holds |
+|---|---|---|
+| `cron_jobs:<namespace>` | SET | the entries' hash keys |
+| `cron_job:<namespace>:<name>` | HASH | the gem's 16 `to_hash` fields, `status` (`enabled`/`disabled`) and `last_enqueue_time` among them |
+| `cron_job:<namespace>:<name>:enqueued` | ZSET | one member per fired occurrence (ISO-8601 UTC), trimmed to 24 h |
+| `cron_job:<namespace>:<name>:jid_history` | LIST | `{jid, enqueued}`, newest first, `cron_history_size` long |
+
+**State is keyed by name.** Only `#enable!` / `#disable!` (or a `status` key in
+the data you load) change `status`. Editing an entry's `cron`, `class`, `queue`
+or `args` keeps a hand-disabled entry disabled. `load_from_hash!` deletes the
+`source: schedule` entries the hash no longer names, as the gem does; an entry
+created at runtime (`source: dynamic`) is kept.
+
+**Exactly once.** The poller runs in every process and only the cluster leader's
+ticks do anything (`dear-leader`, like the loops). The guarantee is the gem's
+own: before pushing, a poller `ZADD`s the occurrence to the entry's `:enqueued`
+set, and only the one that added it pushes. The native code adds the same
+member the gem does, so during a rollout where old pods run the gem's poller
+and new pods run this one, each occurrence is still pushed once.
+`test/ecosystem/sidekiq-cron/interop.rb` runs the real gem and the native code
+against one Redis in CI: status set through either is seen by the other, both
+compute the same occurrence for every schedule shape tested (zones with and
+without DST, both 2026 US clock changes), and both pollers ticking through one
+minute push one job.
+
+**The gem wins when both are present.** With `sidekiq-cron` in the bundle, Wurk
+registers no `Sidekiq::Cron` autoload, its `sidekiq/cron*` files load the gem's,
+and the Launcher starts no native poller (asserted by the same interop run).
+
+| sidekiq-cron 2.x | Native |
+|---|---|
+| `Job.load_from_hash(!)`, `load_from_array(!)`, `.all`, `.count`, `.find`, `.exists?`, `.create`, `.destroy`, `.destroy_all!`, `.destroy_removed_jobs` | same |
+| `#enable!`, `#disable!`, `#enabled?`, `#disabled?`, `#status`, `#save`, `#destroy`, `#valid?`, `#errors`, `#enqueue!`, `#to_hash`, `#jid_history_from_redis`, `#last_enqueue_time` | same |
+| `Sidekiq::Cron.configure`: `cron_poll_interval`, `cron_history_size`, `reschedule_grace_period`, `default_namespace`, `available_namespaces` (incl. `:auto`), `cron_schedule_file`, `enabled` | same meaning; `cron_poll_interval = 0` starts no poller |
+| `natural_cron_parsing_mode`, `cron_poll_process_count` | accepted and validated, no effect (no natural language; only the leader polls) |
+| `cron`: 5 fields or `@alias`, trailing IANA zone, month/day names | same |
+| `cron` with no zone | the process's local zone (`ENV['TZ']`, else the system's), as fugit; not UTC |
+| `cron`: seconds field, natural language (`every day at 5pm`), `L`/`#`, offset zones | not supported: a validation error, returned by `load_from_hash!` and never fired |
+| `queue`, `retry`, `args`, `active_job`, `queue_name_prefix`/`_delimiter`, `date_as_argument`, `symbolize_args`, GlobalID args, `description`, `namespace` | same |
+| `reschedule_grace_period` (default 60) | same: the newest occurrence fires if it is at most that late |
+| `config/schedule.yml` loaded on `:startup` | same, server processes only |
+| pre-namespace `cron_jobs` SET | migrated to the default namespace when the poller starts, as the gem does |
+| Web tab (`require "sidekiq/cron/web"`) | the dashboard's **Cron** page lists the entries beside the loops, with the name under the class: pause/unpause is `disable!`/`enable!`, plus enqueue-now and history |
+| `human_cron` (cronex) | returns the `cron` string |
+
+Compared against fugit: the schedule shapes listed in `interop.rb`, at both 2026
+US clock changes. A fixed-time entry inside a repeated or skipped DST hour, in a
+shape that list does not hold, has not been.
+
+---
+
 ## Migrating
 
 ### From `sidekiq-cron`
 
-`rake wurk:import:cron` reads sidekiq-cron's schedule from Redis and registers the same loops natively (dry run by default; `APPLY=1` writes). See the migration guide's cutover section.
-
-Drop `config/schedule.yml` and the gem; move each entry into a
-`config.periodic` block. There is no `Sidekiq::Cron::Job` shim by design — real
-Sidekiq never defined that constant, so faking it would break the drop-in
-contract and collide with the gem itself.
+Two routes. Dropping the gem and keeping its code runs on the native
+`Sidekiq::Cron` above, with no data to move. Porting the entries to
+`config.periodic` loops is the other: `rake wurk:import:cron` reads
+sidekiq-cron's schedule from Redis and registers the same loops (dry run by
+default; `APPLY=1` writes). See the migration guide's cutover section. Do not
+run both for the same entries: a loop and a sidekiq-cron entry are different
+keys, so both fire.
 
 | `sidekiq-cron` | Wurk |
 |---|---|
