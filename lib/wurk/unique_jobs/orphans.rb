@@ -18,6 +18,9 @@ module Wurk
         BEAT_PAUSE = 10
         # Above this many queued jobs the run is skipped, as the gem skips it.
         MAX_QUEUE_LENGTH = 1_000
+        # Above this many scheduled plus retrying jobs the run is skipped too: the
+        # orphan scan reads both sets whole, twice. The gem has no such bound.
+        MAX_SORTED_SET_SIZE = 100_000
         PAGE = 1_000
         FIELDS = [LOCK_DIGEST, UNIQUE_DIGEST].freeze
 
@@ -31,7 +34,7 @@ module Wurk
 
         # The digests deleted, expired first.
         def call
-          return 0 if queues_very_full?
+          return 0 if queues_very_full? || sorted_sets_very_full?
 
           BatchDelete.call(expired_digests) + BatchDelete.call(orphans)
         end
@@ -78,6 +81,13 @@ module Wurk
         end
 
         def timed_out? = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) >= @deadline
+
+        def sorted_sets_very_full?
+          sizes = UniqueJobs.redis do |conn|
+            conn.pipelined { |pipe| [Keys::SCHEDULE, Keys::RETRY].each { |set| pipe.call('ZCARD', set) } }
+          end
+          sizes.sum > MAX_SORTED_SET_SIZE
+        end
 
         def queues_very_full?
           total = 0

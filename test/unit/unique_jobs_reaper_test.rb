@@ -122,6 +122,28 @@ class UniqueJobsReaperTest < Wurk::Test::UnitCase
     assert_equal 0, reap
   end
 
+  # A schedule and retry set past the bound: skipped too, rather than read
+  # whole twice. The bound is lowered here, not filled to 100k.
+  def test_skips_the_run_when_the_schedule_and_retry_sets_are_very_full
+    reaper = Wurk::UniqueJobs::Orphans::Reaper
+    bound = reaper::MAX_SORTED_SET_SIZE
+    reaper.send(:remove_const, :MAX_SORTED_SET_SIZE)
+    reaper.const_set(:MAX_SORTED_SET_SIZE, 3)
+    lock('uniquejobs:orphan')
+    Wurk.redis do |c|
+      2.times { |i| c.call('ZADD', 'schedule', i, payload("uniquejobs:s#{i}")) }
+      2.times { |i| c.call('ZADD', 'retry', i, payload("uniquejobs:r#{i}")) }
+    end
+
+    assert_equal 0, reap
+    Wurk.redis { |c| c.call('ZREM', 'retry', c.call('ZRANGE', 'retry', 0, 0).first) }
+
+    assert_equal 1, reap
+  ensure
+    reaper.send(:remove_const, :MAX_SORTED_SET_SIZE)
+    reaper.const_set(:MAX_SORTED_SET_SIZE, bound)
+  end
+
   # One reaper per fleet: the key the gem's reaper holds, so a gem pod and a
   # native pod never both reap.
   def test_one_process_holds_the_reaper_key

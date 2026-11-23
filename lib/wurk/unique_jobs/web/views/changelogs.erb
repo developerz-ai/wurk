@@ -23,7 +23,8 @@
 
 <% if @changelogs.any? %>
   <div class="table_container">
-    <form action="<%= root_path %>changelogs/delete_all" method="get">
+    <form action="<%= root_path %>changelogs/delete_all" method="post">
+      <%= csrf_tag %>
       <input class="btn btn-danger btn-xs" type="submit" name="delete_all" value="<%= t('DeleteAll') %>" data-confirm="<%= t('AreYouSure') %>" />
     </form>
     <br/>
@@ -53,7 +54,8 @@
       </tbody>
     </table>
 
-    <form action="<%= root_path %>changelogs/delete_all" method="get">
+    <form action="<%= root_path %>changelogs/delete_all" method="post">
+      <%= csrf_tag %>
       <input class="btn btn-danger btn-xs" type="submit" name="delete_all" value="<%= t('DeleteAll') %>" data-confirm="<%= t('AreYouSure') %>" />
     </form>
   </div>

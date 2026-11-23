@@ -205,6 +205,24 @@ class UniqueJobsApiTest < Wurk::Test::UnitCase
     refute free.call('record'), 'the lock just taken again must hold'
   end
 
+  # A delete that loses a race reports it, as the set's own delete does, and
+  # leaves the lock to whoever removed the job.
+  def test_api_extension_deletes_return_what_the_set_returned
+    set_class = Class.new(Wurk::ScheduledSet) { prepend UJ::APIExtension::ScheduledSet }
+    entry_class = Class.new(Wurk::SortedEntry) { prepend UJ::APIExtension::SortedEntry }
+    job = lock!(Jobs::Plain, 'raced')
+    raw = Wurk.dump_json(job)
+    Wurk.redis { |c| c.call('ZADD', 'schedule', 20, raw) }
+    entry = entry_class.new(set_class.new, 20, raw)
+
+    assert entry.delete
+    refute entry.delete, 'a second delete of the same entry claimed it deleted something'
+    Wurk.redis { |c| c.call('ZADD', 'schedule', 21, raw) }
+
+    assert set_class.new.delete(21, job['jid'])
+    refute set_class.new.delete(21, job['jid'])
+  end
+
   def test_api_extension_ignores_jobs_without_locks_and_unreadable_members
     assert_nil UJ::APIExtension.release('class' => 'X', 'args' => [])
     assert_nil UJ::APIExtension.release('not a hash')

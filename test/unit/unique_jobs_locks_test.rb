@@ -73,6 +73,12 @@ class UniqueJobsLocksTest < Wurk::Test::UnitCase
       end
     end
 
+    class Limited
+      include Wurk::Job
+
+      sidekiq_options lock: :until_executed, lock_limit: 2, on_conflict: :log
+    end
+
     class Split
       include Wurk::Job
 
@@ -136,6 +142,27 @@ class UniqueJobsLocksTest < Wurk::Test::UnitCase
   def scheduled = Wurk::ScheduledSet.new
 
   # ---- until_executed ---------------------------------------------------
+
+  # `lock_limit: 2`: two holders of one digest at once, the third refused until
+  # one of them finishes, and each unlock frees only its own slot.
+  def test_lock_limit_admits_that_many_holders_of_one_digest
+    first = push(Jobs::Limited, 'acct-1')
+    second = push(Jobs::Limited, 'acct-1')
+
+    assert first
+    assert second
+    assert_nil push(Jobs::Limited, 'acct-1'), 'a third holder got past lock_limit: 2'
+    digest = queued(Jobs::Limited).first['lock_digest']
+
+    assert_equal [first, second].sort, locked_jids(digest).sort
+    assert perform(queued(Jobs::Limited).first)
+    assert_equal [second], locked_jids(digest)
+    third = push(Jobs::Limited, 'acct-1')
+
+    assert third, 'the freed slot was not reused'
+    assert_equal [second, third].sort, locked_jids(digest).sort
+    assert_nil push(Jobs::Limited, 'acct-1')
+  end
 
   def test_until_executed_reject_refuses_the_same_lock_args_and_buries_the_duplicate
     first = push(Jobs::Submit, 42, 'order-a')

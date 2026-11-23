@@ -40,11 +40,13 @@ class UniqueJobsWebTest < Wurk::Test::UnitCase
     job
   end
 
-  def get(path, query = '')
-    env = { 'REQUEST_METHOD' => 'GET', 'QUERY_STRING' => query, 'rack.input' => StringIO.new,
+  def get(path, query = '', method: 'GET')
+    env = { 'REQUEST_METHOD' => method, 'QUERY_STRING' => query, 'rack.input' => StringIO.new,
             'rack.url_scheme' => 'http', 'HTTP_HOST' => 'example.org' }
-    Wurk::Web::Extension::Renderer.call(name: @name, method: 'GET', subpath: path, env: env, mount: '/wurk')
+    Wurk::Web::Extension::Renderer.call(name: @name, method: method, subpath: path, env: env, mount: '/wurk')
   end
+
+  def post(path) = get(path, method: 'POST')
 
   def body(response) = Array(response[2]).join
 
@@ -76,18 +78,69 @@ class UniqueJobsWebTest < Wurk::Test::UnitCase
   def test_deleting_a_lock_a_jid_and_everything
     one = lock!(1)
     two = lock!(2)
-    status, headers, = get("/locks/#{one['lock_digest']}/jobs/#{one['jid']}/delete")
+    status, headers, = post("/locks/#{one['lock_digest']}/jobs/#{one['jid']}/delete")
 
     assert_includes [302, 303], status
     assert_match(%r{locks/uniquejobs:}, headers['Location'] || headers['location'])
     assert_empty UJ::Lock.new(one['lock_digest']).locked_jids
-    get("/locks/#{two['lock_digest']}/delete")
+    post("/locks/#{two['lock_digest']}/delete")
 
     assert_nil UJ::Digests.new.score(two['lock_digest'])
     lock!(3)
-    get('/locks/delete_all')
+    post('/locks/delete_all')
 
     assert_equal 0, UJ::Digests.new.count
+  end
+
+  # A GET deletes nothing: the dashboard's read-only mode and same-origin
+  # check guard POSTs, and a GET can come from a link or an image anywhere.
+  def test_every_delete_is_a_post_and_a_get_deletes_nothing
+    job = lock!(1)
+    paths = ["/locks/#{job['lock_digest']}/jobs/#{job['jid']}/delete", "/locks/#{job['lock_digest']}/delete",
+             '/locks/delete_all', '/changelogs/delete_all']
+
+    # GET /locks/delete_all is the lock page of a digest named delete_all.
+    paths.each { |path| refute_includes [302, 303], get(path)[0], "GET #{path} acted" }
+    assert_equal [job['jid']], UJ::Lock.new(job['lock_digest']).locked_jids
+    assert_equal 1, UJ::Digests.new.count
+    refute_empty UJ::Changelog.new.entries
+    body(get('/locks')).scan(/<form action="[^"]*delete[^"]*" method="(\w+)"/).flatten.each do |verb|
+      assert_equal 'post', verb
+    end
+    assert_includes body(get("/locks/#{job['lock_digest']}")), 'method="post"'
+  end
+
+  # The digest is a URL segment and the key the delete unlinks, so a key the
+  # tabs do not list is left alone.
+  def test_a_delete_of_a_key_that_is_no_lock_leaves_it
+    Wurk.redis do |c|
+      c.call('LPUSH', 'queue:unique-web', '{}')
+      c.call('HSET', 'queue:unique-web:LOCKED', 'jid', '1')
+    end
+    post('/locks/queue:unique-web/delete')
+    post('/locks/queue:unique-web/jobs/jid/delete')
+
+    assert_equal(1, Wurk.redis { |c| c.call('LLEN', 'queue:unique-web') })
+    assert_equal(1, Wurk.redis { |c| c.call('HLEN', 'queue:unique-web:LOCKED') })
+  ensure
+    Wurk.redis { |c| c.call('DEL', 'queue:unique-web', 'queue:unique-web:LOCKED') }
+  end
+
+  # One page reads each row's info and locked count in one round trip, and the
+  # page size is capped.
+  def test_a_page_of_locks_is_read_in_one_pipeline_and_capped
+    3.times { |i| lock!(i) }
+    _size, _cursor, locks = UJ::Digests.new.page(page_size: 10)
+    # Gone from Redis after the page read: what the rows show came with the page.
+    Wurk.redis { |c| locks.each { |lock| c.call('DEL', lock.key.info, lock.key.locked) } }
+
+    assert_equal 3, locks.size
+    assert_equal(['until_executed'] * 3, locks.map { |lock| lock.info['type'] })
+    assert_equal([1, 1, 1], locks.map { |lock| lock.locked.count })
+    host = HelperHost.new('count' => '1000000')
+    host.page_params
+
+    assert_equal 1_000, host.instance_variable_get(:@count)
   end
 
   def test_expiring_locks_and_changelogs
@@ -95,8 +148,13 @@ class UniqueJobsWebTest < Wurk::Test::UnitCase
     lock!(1)
 
     assert_includes body(get('/expiring_locks')), 'uniquejobs:soon'
+    Wurk.redis { |c| c.call('SET', 'uniquejobs:soon', 'jid') }
+    post('/locks/uniquejobs:soon/delete')
+
+    assert_nil UJ::ExpiringDigests.new.score('uniquejobs:soon'), 'an expiring-only digest was not deletable'
+    assert_equal(0, Wurk.redis { |c| c.call('EXISTS', 'uniquejobs:soon') })
     assert_includes body(get('/changelogs')), 'queue_and_lock.lua'
-    get('/changelogs/delete_all')
+    post('/changelogs/delete_all')
 
     refute_includes body(get('/changelogs')), 'queue_and_lock.lua'
   end

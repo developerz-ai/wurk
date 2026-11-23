@@ -174,8 +174,9 @@ module Wurk
         end
         return unless counts['gem_locks'].positive?
 
-        @report.info('gem_locks', "#{counts['gem_locks']} sidekiq-unique-jobs lock(s). Keep the gem and they carry " \
-                                  'over. Drop it and they stay held: UNLINK `uniquejobs:*` before any rollback.')
+        @report.info('gem_locks', "#{counts['gem_locks']} sidekiq-unique-jobs lock(s). They carry over whether " \
+                                  "you keep the gem or drop it: Wurk's native copy reads and releases the same " \
+                                  '`uniquejobs:*` keys. Do not UNLINK them.')
       end
 
       def add_ons(specs)

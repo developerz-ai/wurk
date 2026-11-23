@@ -13,6 +13,28 @@ module Wurk
         @created_at = time unless time.zero?
       end
 
+      # The Locks page's two reads per row (the info and the locked count), for
+      # a whole page in one round trip.
+      def self.preload(locks)
+        return locks if locks.empty?
+
+        replies = UniqueJobs.redis do |conn|
+          conn.pipelined do |pipe|
+            locks.each do |lock|
+              pipe.call('GET', lock.key.info)
+              pipe.call('HLEN', lock.key.locked)
+            end
+          end
+        end
+        locks.zip(replies.each_slice(2)) { |lock, (info, count)| lock.preloaded(info, count) }
+        locks
+      end
+
+      def preloaded(raw_info, locked_count)
+        @info = LockInfo.new(key.info).preloaded(raw_info)
+        @locked = LockedJids.new(key.locked, count: locked_count)
+      end
+
       def created_at = @created_at ||= changelogs.first&.fetch('time', nil)
       def all_jids = (queued_jids + primed_jids + locked_jids).uniq
       def queued_jids = UniqueJobs.redis { |conn| conn.call('LRANGE', key.queued, 0, -1) }
@@ -56,8 +78,13 @@ module Wurk
         def value
           return @value if defined?(@value)
 
-          raw = UniqueJobs.redis { |conn| conn.call('GET', @key) }
+          preloaded(UniqueJobs.redis { |conn| conn.call('GET', @key) })
+          @value
+        end
+
+        def preloaded(raw)
           @value = raw.nil? || raw.empty? ? nil : Wurk.load_json(raw)
+          self
         end
 
         def none? = value.nil? || value.empty?
@@ -67,11 +94,12 @@ module Wurk
 
       # `<digest>:LOCKED`, as the dashboard counts it.
       class LockedJids
-        def initialize(key)
+        def initialize(key, count: nil)
           @key = key
+          @count = count
         end
 
-        def count = UniqueJobs.redis { |conn| conn.call('HLEN', @key) }
+        def count = @count || UniqueJobs.redis { |conn| conn.call('HLEN', @key) }
       end
 
       # One lock type: the client side (`#lock`) and the server side (`#execute`).
