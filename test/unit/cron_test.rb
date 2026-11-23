@@ -1132,12 +1132,15 @@ class CronTest < Wurk::Test::UnitCase
     assert_same Wurk::Cron, Sidekiq::Periodic
   end
 
-  # #204: `Sidekiq::Cron` belongs to the third-party sidekiq-cron gem — real
-  # Sidekiq never defines it. Wurk must leave the namespace free so the gem's
-  # own classes (Poller, Job) can load against wurk without colliding.
-  def test_sidekiq_cron_namespace_left_free_for_the_ecosystem_gem
-    refute Sidekiq.const_defined?(:Cron, false),
-           'Sidekiq::Cron must stay undefined — it is sidekiq-cron the gem, not Sidekiq surface'
+  # #204: `Sidekiq::Cron` belongs to the sidekiq-cron gem — real Sidekiq never
+  # defines it, and it is not the periodic loops. Without the gem it is wurk's
+  # native sidekiq-cron (SidekiqCronTest); with it, wurk leaves it alone
+  # (CompatAliasesTest, test/ecosystem/sidekiq-cron/interop.rb).
+  def test_sidekiq_cron_is_not_the_periodic_loops
+    cron = Sidekiq::Cron
+
+    refute_same Wurk::Cron, cron
+    assert_same Wurk::SidekiqCron, cron
   end
 
   def test_constants_match_spec_keys

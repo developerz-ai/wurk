@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require_relative '../test_helper'
+require 'open3'
+require 'rbconfig'
 
 # Verifies the Sidekiq::* drop-in surface. Every constant and module function
 # listed in docs/target/sidekiq-free.md §3 must resolve. Third-party gems
@@ -145,11 +147,35 @@ class CompatAliasesTest < Wurk::Test::UnitCase
     assert_same Wurk::Context, Sidekiq::Context
   end
 
-  def test_cron_namespace_not_squatted
-    # #204: Sidekiq::Cron is the sidekiq-cron gem's namespace, not Sidekiq
-    # surface — aliasing it broke the gem's load. Periodic is the real alias.
-    refute Sidekiq.const_defined?(:Cron, false)
+  # #204: Sidekiq::Cron is the sidekiq-cron gem's namespace, not Sidekiq
+  # surface — aliasing it broke the gem's load. Without the gem it autoloads
+  # wurk's native sidekiq-cron; Periodic stays the Ent alias.
+  def test_cron_namespace_is_the_native_sidekiq_cron_without_the_gem
     assert_same Wurk::Cron, Sidekiq::Periodic
+    if defined?(Wurk::SidekiqCron)
+      assert_nil Sidekiq.autoload?(:Cron)
+    else
+      assert_equal File.expand_path('../../lib/sidekiq/cron.rb', __dir__), Sidekiq.autoload?(:Cron)
+    end
+    cron = Sidekiq::Cron
+
+    assert_same Wurk::SidekiqCron, cron
+  end
+
+  # With the gem bundled, `require "sidekiq"` must not so much as name
+  # Sidekiq::Cron: the gem's `module Cron` would trigger the autoload.
+  def test_cron_namespace_left_to_the_gem_when_it_is_bundled
+    script = <<~RUBY
+      Gem.loaded_specs['sidekiq-cron'] = Gem::Specification.new { |s| s.name = 'sidekiq-cron'; s.version = '2.4.0' }
+      require 'sidekiq'
+      print [Sidekiq.const_defined?(:Cron, false), defined?(Wurk::SidekiqCron).inspect].inspect
+    RUBY
+    out, err, status = Open3.capture3({ 'BUNDLE_GEMFILE' => File.expand_path('../../Gemfile', __dir__) },
+                                      RbConfig.ruby, '-rbundler/setup', '-I', File.expand_path('../../lib', __dir__),
+                                      '-e', script)
+
+    assert_predicate status, :success?, err
+    assert_equal '[false, "nil"]', out
   end
 
   # Same rule as Sidekiq::Cron, and for a namespace that bites harder: the
