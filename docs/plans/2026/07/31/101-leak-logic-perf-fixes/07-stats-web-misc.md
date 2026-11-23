@@ -21,7 +21,7 @@
 5. **S9 — `WORK_STATE.set` outside its begin/ensure** (`processor.rb:243-253`): async raise between set and begin pins the payload in `SharedWorkState` and inflates `busy` on every heartbeat forever. One-line: move the `set` inside `begin`.
 6. **S10 — `Web::Config#rack_app` memo keyed only on middlewares, ignores `inner`** (`web/config.rb:200-209`): two callers pass different inners (`rack_app.rb:33` vs `config.rb:298`) → whichever builds first wins, other dispatches into the wrong app. Fix: key memo on `[inner, middlewares]` (one memo per inner).
 7. **S11 — `PoisonPill.on_poison` append-only registry** (`lib/wurk/fetcher/poison_pill.rb:140-168`): Rails reloader re-registration accumulates duplicate closures. Fix: idempotent registration (dedupe by callable identity) or document + provide `reset!`-style deregistration for the reloader path.
-8. **S13 — `StreamConcurrencyGuard` counter can't self-heal** (`lib/wurk/web/dashboard/stream_concurrency_guard.rb:18-24,44-52`; self-heal at :46): hard-reaped Puma thread skips `ensure` → permanent 503 after 10 leaks. Fix: registry of `{token → monotonic timestamp}`; acquire evicts entries older than `STREAM_MAX_DURATION` (120 s, `sse_streaming.rb`) before counting.
+8. **S13 — complete.** `StreamConcurrencyGuard` tracks holder threads and evicts dead holders on the next acquire (`lib/wurk/web/dashboard/stream_concurrency_guard.rb:18-24,42-50`), so a hard-reaped thread cannot permanently consume a slot.
 
 ## Tests
 
@@ -29,11 +29,11 @@
 - Unit: rate-limited job rescheduled N times → zero `|f` entries in `j|` hashes.
 - Unit: `Stats::History` with TZ=Pacific/Auckland at a UTC/local date boundary → today bucket matches writer key.
 - Unit: `rack_app` called with two inners → each dispatches to its own app.
-- Unit: stream guard with leaked (never-released) slots older than max duration → new acquires succeed.
+- Unit: stream guard with never-released slots held by dead threads → new acquires succeed.
 - Commands: `bin/rake test`, `bin/rake test:parity`.
 
 ## Done when
 
 - Poison-pill kill requires 3 reclaims *without an intervening success*; death handlers decision recorded.
 - Failure charts unaffected by limiter reschedules; TZ test green.
-- Both web-layer state bugs fixed; coverage holds.
+- Web config memoization fixed and stream guard self-healing retained; coverage holds.

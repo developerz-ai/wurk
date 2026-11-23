@@ -7,7 +7,7 @@
 - `app/controllers/wurk/api_controller.rb:11-14` (includes the guard), `app/controllers/concerns/wurk/same_origin_guard.rb:16-29` — CSRF skipped with the shared same-origin guard on all mutating endpoints after #948.
 - `app/controllers/concerns/wurk/same_origin_guard.rb:16-29` (`verify_same_origin!` at :27), `lib/wurk/web/same_origin.rb:25-30` — reference the same-origin check; #948 moved it out of ExtensionsController into the shared concern.
 - `lib/wurk.rb:129-137` + `lib/wurk/capsule.rb:95-99` — web layer rides the worker-sized pool.
-- `app/controllers/wurk/api_controller.rb:30-37`, `app/controllers/concerns/wurk/sse_streaming.rb:21-41` — SSE holds a Puma thread 600s/client, no stream cap; #948 moved the stream logic into the concern.
+- `app/controllers/wurk/api_controller.rb:30-37`, `app/controllers/concerns/wurk/sse_streaming.rb:21-41` — SSE holds a Puma thread up to 30s/client (`lib/wurk/web/dashboard/api_actions.rb:24`); `lib/wurk/web/dashboard/stream_concurrency_guard.rb:34-50` already caps streams per process, configurable or derived from server threads.
 - `lib/wurk/web/search.rb:67-90` — unbounded full-LIST scans per keystroke.
 - `lib/wurk/web/enterprise.rb:85` (raw `HGETALL lmtr:*`), `lib/wurk/web/dashboard/profile_actions.rb:76-79` (raw `HGET` profile data) — key access reached through the web layer; #948 moved it out of the controllers.
 - `lib/wurk/engine.rb:48-57` — asset mount bypasses authorization middleware.
@@ -15,9 +15,9 @@
 
 ## Steps
 
-1. **CSRF.** Add `before_action :verify_same_origin!` to `ApiController` for all non-GET actions — same `Sec-Fetch-Site` check as the shared concern (`app/controllers/concerns/wurk/same_origin_guard.rb:27`, check in `lib/wurk/web/same_origin.rb:28`); #948 has already extracted it. Standalone Rack path already enforces (`lib/wurk/web/rack_app.rb:38-46`) — engine path must match. One-line-class fix, highest security priority.
+1. **CSRF.** Check engine and standalone Rack behavior match for safe and unsafe methods, including Fetch Metadata and Origin/Referer fallback. `ApiController` already includes the shared guard (`app/controllers/concerns/wurk/same_origin_guard.rb:16-28`); the standalone path uses the same check (`lib/wurk/web/rack_app.rb:54-58`, `lib/wurk/web/same_origin.rb:25-37`).
 2. **Web pool.** Give the web/API/SSE layer its own pool: `Configuration#web_redis_pool` (lazy, size configurable, default 5, `pool_timeout` 1.0) and route `Wurk.redis` calls made from web context through it — cleanest: web entry points (ApiController, rack_app, SSE tick, Search) set `Thread.current[:wurk_capsule]`-equivalent to a web capsule/pool handle; `Wurk.redis` already reads a thread-local (`lib/wurk.rb:136`). Dashboard load can no longer exhaust the worker pool (and vice versa).
-3. **SSE limits.** Cap concurrent streams (global counter, default 10; 503 + `retry:` header beyond), and lower `STREAM_MAX_DURATION` 600s → 120s (client auto-reconnects transparently; frontend already falls back to polling). Keep per-tick connection release (already correct).
+3. **SSE limits.** The duration is already capped at 30s, below the planned 120s. Retain per-tick connection release and verify the existing per-process cap returns 503 with `Retry-After` when full and the client reconnects or falls back to polling.
 4. **Search bounds.** `Search#search_queues` (`web/search.rb:67-90`): cap total scanned elements per queue (e.g. 5_000) and per-request scan budget; return `truncated: true` in the payload so the UI can say "showing partial results". Never full-walk a multi-million LIST from a keystroke.
 5. **Layer reach-through.** Move raw `HGETALL lmtr:*` (`lib/wurk/web/enterprise.rb:85`) and `HGET` profile data (`lib/wurk/web/dashboard/profile_actions.rb:76-79`) behind the existing inspector objects (`Wurk::Limiter` API / profile model) — the web layer stops hardcoding key schema.
 6. **Asset auth note.** `AssetMount` on the host stack (`engine.rb:48-57`) serves the bundle unauthenticated. Assets are non-sensitive by design — document that decision in the engine comment + README security section rather than moving the mount (perf: static serving without engine middleware is deliberate). If maintainer wants gating: move behind the engine stack instead.
@@ -32,9 +32,9 @@
 
 ## Tests
 
-- Request specs (engine layer, `test/` engine suite boots `test/dummy/`): non-GET without `Sec-Fetch-Site: same-origin` → 403; with → 2xx. All mutating routes covered by a route-table-driven test.
+- Request specs for engine and standalone Rack: cross-origin unsafe requests → 403; same-origin requests pass the guard, including Origin/Referer fallback when Fetch Metadata is absent. Cover all mutating routes with a route-table-driven test.
 - Web pool isolation: saturate web pool in test → worker pool checkout still succeeds.
-- SSE: 11th concurrent stream → 503; stream closes at cap duration.
+- SSE: a stream beyond the configured cap → 503; stream closes at cap duration.
 - Search: seeded 10k-job queue with zero matches → bounded round-trips (assert via command counter middleware), `truncated` flag set.
 - Commands: `bin/rake test`.
 
