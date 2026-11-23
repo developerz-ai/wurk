@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative '../test_helper'
+require 'active_support/duration'
 
 # Wurk::UniqueJobs.refresh_lock! on real Redis: a job pushed through the real
 # client chain, run through the real server chain, renewing its own lock from
@@ -42,6 +43,21 @@ class UniqueJobsRefreshTest < Wurk::Test::UnitCase
       include Wurk::Job
 
       sidekiq_options lock: :until_executed
+    end
+
+    class Limited
+      include Wurk::Job
+
+      sidekiq_options lock: :until_executed, lock_limit: 2, lock_ttl: 60
+    end
+
+    # A type registered with `config.add_lock`: held from push until perform returns.
+    class CustomLock < Wurk::UniqueJobs::Lock::UntilExecuted; end
+
+    class Custom
+      include Wurk::Job
+
+      sidekiq_options lock: :custom_refresh, lock_ttl: 60
     end
   end
 
@@ -157,6 +173,48 @@ class UniqueJobsRefreshTest < Wurk::Test::UnitCase
     perform(job) do |worker|
       assert refresh!(worker)
       assert_equal(-1, pttl("#{job['lock_digest']}:LOCKED"))
+    end
+  end
+
+  def test_a_duration_ttl_is_seconds
+    push(Jobs::Submit, 'acct-1')
+    job = queued(Jobs::Submit).first
+
+    perform(job) do |worker|
+      assert refresh!(worker, ttl: ActiveSupport::Duration.minutes(15))
+      assert_ttl_near 900_000, "#{job['lock_digest']}:LOCKED"
+    end
+  end
+
+  # `lock_limit: 2` keeps both holders in one LOCKED hash: either may renew it,
+  # and the renewal is the whole hash's.
+  def test_with_a_lock_limit_each_holder_renews_the_shared_hash
+    push(Jobs::Limited, 'acct-1')
+    push(Jobs::Limited, 'acct-1')
+    first, second = queued(Jobs::Limited)
+    locked = "#{first['lock_digest']}:LOCKED"
+    shorten(locked)
+
+    assert refresh!(second, ttl: 300)
+    assert_ttl_near 300_000, locked
+    assert refresh!(first, ttl: 600)
+    assert_ttl_near 600_000, locked
+    refute refresh!(first.merge('jid' => 'third-jid'), ttl: 900)
+    assert_equal [first['jid'], second['jid']].sort, locked_jids(first['lock_digest']).sort
+  end
+
+  def test_a_type_added_with_add_lock_renews_its_own_digest
+    Wurk::UniqueJobs.config.add_lock(:custom_refresh, Jobs::CustomLock)
+    push(Jobs::Custom, 'acct-1')
+    job = queued(Jobs::Custom).first
+    digest = job['lock_digest']
+
+    refute digest.end_with?(':RUN')
+    perform(job) do |worker|
+      shorten("#{digest}:LOCKED")
+
+      assert refresh!(worker)
+      assert_ttl_near 60_000, "#{digest}:LOCKED"
     end
   end
 
