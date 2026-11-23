@@ -21,7 +21,13 @@ module Wurk
 
       def self.registered(app)
         app.helpers Helpers
+        changelog_routes(app)
+        list_routes(app)
+        delete_routes(app)
+        lock_routes(app)
+      end
 
+      def self.changelog_routes(app)
         app.get('/changelogs') do
           page_params
           @total_size, @next_cursor, @changelogs = changelog.page(cursor: @current_cursor, pattern: @filter,
@@ -33,7 +39,9 @@ module Wurk
           changelog.clear
           redirect "#{root_path}changelogs"
         end
+      end
 
+      def self.list_routes(app)
         app.get('/locks') do
           page_params
           @total_size, @next_cursor, @locks = digests.page(cursor: @current_cursor, pattern: @filter, page_size: @count)
@@ -46,22 +54,24 @@ module Wurk
                                                                     page_size: @count)
           erb(unique_template(:locks))
         end
+      end
 
+      def self.delete_routes(app)
         app.get('/locks/delete_all') do
-          digests.delete_by_pattern('*', count: digests.count)
-          expiring_digests.delete_by_pattern('*', count: expiring_digests.count)
+          delete_all_locks
           redirect "#{root_path}locks"
-        end
-
-        app.get('/locks/:digest') do
-          @lock = Lock.new(route_params(:digest))
-          erb(unique_template(:lock))
         end
 
         app.get('/locks/:digest/delete') do
-          digests.delete_by_digest(route_params(:digest))
-          expiring_digests.delete_by_digest(route_params(:digest))
+          delete_lock(route_params(:digest))
           redirect "#{root_path}locks"
+        end
+      end
+
+      def self.lock_routes(app)
+        app.get('/locks/:digest') do
+          @lock = Lock.new(route_params(:digest))
+          erb(unique_template(:lock))
         end
 
         app.get('/locks/:digest/jobs/:job_id/delete') do
@@ -73,6 +83,16 @@ module Wurk
 
       module Helpers
         SAFE_CPARAMS = %w[filter count cursor prev_cursor poll direction].freeze
+
+        def delete_all_locks
+          digests.delete_by_pattern('*', count: digests.count)
+          expiring_digests.delete_by_pattern('*', count: expiring_digests.count)
+        end
+
+        def delete_lock(digest)
+          digests.delete_by_digest(digest)
+          expiring_digests.delete_by_digest(digest)
+        end
 
         def unique_template(name) = File.read(File.join(VIEWS, "#{name}.erb"))
         def digests = @digests ||= Digests.new

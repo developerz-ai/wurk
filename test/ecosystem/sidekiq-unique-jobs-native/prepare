@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# The same checkout, so the same hardcoded localhost:6379 / DB 0 to point at the
+# harness DB: the gem pod in interop.rb loads this checkout.
+exec "$(dirname "$0")/../sidekiq-unique-jobs/prepare"

@@ -260,10 +260,16 @@ class UniqueJobsTest < Wurk::Test::UnitCase
     assert Wurk::UniqueJobs::Script::LuaError.intercepts?(wrapped)
     assert_equal 'x.lua', lua.file
     assert_same wrapped, lua.error
-    Wurk.redis do |conn|
-      assert_raises(RedisClient::CommandError) do
+    # Dragonfly words this failure the way the gem's pattern reads; Redis 7 does not.
+    error = Wurk.redis do |conn|
+      assert_raises(RedisClient::CommandError, Wurk::UniqueJobs::Script::LuaError) do
         Wurk::UniqueJobs::Script.call(:unique_jobs_queue_and_lock, conn, keys: Array.new(8, 'k'), argv: [])
       end
     end
+    wrapped_by_us = error.is_a?(Wurk::UniqueJobs::Script::LuaError)
+    raw = wrapped_by_us ? error.error : error
+
+    assert_kind_of RedisClient::CommandError, raw
+    assert_equal Wurk::UniqueJobs::Script::LuaError.intercepts?(raw), wrapped_by_us
   end
 end
