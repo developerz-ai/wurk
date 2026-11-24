@@ -15,6 +15,12 @@ module Wurk
     # ActiveJob's own class) or `class`, never the jid or args. A field the
     # payload cannot supply is `unknown`. Distinct pairs past MAX_SERIES fold
     # into OVERFLOW (`lua/count_death.lua`).
+    #
+    # Best effort: a count that fails after the kill is reported and lost, and
+    # only Wurk writes it (a stock Sidekiq process in a mixed fleet does not).
+    #
+    # Fields are encoded `script_safe`, escaping `/` as Redis's cjson does, so a
+    # pair the schedule-promote script counts lands on the same field.
     module Deaths
       MAX_SERIES = 500
       UNKNOWN = 'unknown'
@@ -42,13 +48,14 @@ module Wurk
         def field(payload)
           job = payload.is_a?(::String) ? parse(payload) : payload
           job = {} unless job.is_a?(::Hash)
-          ::JSON.generate([label(job['queue']) || UNKNOWN, label(job['wrapped']) || label(job['class']) || UNKNOWN])
+          ::JSON.generate([label(job['queue']) || UNKNOWN, label(job['wrapped']) || label(job['class']) || UNKNOWN],
+                          script_safe: true)
         end
 
         # `[[{ 'queue' => q, 'class' => c }, count], …]` from an HGETALL reply
         # (a Hash under RESP3, a flat Array under RESP2), sorted by labels. Two
-        # fields that decode to the same labels (Redis's cjson escapes `/`,
-        # Ruby's JSON does not) are summed.
+        # fields that decode to the same labels (escaped differently by another
+        # writer) are summed.
         def samples(reply)
           pairs = reply.is_a?(::Hash) ? reply : Array(reply).each_slice(2)
           totals = ::Hash.new(0)

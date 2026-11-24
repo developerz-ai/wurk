@@ -128,6 +128,18 @@ module Wurk
         if not last then return job end
         return string.sub(job, 1, e) .. colon .. ARGV[3] .. string.sub(job, last + 1)
       end
+      local function label(v) if type(v) == "string" and v ~= "" then return v end end
+      -- Best effort, pcall only: a refused count (a wrong-typed key, maxmemory)
+      -- must not stop the ZREM below, or the member is re-buried every sweep.
+      local function count_death(decoded)
+        local job = type(decoded) == "table" and decoded or {}
+        local field = cjson.encode({"unknown", label(job["wrapped"]) or label(job["class"]) or "unknown"})
+        local size = redis.pcall("hlen", KEYS[4])
+        if redis.pcall("hexists", KEYS[4], field) == 0 and type(size) == "number" and size >= tonumber(ARGV[5]) then
+          field = ARGV[6]
+        end
+        redis.pcall("hincrby", KEYS[4], field, 1)
+      end
       local jobs = redis.call("zrangebyscore", KEYS[1], "-inf", ARGV[1], "LIMIT", 0, tonumber(ARGV[4]))
       for i = 1, #jobs do
         local job = jobs[i]
@@ -138,14 +150,9 @@ module Wurk
           redis.call("lpush", ARGV[2] .. q, restamp(job, decoded["enqueued_at"] ~= nil))
         else
           redis.call("zadd", KEYS[3], ARGV[1], job)
-          local c = ok and type(decoded) == "table" and (decoded["wrapped"] or decoded["class"])
-          local field = cjson.encode({"unknown", (type(c) == "string" and c ~= "") and c or "unknown"})
-          if redis.call("hexists", KEYS[4], field) == 0 and redis.call("hlen", KEYS[4]) >= tonumber(ARGV[5]) then
-            field = ARGV[6]
-          end
-          redis.call("hincrby", KEYS[4], field, 1)
         end
         redis.call("zrem", KEYS[1], job)
+        if type(q) ~= "string" then count_death(ok and decoded) end
       end
       return #jobs
     LUA

@@ -52,21 +52,34 @@ spec:
           labels: { severity: warning }
           annotations:
             summary: No process holds the leader lease, so periodic jobs are not firing.
-        # wurk_jobs_dead_total, not wurk_dead_size: the dead set is capped
-        # (dead_max_jobs, 10,000 by default), so once full every death evicts
-        # the oldest entry and the size stops moving however many jobs die.
+        # Deaths come from wurk_jobs_dead_total, not wurk_dead_size. The dead set is
+        # capped (dead_max_jobs, 10,000 by default), so once it is full every death
+        # evicts the oldest entry and the size stops moving. The counter is recorded
+        # without the pod label first, each pod's highest value over 5m, so neither a
+        # worker rollout nor a pod going stale with the freshest value splits it or
+        # dips it into a false reset. increase() never counts a series' first sample,
+        # so a pair new inside the hour (deaths before its first scrape) counts its
+        # last value instead, unless the raw counter had a sample in the day before.
+        - record: wurk:jobs_dead_total:max
+          expr: max by (namespace, queue, class) (max_over_time(wurk_jobs_dead_total[5m]))
+        - record: wurk:jobs_dead:increase1h
+          expr: >-
+            (last_over_time(wurk:jobs_dead_total:max[1h])
+              unless max by (namespace, queue, class) (last_over_time(wurk_jobs_dead_total[24h] offset 1h)))
+            or increase(wurk:jobs_dead_total:max[1h])
         - alert: WurkJobsDying
-          expr: max by (namespace, queue, class) (increase(wurk_jobs_dead_total[1h])) > 10
+          expr: wurk:jobs_dead:increase1h > 10
           for: 0m
           labels: { severity: warning }
           annotations:
             summary: "{{ $value | humanize }} {{ $labels.class }} jobs on {{ $labels.queue }} died in the last hour."
-        - alert: WurkDeadSetAtCap
+        # A fixed size threshold: 95% of the default dead_max_jobs. Set it from yours.
+        - alert: WurkDeadSetNearCap
           expr: max by (namespace) (wurk_dead_size) >= 9500
           for: 1h
           labels: { severity: info }
           annotations:
-            summary: "The dead set is at its cap: each new death evicts the oldest entry, so dead-job history is being lost."
+            summary: "The dead set is near its cap. Once it is full, each new death evicts the oldest entry."
         - alert: WurkFetchErrors
           expr: sum by (namespace, pod) (rate(wurk_fetch_errors_total[5m])) > 1
           for: 10m

@@ -26,6 +26,7 @@ class MetricsDeathsTest < Wurk::Test::UnitCase
     assert_equal '["unknown","unknown"]', Deaths.field('not json {')
     assert_equal '["unknown","unknown"]', Deaths.field('[1]')
     assert_equal '["unknown","unknown"]', Deaths.field('{"queue":7,"class":""}')
+    assert_equal '["q","A\\/B"]', Deaths.field('queue' => 'q', 'class' => 'A/B'), 'escaped as cjson does'
   end
 
   def test_new_fields_past_the_cap_fold_into_overflow
@@ -39,18 +40,33 @@ class MetricsDeathsTest < Wurk::Test::UnitCase
                   [{ 'queue' => 'q', 'class' => 'B' }, 1]], read
   end
 
-  # A dropped socket after the kill must not fail the kill: the job is already
-  # in the dead set, and a raise would have the caller kill it again.
-  def test_a_failed_count_is_reported_not_raised
+  # A reply lost after the increment landed must not fail the kill (the job is
+  # already in the dead set, and a raise would have the caller kill it again)
+  # nor be retried into a second count.
+  def test_a_lost_reply_is_reported_never_retried_or_raised
     reports = []
     config = Wurk::Configuration.new
     config.error_handlers.replace([->(error, context, _config) { reports << [error.class, context[:context]] }])
-    conn = Object.new
-    def conn.call_once(*) = raise(RedisClient::CannotConnectError, 'gone')
+    @pool.with do |real|
+      Deaths.record(LostReply.new(real), Wurk.dump_json('queue' => 'q', 'class' => 'A'), config: config)
+    end
 
-    Deaths.record(conn, '{}', config: config)
+    assert_equal [[{ 'queue' => 'q', 'class' => 'A' }, 1]], read
+    assert_equal [[RedisClient::ConnectionError, 'dead-set death counter']], reports
+  end
 
-    assert_equal [[RedisClient::CannotConnectError, 'dead-set death counter']], reports
+  # Runs each one-shot command for real, then drops its reply.
+  class LostReply
+    def initialize(conn)
+      @conn = conn
+    end
+
+    def call(*) = @conn.call(*)
+
+    def call_once(*)
+      @conn.call_once(*)
+      raise RedisClient::ConnectionError, 'reply lost'
+    end
   end
 
   def test_samples_read_resp2_and_resp3_and_sum_fields_with_the_same_labels

@@ -292,16 +292,34 @@ class LuaTest < Wurk::Test::UnitCase
   end
 
   # The script counts its kills as lua/count_death.lua does: by class when the
-  # payload names one, and into the overflow field once the hash is full.
+  # payload names one (an empty `wrapped` falls back to `class`), into the
+  # overflow field once the hash is full, and on the field Ruby would write, so
+  # a pair Ruby already counted is never sent to overflow.
   def test_reliable_schedule_promote_counts_its_kills_by_class_up_to_the_cap
     sset = "#{@ns}:retry"
     @pool.with do |c|
+      c.call('HSET', "#{@ns}:deaths", Wurk::Metrics::Deaths.field('class' => 'A/B'), 1)
       c.call('ZADD', sset, 10, '{"class":"A","jid":"1"}', 11, '{"class":"A","jid":"2"}',
-             12, '{"wrapped":"W","class":"Wrapper","jid":"3"}', 13, '{"class":"B","jid":"4"}')
+             12, '{"wrapped":"","class":"W","jid":"3"}', 13, '{"class":"B","jid":"4"}',
+             14, '{"class":"A/B","jid":"5"}')
 
-      assert_equal 4, promote(c, sset, max_series: 2)
-      assert_equal({ '["unknown","A"]' => '2', '["unknown","W"]' => '1', OVERFLOW => '1' },
-                   c.call('HGETALL', "#{@ns}:deaths"))
+      assert_equal 5, promote(c, sset, max_series: 3)
+      assert_equal({ '["unknown","A\\/B"]' => '2', '["unknown","A"]' => '2', '["unknown","W"]' => '1',
+                     OVERFLOW => '1' }, c.call('HGETALL', "#{@ns}:deaths"))
+    end
+  end
+
+  # A count Redis refuses must not stop the ZREM, or the member is buried again
+  # on every sweep and, since `retry` drains first, starves `schedule`.
+  def test_reliable_schedule_promote_buries_even_when_the_count_is_refused
+    sset = "#{@ns}:retry"
+    @pool.with do |c|
+      c.call('SET', "#{@ns}:deaths", 'not a hash')
+      c.call('ZADD', sset, 10, 'not json {')
+
+      assert_equal 1, promote(c, sset)
+      assert_equal 0, c.call('ZCARD', sset)
+      assert_equal ['not json {'], c.call('ZRANGE', "#{@ns}:dead", 0, -1)
     end
   end
 
