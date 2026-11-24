@@ -20,7 +20,7 @@ on:
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
-# Least privilege; the deploy job needs pages + id-token to publish.
+# Least privilege; only the deploy job holds pages + id-token to publish.
 permissions:
   contents: read
 
@@ -28,16 +28,18 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
+# Upload and deploy live in separate jobs: a deploy-pages step in the same job
+# as the upload can look up the run's artifacts while the upload is still
+# finalizing and see none (actions/deploy-pages#451; red run 45202224101).
+# Across the `needs:` boundary the artifact is already visible. The split also
+# keeps the publish token away from the third-party code `rake yard` runs.
+# test/unit/pages_workflow_test.rb pins this shape.
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -56,5 +58,17 @@ jobs:
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: docs/site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
       - id: deploy
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
