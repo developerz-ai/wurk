@@ -4,6 +4,10 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 Each release's notes live in their own file under [`docs/changelog/`](docs/changelog/); this page is the index, newest first. Not released yet: [`docs/changelog/unreleased.md`](docs/changelog/unreleased.md) ([diff since the last release][Unreleased]). A pull request with a user-visible change adds its line there.
 
+## [1.20.0] - 2026-11-24
+
+Counting deaths the dead set's cap cannot hide: `/metrics` exports `wurk_jobs_dead_total{queue,class}`, a cluster-wide counter of jobs moved to the dead set, so an alert on deaths keeps firing after the capped dead set is full and its size stops moving. [Release notes](docs/changelog/1.20.0.md).
+
 ## [1.19.0] - 2026-11-23
 
 A running job can renew its sidekiq-unique-jobs lock: `SidekiqUniqueJobs.refresh_lock!(self)` from `perform` extends the lock it still holds and returns `false` once the lock has expired or belongs to another job, so `lock_ttl` can bound a crashed run instead of covering the slowest one. [Release notes](docs/changelog/1.19.0.md).
@@ -188,7 +192,8 @@ Releases publish to RubyGems through GitHub Actions OIDC trusted publishing, and
 
 First public (pre-1.0) release. [Release notes](docs/changelog/0.0.1.md).
 
-[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.19.0...HEAD
+[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.20.0...HEAD
+[1.20.0]: https://github.com/developerz-ai/wurk/compare/v1.19.0...v1.20.0
 [1.19.0]: https://github.com/developerz-ai/wurk/compare/v1.18.0...v1.19.0
 [1.18.0]: https://github.com/developerz-ai/wurk/compare/v1.17.1...v1.18.0
 [1.17.1]: https://github.com/developerz-ai/wurk/compare/v1.17.0...v1.17.1

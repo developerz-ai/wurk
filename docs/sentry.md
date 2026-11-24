@@ -34,7 +34,7 @@ which satisfies a `sidekiq` dependency *with* Wurk:
 ```ruby
 # Gemfile — the escape hatch for gems you must keep
 gem "wurk"
-gem "sidekiq", github: "developerz-ai/wurk", tag: "v1.19.0", glob: "ecosystem/sidekiq-shim/*.gemspec"
+gem "sidekiq", github: "developerz-ai/wurk", tag: "v1.20.0", glob: "ecosystem/sidekiq-shim/*.gemspec"
 gem "sentry-sidekiq"
 ```
 
