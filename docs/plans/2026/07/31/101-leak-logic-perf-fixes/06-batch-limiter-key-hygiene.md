@@ -9,7 +9,7 @@
 - `lib/wurk/batch_set.rb:29-38` — iteration over dead members
 - `lib/wurk/lua.rb:269-283` — `BATCH_APPEND_CALLBACK` cap/dedup
 - `lib/wurk/limiter/base.rb:107-118` — `lmtr-list` growth
-- `lib/wurk/web/enterprise.rb:28-55`, `app/controllers/wurk/api_controller.rb:169-189` — read-side effects
+- `lib/wurk/web/enterprise.rb:28-55`, `lib/wurk/web/dashboard/api_actions.rb:234-241` — read-side effects (#948 moved them out of ApiController)
 
 ## Steps
 
@@ -19,7 +19,7 @@
 4. **S8 — `BATCH_APPEND_CALLBACK` unbounded + no dedup** (`lua.rb:269-283`): reopen-batch `#on` per job → O(N²) Lua work + N duplicate callback fires. Fix inside the Lua: skip append when an identical encoded `[event, target, options]` triple exists; hard-cap array length (e.g. 1000) with a returned flag the Ruby side logs on drop.
 5. **F16 — callback dedup key burned before enqueue** (`callbacks.rb:74-88`): crash between `SET NX` and `enqueue_callbacks` permanently loses the `:success`/`:complete` callback. Reorder: enqueue first, then set the dedup key; on dedup-set failure after a successful enqueue, at-least-once duplicate callback is the acceptable direction (batch callbacks must tolerate retry anyway — they're jobs). Also add `complete`/`success`/`death` to `KEY_SUFFIXES` (`batch.rb:53`) so `Status#delete` and `apply_linger` cover them.
 6. **S6 — `lmtr-list` SET grows one member per interpolated limiter name forever** (`base.rb:107-118`; spec blesses `"stripe-#{user_id}"` names, `sidekiq-ent.md:75`). Fix without changing the key's type visible semantics: on `Limits.list` (`web/enterprise.rb`), drop members whose `lmtr:<name>` meta hash is gone (batched `SREM` of dead names during pagination scan); plus stop re-`SADD`ing on every construction — only register when meta hash is first written. If maintainer approves a bolder fix, migrate to ZSET scored by last registration with on-write trim — **flag: key-type change is dashboard-visible to third parties; default to the SREM-sweep approach.**
-7. Read-side: `Limits.list` currently `SMEMBERS` + sort whole set per request (`api_controller.rb:185-189`) — after the sweep this self-heals; add `SSCAN`-based pagination only if still needed (defer otherwise).
+7. Read-side: `Limits.list` currently `SMEMBERS` + sort whole set per request (`lib/wurk/web/enterprise.rb:44-47`; page at :106-110) — after the sweep this self-heals; add `SSCAN`-based pagination only if still needed (defer otherwise).
 
 ## Tests
 
@@ -32,7 +32,7 @@
 
 ## Deferred
 
-**Limiter read-side pagination rewrite:** Step 7 mentions `SSCAN`-based pagination as an optional optimization for `Limits.list` (`app/controllers/wurk/api_controller.rb:185-189`). After S6 lands and the `lmtr-list` SADD/SREM sweep runs, the read path self-heals — the set no longer leaks indefinitely. The current `SMEMBERS` + sort + slice approach (`web/enterprise.rb:28-33`) remains acceptable for small-to-moderate limiter counts and defers the pagination rewrite. Revisit only if observed deployment with 1000+ limiters shows latency concern on the dashboard's limiter list page.
+**Limiter read-side pagination rewrite:** Step 7 mentions `SSCAN`-based pagination as an optional optimization for `Limits.list` (`lib/wurk/web/enterprise.rb:44-47`, reached from `lib/wurk/web/dashboard/api_actions.rb:234-241`). After S6 lands and the `lmtr-list` SADD/SREM sweep runs, the read path self-heals — the set no longer leaks indefinitely. The current `SMEMBERS` + sort + slice approach (`web/enterprise.rb:28-33`) remains acceptable for small-to-moderate limiter counts and defers the pagination rewrite. Revisit only if observed deployment with 1000+ limiters shows latency concern on the dashboard's limiter list page.
 
 ## Done when
 
