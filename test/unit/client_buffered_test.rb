@@ -679,7 +679,7 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     assert_equal 0, Wurk::Client::Buffered.flush
 
     assert_equal [['in-flight']], queued_args
-    drainer.join
+    assert drainer.join(10), 'the replay thread never returned'
   ensure
     gate&.close
   end
@@ -715,7 +715,8 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     assert_operator monotonic - started, :<, 1
     assert_includes log, 'could not reach Redis before exit'
     gate << :go
-    drainer.join
+
+    assert drainer.join(10), 'the replay thread never returned'
   ensure
     gate&.close
   end
@@ -1087,23 +1088,18 @@ class ClientBufferedTest < Wurk::Test::UnitCase
 
     # Drive the drainer's own tick by hand: a 0.02s thread racing a wall-clock
     # poll on a shared Dragonfly can finish after the deadline even though the
-    # drain path is correct. A Queue barrier makes the tick's return explicit;
-    # no clock decides whether delivery happened.
+    # drain path is correct. The join timeout only guards against a stuck tick.
     Wurk::Client::Buffered.start_drainer!(interval: 30.0)
     drainer = Wurk::Client::Buffered.instance_variable_get(:@drainer)
     pool.recover!
-    finished = Queue.new
-    tick = Thread.new do
-      drainer.send(:tick)
-      finished << true
-    end
+    tick = Thread.new { drainer.send(:tick) }
 
-    assert finished.pop, 'the drainer tick never returned'
-    tick.join
+    assert tick.join(30), 'the drainer tick never returned'
 
     assert_equal 0, Wurk::Client::Buffered.buffer_size
     assert_equal [['a'], ['b']], queued_args.reverse
   ensure
+    tick&.kill
     Wurk::Client.reliable_push_drainer_stop!
   end
 
