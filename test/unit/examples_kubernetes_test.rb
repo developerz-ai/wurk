@@ -30,8 +30,9 @@ class ExamplesKubernetesTest < Wurk::Test::UnitCase
            'alerts on series that stopped existing never fire without an absent() arm')
   end
 
+  # A recording rule is never routed; every other rule is an alert that can be.
   def test_every_rule_can_route
-    rules.each do |rule|
+    rules.reject { |rule| rule['record'] }.each do |rule|
       assert_kind_of String, rule['alert']
       assert_includes rule.keys, 'for', rule['alert']
       assert_includes %w[critical warning info], rule.dig('labels', 'severity'), rule['alert']

@@ -23,7 +23,7 @@ class DeadSetTest < Wurk::Test::UnitCase
   end
 
   def teardown
-    @pool.with { |c| c.call('UNLINK', @dead) }
+    @pool.with { |c| c.call('UNLINK', @dead, Wurk::Keys::STAT_DEATHS) }
     Wurk.configuration.death_handlers.replace(@saved_handlers)
   ensure
     super
@@ -159,6 +159,20 @@ class DeadSetTest < Wurk::Test::UnitCase
     survivors = @pool.with { |c| c.call('ZRANGE', @dead, 0, -1) }
 
     assert_equal [raw], survivors
+  end
+
+  # The set is capped, so its size stops moving once full; the death count
+  # keeps growing through the trim, by queue and by the class a reader would
+  # recognise (an ActiveJob's wrapped class, not the wrapper).
+  def test_every_kill_is_counted_past_the_trim
+    3.times { kill_payload(base_item, notify_failure: false, max_jobs: 1, timeout: 60_000) }
+    kill_payload(base_item('wrapped' => 'MailerJob', 'queue' => 'mailers'), notify_failure: false)
+    dead_set.kill_raw('not json {')
+
+    assert_equal [[{ 'queue' => 'default', 'class' => 'DeadSetTestJob' }, 3],
+                  [{ 'queue' => 'mailers', 'class' => 'MailerJob' }, 1],
+                  [{ 'queue' => 'unknown', 'class' => 'unknown' }, 1]],
+                 Wurk::Metrics::Deaths.samples(@pool.with { |c| c.call('HGETALL', Wurk::Keys::STAT_DEATHS) })
   end
 
   def test_trim_runs_both_axes_in_one_multi

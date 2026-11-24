@@ -128,6 +128,8 @@ class ScheduledPollerTest < Wurk::Test::UnitCase
       assert_equal 0, c.call('ZCARD', @schedule)
       assert_equal 2, c.call('LLEN', @queue_list)
       assert_equal ['garbage{'], c.call('ZRANGE', Wurk::Keys::DEAD, 0, -1)
+      assert_equal [[{ 'queue' => 'unknown', 'class' => 'unknown' }, 1]],
+                   Wurk::Metrics::Deaths.samples(c.call('HGETALL', Wurk::Keys::STAT_DEATHS))
     end
   end
 
@@ -531,6 +533,8 @@ class ScheduledPollerTest < Wurk::Test::UnitCase
     @pool.with do |c|
       assert_equal 0, c.call('ZCARD', @schedule)
       assert_equal [raw], c.call('ZRANGE', Wurk::Keys::DEAD, 0, -1)
+      assert_equal [[{ 'queue' => @queue, 'class' => 'Worker' }, 1]],
+                   Wurk::Metrics::Deaths.samples(c.call('HGETALL', Wurk::Keys::STAT_DEATHS))
     end
   end
 

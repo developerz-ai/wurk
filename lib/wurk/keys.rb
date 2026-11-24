@@ -47,6 +47,12 @@ module Wurk
     # elapsed. Per-day variants append `:YYYY-MM-DD`. Spec: sidekiq-pro.md §7.
     STAT_EXPIRED = 'stat:expired'
 
+    # Jobs moved to the dead set, per queue and class (Metrics::Deaths): HASH,
+    # field = JSON `[queue, class]`, value = count. A Wurk extra like
+    # `status:` — Sidekiq keeps no death counter — and, unlike the capped
+    # `dead` set it counts into, it only ever grows.
+    STAT_DEATHS = 'stat:deaths'
+
     # TTL applied to per-day `stat:processed:*` / `stat:failed:*` /
     # `stat:expired:*` strings. 5 years, in seconds. Matches
     # Sidekiq::Launcher::STATS_TTL.

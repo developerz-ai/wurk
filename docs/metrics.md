@@ -460,6 +460,7 @@ Alongside the families listed in [deployment](deployment.md), the health listene
 | `wurk_reaper_reclaimed_total` | Orphaned jobs this process reclaimed | `rate`; a sample of one child under a swarm |
 | `wurk_jobs_reclaimed_total{source=}` | The same reclaims split by who found them: `reaper` (the periodic sweep) or `self` (a live process returning a payload it lost track of) | `rate`; a sample of one child |
 | `wurk_poison_kills_total` | Jobs sent to the dead set for being orphaned past the poison-pill cap | `increase > 0` is worth a look |
+| `wurk_jobs_dead_total{queue=,class=}` | Best-effort count of jobs Wurk moved to the dead set (a stock Sidekiq process in a mixed fleet writes none; a count that fails is reported to the error handlers, except from the schedule-promote script, and may be lost: an error can also mean the increment landed and only its reply was lost), cluster-wide, from the `stat:deaths` hash: retries exhausted, `:kill`, a kill from the API or dashboard, poison pills, payloads that cannot run. `class` is the wrapped class for ActiveJob; a payload that names neither reads `unknown`. Past 500 distinct pairs, new ones count under `queue="other",class="other"`. A kill written past `maxmemory` is not counted | cluster value, `max`; alert on `max by (queue, class) (increase(…[1h]))`, as the example `PrometheusRule` does; `increase` never counts a series' first sample, and a burst split by a pod rollout is seen in parts. Use it, not `wurk_dead_size`, to count deaths: the dead set is capped at `dead_max_jobs`, and once full its size stops moving |
 | `wurk_leader_acquired_total` | Times the process serving the scrape became leader | `changes`/`increase`; a flapping leader shows here |
 | `wurk_scheduler_promoted_total{set=}` | Jobs this process promoted from `retry` / `schedule` | `rate`; a sample of one child |
 | `wurk_scheduler_lag_seconds{set=}` | How far past due the earliest `retry` / `schedule` member is; 0 when nothing is due | cluster value, `max`; alert when it keeps growing |
@@ -537,6 +538,7 @@ Three supported export paths:
 0.0.4); pass `metrics: false` to `health_check` to turn it off. Families:
 `wurk_build_info`, `wurk_redis_up`, `wurk_processed_total`, `wurk_failed_total`,
 `wurk_queue_size{queue}`, `wurk_queue_latency_seconds{queue}`,
+`wurk_jobs_dead_total{queue,class}`,
 `wurk_scheduled_size`, `wurk_retry_size`, `wurk_dead_size`, `wurk_processes`,
 `wurk_busy`, `wurk_concurrency`, `wurk_swarm_children_expected`,
 `wurk_swarm_children_fresh`, and per process (`{pid}`) `wurk_process_busy`,
@@ -547,8 +549,8 @@ operational families in [the table above](#operational-gauges-on-the-health-list
 come from shared Redis and are identical on every pod — aggregate with `max`,
 not `sum`; `wurk_process_*` and `wurk_swarm_children_*` describe the scraped
 pod's own swarm. Values are cached for 1s and one scrape costs one Redis
-checkout; `wurk_redis_up 0` means the last refresh could not read Redis. No new
-Redis keys.
+checkout; `wurk_redis_up 0` means the last refresh could not read Redis. A scrape
+writes nothing; the one key it reads that Sidekiq does not write is `stat:deaths`.
 
 **Statsd / DogStatsD (push).** Set `config.dogstatsd` to anything responding to
 `increment` / `gauge` / `distribution` and the metrics in §3 flow to it

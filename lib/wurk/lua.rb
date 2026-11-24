@@ -63,8 +63,10 @@ module Wurk
     # retry would starve the whole cluster's scheduled jobs. It is moved to the
     # dead set (scored `now`, like a kill) so it stays inspectable, and the
     # sweep continues. pcall keeps a failed decode from raising out of the script.
-    # KEYS = [sorted_set, queues_set, dead_set]
-    # ARGV = [now, queue_prefix, now_ms, batch]
+    # Each one moved is counted into the death counter the way
+    # `lua/count_death.lua` counts (Metrics::Deaths), under queue `unknown`.
+    # KEYS = [sorted_set, queues_set, dead_set, deaths_hash]
+    # ARGV = [now, queue_prefix, now_ms, batch, deaths_max_fields, deaths_overflow_field]
     # Returns the number of members handled (promoted or moved to dead).
     # Order matters: decode + push BEFORE zrem. Redis Lua has no rollback,
     # so a failed cjson.decode after a zrem would lose the job. Decode first;
@@ -126,6 +128,18 @@ module Wurk
         if not last then return job end
         return string.sub(job, 1, e) .. colon .. ARGV[3] .. string.sub(job, last + 1)
       end
+      local function label(v) if type(v) == "string" and v ~= "" then return v end end
+      -- Best effort, pcall only: a refused count (a wrong-typed key, maxmemory)
+      -- must not stop the ZREM below, or the member is re-buried every sweep.
+      local function count_death(decoded)
+        local job = type(decoded) == "table" and decoded or {}
+        local field = cjson.encode({"unknown", label(job["wrapped"]) or label(job["class"]) or "unknown"})
+        local size = redis.pcall("hlen", KEYS[4])
+        if redis.pcall("hexists", KEYS[4], field) == 0 and type(size) == "number" and size >= tonumber(ARGV[5]) then
+          field = ARGV[6]
+        end
+        redis.pcall("hincrby", KEYS[4], field, 1)
+      end
       local jobs = redis.call("zrangebyscore", KEYS[1], "-inf", ARGV[1], "LIMIT", 0, tonumber(ARGV[4]))
       for i = 1, #jobs do
         local job = jobs[i]
@@ -138,6 +152,7 @@ module Wurk
           redis.call("zadd", KEYS[3], ARGV[1], job)
         end
         redis.call("zrem", KEYS[1], job)
+        if type(q) ~= "string" then count_death(ok and decoded) end
       end
       return #jobs
     LUA

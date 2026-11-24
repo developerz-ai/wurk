@@ -52,12 +52,27 @@ spec:
           labels: { severity: warning }
           annotations:
             summary: No process holds the leader lease, so periodic jobs are not firing.
-        - alert: WurkDeadSetGrowing
-          expr: max by (namespace) (delta(wurk_dead_size[1h])) > 100
-          for: 15m
+        # Deaths come from wurk_jobs_dead_total, not wurk_dead_size. The dead set is
+        # capped (dead_max_jobs, 10,000 by default), so once it is full every death
+        # evicts the oldest entry and the size stops moving. increase() runs per pod
+        # (each pod reads its own Redis store, so two stores never mask each other)
+        # and max picks the pod that saw the most. It undercounts in two cases: a
+        # pair's first value (a series' first sample is never counted, so deaths
+        # before a new pair's first scrape are missed) and a burst split across a
+        # worker rollout (each pod sees only its part).
+        - alert: WurkJobsDying
+          expr: max by (namespace, queue, class) (increase(wurk_jobs_dead_total[1h])) > 10
+          for: 0m
           labels: { severity: warning }
           annotations:
-            summary: "{{ $value | humanize }} jobs died in the last hour."
+            summary: "{{ $value | humanize }} {{ $labels.class }} jobs on {{ $labels.queue }} died in the last hour."
+        # A fixed size threshold: 95% of the default dead_max_jobs. Set it from yours.
+        - alert: WurkDeadSetNearCap
+          expr: max by (namespace) (wurk_dead_size) >= 9500
+          for: 1h
+          labels: { severity: info }
+          annotations:
+            summary: "The dead set is near its cap. Once it is full, each new death evicts the oldest entry."
         - alert: WurkFetchErrors
           expr: sum by (namespace, pod) (rate(wurk_fetch_errors_total[5m])) > 1
           for: 10m

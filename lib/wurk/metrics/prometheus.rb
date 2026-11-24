@@ -6,11 +6,13 @@ require_relative '../keys'
 require_relative '../version'
 require_relative '../queue_consumers'
 require_relative 'process_counters'
+require_relative 'deaths'
 
 module Wurk
   module Metrics
     # Prometheus text exposition (format 0.0.4) served by the health listener at
-    # `GET /metrics`. Reads only keys Sidekiq already writes — no new Redis keys.
+    # `GET /metrics`. Reads keys Sidekiq already writes, plus Wurk's own death
+    # counter (`stat:deaths`, Metrics::Deaths); it writes none.
     #
     # Two families, and the difference matters when aggregating:
     #   * cluster gauges/counters (`wurk_queue_*`, `wurk_processed_total`, …)
@@ -57,7 +59,7 @@ module Wurk
       # scheduler is behind.
       SET_HEADS = Scheduled::SETS.map { |set| ['ZRANGE', set, 0, 0, 'WITHSCORES'] }.freeze
       # Names come last: the detail pass is built from them.
-      FIRST_PASS = [*SCALARS.values, *SET_HEADS, ['GET', Wurk::Leader::DEFAULT_KEY],
+      FIRST_PASS = [*SCALARS.values, *SET_HEADS, ['GET', Wurk::Leader::DEFAULT_KEY], ['HGETALL', Keys::STAT_DEATHS],
                     ['SMEMBERS', Keys::QUEUES_SET], ['SMEMBERS', Keys::PROCESSES]].freeze
 
       QUEUE_GAUGES = [
@@ -98,7 +100,7 @@ module Wurk
       ProcessRow = Struct.new(:identity, :pid, :busy, :concurrency, :beat, :rss_kb, :quiet, :queues, :rtt_us,
                               :oldest_run_at)
       Snapshot = Struct.new(:ok, :taken_at, :processed, :failed, :scheduled, :retries, :dead, :queues, :processes,
-                            :leader, :set_heads, keyword_init: true)
+                            :leader, :set_heads, :deaths, keyword_init: true)
 
       def initialize(config, ttl: TTL, nonce: Component::PROCESS_NONCE, hostname: Component.hostname,
                      clock: -> { ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) })
@@ -139,6 +141,7 @@ module Wurk
         ProcessFamilies.render(out, swarm: swarm)
         if snap.ok
           cluster(out, snap)
+          family(out, *Deaths::FAMILY, snap.deaths)
           local(out, snap, expected_children, fresh_window)
         end
         out
@@ -155,7 +158,7 @@ module Wurk
         queues, processes = names(first)
         rows = process_rows(processes, detail.drop(queues.size * 2), local_identities(processes))
         Snapshot.new(ok: true, taken_at: now, **scalars(first), leader: first[SCALARS.size + SET_HEADS.size],
-                     set_heads: heads_of_sets(first),
+                     set_heads: heads_of_sets(first), deaths: Deaths.samples(first[SCALARS.size + SET_HEADS.size + 1]),
                      queues: queue_rows(queues, detail, rows), processes: rows)
       rescue StandardError => e
         @config.logger&.warn { "Wurk::Metrics::Prometheus refresh failed: #{e.class}: #{e.message}" }
