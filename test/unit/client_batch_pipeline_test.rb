@@ -265,7 +265,11 @@ class ClientBatchPipelineTest < Wurk::Test::UnitCase
     attr_reader :pipelines
 
     def initialize(url, drop_after: nil, noscript_on: nil)
-      @real        = RedisClient.config(url: url).new_client
+      # A slice-cap push sends thousands of EVALSHAs through one pipeline. The
+      # 1s redis-client default times out when Dragonfly's two proactor threads
+      # are serving other connections, which is a property of the shared test
+      # server, not of the path under test.
+      @real        = RedisClient.config(url: url, timeout: 5).new_client
       @drop_after  = drop_after
       @noscript_on = noscript_on
       @pipelines   = 0
