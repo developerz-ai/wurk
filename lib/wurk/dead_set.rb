@@ -1,11 +1,13 @@
 # frozen_string_literal: true
 
 require_relative 'job_set'
+require_relative 'metrics/deaths'
 
 module Wurk
   # Capped ZSET of jobs that exhausted retries (the "morgue"). Bounded by
   # `dead_max_jobs` and `dead_timeout_in_seconds` config knobs — every
-  # `kill` trims both axes. Death handlers fire by default — including on
+  # `kill` trims both axes, and counts the job into Metrics::Deaths, which
+  # the trim never touches. Death handlers fire by default — including on
   # API/UI kills, matching Sidekiq — unless `notify_failure: false`.
   #
   # Spec: docs/target/sidekiq-free.md §19.5, §17.2, §31.8.
@@ -52,8 +54,7 @@ module Wurk
     # malformed path has no parseable job to hand a handler. `max_jobs:` /
     # `timeout:` propagate to #trim (see there for the override rationale).
     def kill_raw(payload, max_jobs: nil, timeout: nil) # rubocop:disable Naming/PredicateMethod
-      now = ::Process.clock_gettime(::Process::CLOCK_REALTIME)
-      Wurk.redis { |conn| conn.call('ZADD', @name, now.to_s, payload) }
+      add(payload)
       trim(max_jobs: max_jobs, timeout: timeout)
       true
     end
@@ -65,14 +66,21 @@ module Wurk
     # receive `(job, ex)`. `max_jobs:` / `timeout:` propagate to the auto-trim;
     # see `#trim` for the rationale.
     def kill(message, opts = {})
-      now = ::Process.clock_gettime(::Process::CLOCK_REALTIME)
-      Wurk.redis { |conn| conn.call('ZADD', @name, now.to_s, message) }
+      add(message)
       trim(max_jobs: opts[:max_jobs], timeout: opts[:timeout]) if opts.fetch(:trim, true)
       fire_death_handlers(message, opts[:ex] || api_kill_error) if opts.fetch(:notify_failure, true)
       true
     end
 
     private
+
+    def add(message)
+      now = ::Process.clock_gettime(::Process::CLOCK_REALTIME)
+      Wurk.redis do |conn|
+        conn.call('ZADD', @name, now.to_s, message)
+        Metrics::Deaths.record(conn, message)
+      end
+    end
 
     # Only the death handlers see it, so a kill that notifies none (a UI kill,
     # `kill_all` over a whole set) never pays for the caller's backtrace.

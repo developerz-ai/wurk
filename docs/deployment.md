@@ -312,6 +312,7 @@ it. None is written unless its feature is in use.
 | `history:metrics` | Cluster snapshots (leader only) | Capped stream | History off |
 | `idempotency:<digest>` | HTTP API `Idempotency-Key` | `api_idempotency_ttl` (1 h) | Don't send the header |
 | `profiles`, `<token>-<jid>` | Profiler | 1 day | Don't profile |
+| `stat:deaths` | Moves to the dead set Wurk made, counted per queue and class, best effort | No TTL; at most 501 fields | — |
 
 A Redis or Dragonfly store holding jobs must stay below `maxmemory`; see
 [Dragonfly](#dragonfly). To see what a feature mix costs per job on your workload, run
@@ -745,7 +746,7 @@ default-deny namespace needs. Without the rule the scrape target just reads as d
 [`examples/kubernetes/prometheus-rule.yaml`](../examples/kubernetes/prometheus-rule.yaml)
 covers the exporter going away (`absent()`, without which every other alert goes quiet
 along with it), Redis unreachable, missing children, queue latency, a queue nobody
-consumes, no leader, dead-set growth, fetch errors and reclaims, children restarting,
+consumes, no leader, jobs dying and a dead set near its cap, fetch errors and reclaims, children restarting,
 a crash loop and a starved Redis pool, using `wurk_leader`, `wurk_fetch_errors_total`,
 `wurk_reaper_reclaimed_total`, `wurk_queue_consumers`,
 `wurk_swarm_child_restarts_total`, `wurk_swarm_crash_streak` and
