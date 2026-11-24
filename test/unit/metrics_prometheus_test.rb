@@ -52,6 +52,16 @@ class MetricsPrometheusTest < Wurk::Test::UnitCase
     assert_in_delta(0.0, families['wurk_scheduler_lag_seconds'][{ 'set' => 'schedule' }], 0.001, 'not due yet')
   end
 
+  # The dead set is capped, so its size cannot count deaths; this family can.
+  def test_deaths_are_a_counter_per_queue_and_class
+    @redis.call('HSET', 'stat:deaths', '["default","A"]', '4', '["mail","B"]', '1')
+    body = @collector.render
+
+    assert_includes body, "# TYPE wurk_jobs_dead_total counter\n"
+    assert_equal({ { 'queue' => 'default', 'class' => 'A' } => 4.0, { 'queue' => 'mail', 'class' => 'B' } => 1.0 },
+                 parse(body)['wurk_jobs_dead_total'])
+  end
+
   def test_scheduler_lag_is_the_age_of_the_earliest_due_member
     @redis.call('ZADD', 'retry', Time.now.to_f - 90, '{"late":1}')
 

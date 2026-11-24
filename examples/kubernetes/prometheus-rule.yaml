@@ -52,12 +52,21 @@ spec:
           labels: { severity: warning }
           annotations:
             summary: No process holds the leader lease, so periodic jobs are not firing.
-        - alert: WurkDeadSetGrowing
-          expr: max by (namespace) (delta(wurk_dead_size[1h])) > 100
-          for: 15m
+        # wurk_jobs_dead_total, not wurk_dead_size: the dead set is capped
+        # (dead_max_jobs, 10,000 by default), so once full every death evicts
+        # the oldest entry and the size stops moving however many jobs die.
+        - alert: WurkJobsDying
+          expr: max by (namespace, queue, class) (increase(wurk_jobs_dead_total[1h])) > 10
+          for: 0m
           labels: { severity: warning }
           annotations:
-            summary: "{{ $value | humanize }} jobs died in the last hour."
+            summary: "{{ $value | humanize }} {{ $labels.class }} jobs on {{ $labels.queue }} died in the last hour."
+        - alert: WurkDeadSetAtCap
+          expr: max by (namespace) (wurk_dead_size) >= 9500
+          for: 1h
+          labels: { severity: info }
+          annotations:
+            summary: "The dead set is at its cap: each new death evicts the oldest entry, so dead-job history is being lost."
         - alert: WurkFetchErrors
           expr: sum by (namespace, pod) (rate(wurk_fetch_errors_total[5m])) > 1
           for: 10m

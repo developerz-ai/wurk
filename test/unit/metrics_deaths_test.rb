@@ -1,0 +1,80 @@
+# frozen_string_literal: true
+
+require_relative '../test_helper'
+
+# Wurk::Metrics::Deaths against real Redis: the field a payload is counted
+# under, the cap on distinct fields, and the read side's folding.
+class MetricsDeathsTest < Wurk::Test::UnitCase
+  parallelize_me!
+
+  Deaths = Wurk::Metrics::Deaths
+
+  def setup
+    super
+    @pool = Wurk.configuration.redis_pool
+  end
+
+  def teardown
+    @pool.with { |c| c.call('UNLINK', Wurk::Keys::STAT_DEATHS) }
+  ensure
+    super
+  end
+
+  def test_field_names_the_queue_and_the_wrapped_class_never_the_jid
+    assert_equal '["q","Real"]', Deaths.field('{"queue":"q","class":"Wrapper","wrapped":"Real","jid":"j1"}')
+    assert_equal '["q","Plain"]', Deaths.field('queue' => 'q', 'class' => 'Plain')
+    assert_equal '["unknown","unknown"]', Deaths.field('not json {')
+    assert_equal '["unknown","unknown"]', Deaths.field('[1]')
+    assert_equal '["unknown","unknown"]', Deaths.field('{"queue":7,"class":""}')
+  end
+
+  def test_new_fields_past_the_cap_fold_into_overflow
+    stub_const(:MAX_SERIES, 2) do
+      @pool.with do |c|
+        %w[A B C A D].each { |klass| Deaths.record(c, Wurk.dump_json('queue' => 'q', 'class' => klass)) }
+      end
+    end
+
+    assert_equal [[{ 'queue' => 'other', 'class' => 'other' }, 2], [{ 'queue' => 'q', 'class' => 'A' }, 2],
+                  [{ 'queue' => 'q', 'class' => 'B' }, 1]], read
+  end
+
+  # A dropped socket after the kill must not fail the kill: the job is already
+  # in the dead set, and a raise would have the caller kill it again.
+  def test_a_failed_count_is_reported_not_raised
+    reports = []
+    config = Wurk::Configuration.new
+    config.error_handlers.replace([->(error, context, _config) { reports << [error.class, context[:context]] }])
+    conn = Object.new
+    def conn.call_once(*) = raise(RedisClient::CannotConnectError, 'gone')
+
+    Deaths.record(conn, '{}', config: config)
+
+    assert_equal [[RedisClient::CannotConnectError, 'dead-set death counter']], reports
+  end
+
+  def test_samples_read_resp2_and_resp3_and_sum_fields_with_the_same_labels
+    resp3 = { '["q","A\\/B"]' => '2', '["q","A/B"]' => '3', 'junk' => '1' }
+    expected = [[{ 'queue' => 'q', 'class' => 'A/B' }, 5], [{ 'queue' => 'unknown', 'class' => 'unknown' }, 1]]
+
+    assert_equal expected, Deaths.samples(resp3)
+    assert_equal expected, Deaths.samples(resp3.to_a.flatten)
+    assert_empty Deaths.samples(nil)
+  end
+
+  private
+
+  def read
+    Deaths.samples(@pool.with { |c| c.call('HGETALL', Wurk::Keys::STAT_DEATHS) })
+  end
+
+  def stub_const(name, value)
+    saved = Deaths.const_get(name)
+    Deaths.send(:remove_const, name)
+    Deaths.const_set(name, value)
+    yield
+  ensure
+    Deaths.send(:remove_const, name)
+    Deaths.const_set(name, saved)
+  end
+end

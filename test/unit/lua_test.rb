@@ -8,6 +8,7 @@ class LuaTest < Wurk::Test::UnitCase
   # Last ARGV of every batch script: the `EXPIRE ... NX` seconds each one
   # stamps on the keys it can create.
   TTL = Wurk::Batch::DEFAULT_EXPIRY_SECONDS
+  OVERFLOW = Wurk::Metrics::Deaths::OVERFLOW
 
   LIB = File.expand_path('../../lib', __dir__)
 
@@ -47,7 +48,7 @@ class LuaTest < Wurk::Test::UnitCase
          status_write debounce throttle_slot queue_slot fetch_slot fetch_first refresh_slots
          flow_create flow_advance flow_fail flow_abandon
          unique_jobs_queue_and_lock unique_jobs_queue unique_jobs_lock unique_jobs_unlock unique_jobs_delete
-         unique_jobs_delete_by_digest unique_jobs_delete_job_by_digest unique_jobs_refresh].sort,
+         unique_jobs_delete_by_digest unique_jobs_delete_job_by_digest unique_jobs_refresh count_death].sort,
       Wurk::Lua::SCRIPTS.keys.sort
     )
   end
@@ -169,7 +170,8 @@ class LuaTest < Wurk::Test::UnitCase
              900, '{"queue":"alpha","jid":"future"}')
       count = Wurk::Lua::Loader.eval_cached(
         c, :reliable_schedule_promote,
-        keys: [sset, qset, "#{@ns}:dead"], argv: [500, "#{@ns}:queue:", 1_700_000_000_000, 500]
+        keys: [sset, qset, "#{@ns}:dead", "#{@ns}:deaths"],
+        argv: [500, "#{@ns}:queue:", 1_700_000_000_000, 500, 500, OVERFLOW]
       )
 
       assert_equal 2, count
@@ -193,7 +195,8 @@ class LuaTest < Wurk::Test::UnitCase
     @pool.with do |c|
       c.call('ZADD', sset, 100, '{"queue":"alpha","jid":"a"}')
       Wurk::Lua::Loader.eval_cached(
-        c, :reliable_schedule_promote, keys: [sset, qset, "#{@ns}:dead"], argv: [500, "#{@ns}:queue:", now_ms, 500]
+        c, :reliable_schedule_promote, keys: [sset, qset, "#{@ns}:dead", "#{@ns}:deaths"],
+                                       argv: [500, "#{@ns}:queue:", now_ms, 500, 500, OVERFLOW]
       )
       promoted = Wurk.load_json(c.call('LRANGE', "#{@ns}:queue:alpha", 0, -1).first)
 
@@ -284,6 +287,21 @@ class LuaTest < Wurk::Test::UnitCase
       assert_equal(['ok'], c.call('LRANGE', "#{@ns}:queue:alpha", 0, -1).map { |raw| Wurk.load_json(raw)['jid'] })
       assert_equal poison.sort, c.call('ZRANGE', dead, 0, -1).sort
       assert_equal([500.0], poison.map { |m| c.call('ZSCORE', dead, m).to_f }.uniq)
+      assert_equal({ '["unknown","unknown"]' => '5' }, c.call('HGETALL', "#{@ns}:deaths"))
+    end
+  end
+
+  # The script counts its kills as lua/count_death.lua does: by class when the
+  # payload names one, and into the overflow field once the hash is full.
+  def test_reliable_schedule_promote_counts_its_kills_by_class_up_to_the_cap
+    sset = "#{@ns}:retry"
+    @pool.with do |c|
+      c.call('ZADD', sset, 10, '{"class":"A","jid":"1"}', 11, '{"class":"A","jid":"2"}',
+             12, '{"wrapped":"W","class":"Wrapper","jid":"3"}', 13, '{"class":"B","jid":"4"}')
+
+      assert_equal 4, promote(c, sset, max_series: 2)
+      assert_equal({ '["unknown","A"]' => '2', '["unknown","W"]' => '1', OVERFLOW => '1' },
+                   c.call('HGETALL', "#{@ns}:deaths"))
     end
   end
 
@@ -796,10 +814,11 @@ class LuaTest < Wurk::Test::UnitCase
                                   keys: [base, "#{base}-jids", "#{base}-failed", "#{base}-pkids"], argv: jids)
   end
 
-  def promote(conn, sset, now_ms = 1_700_000_000_000)
+  def promote(conn, sset, now_ms = 1_700_000_000_000, max_series: 500)
     Wurk::Lua::Loader.eval_cached(
       conn, :reliable_schedule_promote,
-      keys: [sset, "#{@ns}:queues", "#{@ns}:dead"], argv: [500, "#{@ns}:queue:", now_ms, 500]
+      keys: [sset, "#{@ns}:queues", "#{@ns}:dead", "#{@ns}:deaths"],
+      argv: [500, "#{@ns}:queue:", now_ms, 500, max_series, OVERFLOW]
     )
   end
 end

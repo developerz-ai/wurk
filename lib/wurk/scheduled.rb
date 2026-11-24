@@ -4,6 +4,7 @@ require_relative 'component'
 require_relative 'keys'
 require_relative 'lua'
 require_relative 'lua/loader'
+require_relative 'metrics/deaths'
 require_relative 'client'
 require_relative 'process_set'
 require_relative 'timer_loop'
@@ -150,10 +151,12 @@ module Wurk
       def bury(jobstr, sset)
         # Two commands, no MULTI: a server that refuses the ZADD mid-transaction
         # (Dragonfly at maxmemory) still applies the ZREM, and the member is gone.
-        # A crash between them costs one more trip through here.
+        # A crash between them costs one more trip through here. The count runs
+        # last and never raises, so a replay of the block cannot count twice.
         @config.redis(idempotent: true) do |conn|
           conn.call('ZADD', Keys::DEAD, real_time.to_s, jobstr)
           conn.call('ZREM', sset, jobstr)
+          Metrics::Deaths.record(conn, jobstr, config: @config)
         end
       rescue *TRANSIENT_ERRORS => e
         handle_exception(e, { context: 'scheduler_restore', set: sset })
@@ -238,8 +241,9 @@ module Wurk
           promoted = Wurk::Lua::Loader.eval_cached(
             conn,
             :reliable_schedule_promote,
-            keys: [sset, Keys::QUEUES_SET, Keys::DEAD],
-            argv: [real_time.to_s, Keys::QUEUE_PREFIX, real_ms.to_s, PROMOTE_BATCH.to_s]
+            keys: [sset, Keys::QUEUES_SET, Keys::DEAD, Keys::STAT_DEATHS],
+            argv: [real_time.to_s, Keys::QUEUE_PREFIX, real_ms.to_s, PROMOTE_BATCH.to_s,
+                   Metrics::Deaths::MAX_SERIES.to_s, Metrics::Deaths::OVERFLOW]
           ).to_i
           Scheduled.record_promotions(sset, promoted)
           break if promoted < PROMOTE_BATCH || @done
