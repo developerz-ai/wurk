@@ -16,9 +16,9 @@ module Wurk
     # payload cannot supply is `unknown`. Distinct pairs past MAX_SERIES fold
     # into OVERFLOW (`lua/count_death.lua`).
     #
-    # Best effort: a count that fails after the kill is lost, and only Wurk
-    # writes it (a stock Sidekiq process in a mixed fleet does not). #record
-    # reports the failure; the schedule-promote script cannot, and drops it.
+    # Best effort, and only Wurk writes it (a stock Sidekiq process in a mixed
+    # fleet does not). #record reports a failed count, which may or may not have
+    # landed (a lost reply); the schedule-promote script cannot report, and drops it.
     #
     # Fields are encoded `script_safe`, escaping `/` as Redis's cjson does, so a
     # pair the schedule-promote script counts lands on the same field.
