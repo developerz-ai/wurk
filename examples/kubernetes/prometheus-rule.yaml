@@ -59,7 +59,10 @@ spec:
         # worker rollout nor a pod going stale with the freshest value splits it or
         # dips it into a false reset. increase() never counts a series' first sample,
         # so a pair new inside the hour (deaths before its first scrape) counts its
-        # last value instead, unless the raw counter had a sample in the day before.
+        # last value instead, unless the raw counter had a sample in the day before
+        # (so a scrape gap longer than a day replays the pair's total once).
+        # Assumes one Redis store per namespace: with two fleets on two stores in one
+        # namespace, add a label that names the store to both `by` clauses.
         - record: wurk:jobs_dead_total:max
           expr: max by (namespace, queue, class) (max_over_time(wurk_jobs_dead_total[5m]))
         - record: wurk:jobs_dead:increase1h
