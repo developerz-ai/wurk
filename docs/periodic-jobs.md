@@ -420,8 +420,10 @@ process (deleted, renamed, or a rollback to code that predates it), the poller
 claims the occurrence and skips it. No job is pushed. It logs a WARN naming the
 class and the entry, and hands a `Wurk::SidekiqCron::Job::UnknownWorkerClass`
 to your error handlers once per entry per process (as the loop guard does).
-A vanished class cannot turn into a retry storm, because pushing the bare name
-would run with the entry's default retries.
+The shared claim is an **at-most-once** guarantee, not delivery: neither
+poller pushes the occurrence when the class is missing, so it is lost for that
+slot. A vanished class cannot turn into a retry storm, because pushing the bare
+name would run with the entry's default retries.
 
 **The gem wins when both are present.** With `sidekiq-cron` in the bundle, Wurk
 registers no `Sidekiq::Cron` autoload, its `sidekiq/cron*` files load the gem's,

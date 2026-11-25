@@ -278,20 +278,37 @@ class SidekiqCronTest < Wurk::Test::UnitCase
     poller = Wurk::SidekiqCron::Poller.new(Wurk.configuration)
     at = Time.now.utc + 3600
 
-    # One occurrence claimed per distinct slot: two fires of the same entry.
-    2.times { |step| poller.enqueue(at + ((step + 1) * 60)) }
+    # Two distinct occurrences claimed, then one replay of the first slot.
+    # The replay must not warn again: the claim happens before the guard, so
+    # a replay is an at-most-once skip, not a fresh occurrence.
+    key = Sidekiq::Cron::Job.job_enqueued_key(name, namespace)
+    Sidekiq.redis { |conn| conn.del(key) }
+    job = Sidekiq::Cron::Job.find(name)
+    ticks = [at + 60, at + 120]
+    ticks.each { |tick| poller.enqueue(tick) }
+    read_claims = -> { Sidekiq.redis { |conn| conn.zrange(key, 0, -1, withscores: true).to_a } }
+    claimed = read_claims.call
+
+    assert_equal 2, claimed.size, 'both distinct occurrences must be claimed'
+    assert_equal ticks.map { |tick| job.send(:due_slot, tick).iso8601 }.sort, claimed.map(&:first).sort
+
+    poller.enqueue(ticks.first)
+
+    assert_equal claimed, read_claims.call
 
     pushed = redis('LRANGE', "queue:#{queue}", 0, -1)
 
     assert_empty pushed, 'nothing may be pushed for a class this process cannot load'
     refute_includes pushed.map { |raw| JSON.parse(raw)['class'] }, 'NoSuchJobAnywhere'
-    assert_empty Sidekiq::Cron::Job.find(name).jid_history_from_redis
+    assert_empty job.jid_history_from_redis
     assert_equal 1, reports.size
     assert_kind_of Wurk::SidekiqCron::Job::UnknownWorkerClass, reports.first.first
     assert_equal name, reports.first.last[:name]
-    assert_equal 2, log.string.scan(
+    warnings = log.string.scan(
       /WARN.*class NoSuchJobAnywhere is not defined in this process entry=#{Regexp.escape(name)}/
-    ).size
+    )
+
+    assert_equal 2, warnings.size, 'the replayed slot must not warn again'
   ensure
     Sidekiq::Cron::Job.unknown_worker_classes.delete([namespace, name]) if name && namespace
     Sidekiq.logger = original if original
