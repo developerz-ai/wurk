@@ -251,11 +251,68 @@ class SidekiqCronTest < Wurk::Test::UnitCase
     assert_equal 1, queued('from_class')
   end
 
-  def test_an_unknown_class_is_pushed_by_name
-    load_schedule('ghost' => entry('class' => 'NoSuchJobAnywhere', 'queue' => 'ghosts'))
-    Sidekiq::Cron::Job.find('ghost').enqueue!
+  # Manual Enqueue-now deliberately keeps the gem's by-name push: an operator
+  # asked for it, and it is not the poller's repeat-every-tick path.
+  def test_an_unknown_class_is_pushed_by_name_manually
+    load_schedule('ghost-manual' => entry('class' => 'NoSuchJobAnywhere', 'queue' => 'ghosts-manual'))
+    Sidekiq::Cron::Job.find('ghost-manual').enqueue!
 
-    assert_equal 'NoSuchJobAnywhere', JSON.parse(redis('RPOP', 'queue:ghosts'))['class']
+    assert_equal 'NoSuchJobAnywhere', JSON.parse(redis('RPOP', 'queue:ghosts-manual'))['class']
+  end
+
+  # The poller is the retry-storm path: a vanished class pushed by bare name
+  # would fail under the entry's default retries on every tick.
+  def test_poller_skips_an_unknown_class_and_reports_it_once
+    name = "ghost-poll-#{Process.pid}-#{SecureRandom.hex(4)}"
+    namespace = 'default'
+    queue = "ghosts-poll-#{Process.pid}"
+    reports = []
+    original_handlers = Wurk.configuration.error_handlers.dup
+    Wurk.configuration.error_handlers.replace([->(error, context, _cfg) { reports << [error, context] }])
+    log = StringIO.new
+    original = Sidekiq.logger
+    Sidekiq.logger = Logger.new(log)
+    attributes = { 'class' => 'NoSuchJobAnywhere', 'namespace' => namespace,
+                   'queue' => queue, 'cron' => '* * * * * UTC' }
+    load_schedule(name => entry(attributes))
+    poller = Wurk::SidekiqCron::Poller.new(Wurk.configuration)
+    at = Time.now.utc + 3600
+
+    # Two distinct occurrences claimed, then one replay of the first slot.
+    # The replay must not warn again: the claim happens before the guard, so
+    # a replay is an at-most-once skip, not a fresh occurrence.
+    key = Sidekiq::Cron::Job.job_enqueued_key(name, namespace)
+    Sidekiq.redis { |conn| conn.del(key) }
+    job = Sidekiq::Cron::Job.find(name)
+    ticks = [at + 60, at + 120]
+    ticks.each { |tick| poller.enqueue(tick) }
+    read_claims = -> { Sidekiq.redis { |conn| conn.zrange(key, 0, -1, withscores: true).to_a } }
+    claimed = read_claims.call
+
+    assert_equal 2, claimed.size, 'both distinct occurrences must be claimed'
+    assert_equal ticks.map { |tick| job.send(:due_slot, tick).iso8601 }.sort, claimed.map(&:first).sort
+
+    poller.enqueue(ticks.first)
+
+    assert_equal claimed, read_claims.call
+
+    pushed = redis('LRANGE', "queue:#{queue}", 0, -1)
+
+    assert_empty pushed, 'nothing may be pushed for a class this process cannot load'
+    refute_includes pushed.map { |raw| JSON.parse(raw)['class'] }, 'NoSuchJobAnywhere'
+    assert_empty job.jid_history_from_redis
+    assert_equal 1, reports.size
+    assert_kind_of Wurk::SidekiqCron::Job::UnknownWorkerClass, reports.first.first
+    assert_equal name, reports.first.last[:name]
+    warnings = log.string.scan(
+      /WARN.*class NoSuchJobAnywhere is not defined in this process entry=#{Regexp.escape(name)}/
+    )
+
+    assert_equal 2, warnings.size, 'the replayed slot must not warn again'
+  ensure
+    Sidekiq::Cron::Job.unknown_worker_classes.delete([namespace, name]) if name && namespace
+    Sidekiq.logger = original if original
+    Wurk.configuration.error_handlers.replace(original_handlers) if original_handlers
   end
 
   def test_history_is_capped

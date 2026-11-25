@@ -38,6 +38,13 @@ module Wurk
       GLOBALID_KEY = Arguments::GLOBALID_KEY
       TRUE_FLAG = /\A(true|t|yes|y|1)\z/i
 
+      class EnqueueError < Wurk::Error; end
+      class UnknownWorkerClass < Wurk::Error; end
+
+      def self.unknown_worker_classes
+        @unknown_worker_classes ||= ::Set.new
+      end
+
       attr_accessor :name, :namespace, :cron, :description, :klass, :message
       attr_reader :last_enqueue_time, :fetch_missing_args, :source, :args, :status
 

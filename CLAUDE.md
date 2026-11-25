@@ -34,6 +34,7 @@ Three pillars, all must stay true:
 - Use git worktrees. Work in this checkout; parallel agents split into disjoint file sets.
 - Touch Redis DB 0, or run `FLUSHALL` or `SCRIPT FLUSH`, from a test or harness. Local DB 0 is someone's data, and those two cross logical DBs. Use `WURK_TEST_DB_OFFSET` or a private port.
 - Merge a breaking change without a human decision.
+- Push a periodic or scheduled entry whose class this process cannot load. Claim and skip the occurrence, never push a bare class name: default retries turn it into a retry storm.
 
 ## Commands
 

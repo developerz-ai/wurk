@@ -27,8 +27,32 @@ module Wurk
         def test_and_enqueue_for_time!(time)
           return unless should_enqueue?(time)
 
+          if constantize(@klass.to_s).nil?
+            skip_unknown_class
+            remove_previous_enqueues(time)
+            return
+          end
+
           enqueue!
           remove_previous_enqueues(time)
+        end
+
+        # The occurrence is already claimed, so it will not fire again until
+        # the next one. Warn on every skipped occurrence and report once per
+        # entry per process, as Wurk::Cron does: a by-name push here would drop
+        # the worker's sidekiq_options and fail under the entry's retries.
+        def skip_unknown_class
+          message = "[sidekiq-cron] class #{@klass} is not defined in this process entry=#{@name} " \
+                    'occurrence skipped; retire the entry to stop the reports'
+          ::Sidekiq.logger.warn(message)
+
+          key = [@namespace, @name]
+          return unless self.class.unknown_worker_classes.add?(key)
+
+          Wurk.configuration.handle_exception(
+            UnknownWorkerClass.new(message),
+            { context: 'sidekiq-cron', name: @name, namespace: @namespace, klass: @klass.to_s }
+          )
         end
 
         def enqueue!(time = ::Time.now.utc)
