@@ -29,6 +29,16 @@ class MetricsDeathsTest < Wurk::Test::UnitCase
     assert_equal '["q","A\\/B"]', Deaths.field('queue' => 'q', 'class' => 'A/B'), 'escaped as cjson does'
   end
 
+  # The promote script writes its field with cjson: whatever json version is
+  # installed, Ruby must write the same bytes.
+  def test_field_is_the_bytes_redis_cjson_writes
+    ['A/B', '</script>', "L\u2028S", 'Plain::Job', 'q"uote', 'back\\slash'].each do |klass|
+      cjson = @pool.with { |c| c.call('EVAL', 'return cjson.encode({ARGV[1], ARGV[2]})', 0, 'q', klass) }
+
+      assert_equal cjson.dup.force_encoding(Encoding::UTF_8), Deaths.field('queue' => 'q', 'class' => klass), klass
+    end
+  end
+
   def test_new_fields_past_the_cap_fold_into_overflow
     stub_const(:MAX_SERIES, 2) do
       @pool.with do |c|
