@@ -1268,7 +1268,9 @@ production. Each one links to its full rationale in
 
 **Custom-fetcher contract.** `Sidekiq::BasicFetch` is an alias for
 `Wurk::Fetcher::Reliable`. On shutdown timeout, Manager passes unfinished units of
-work to `bulk_requeue(inprogress)` before killing their processor threads. The
+work to `bulk_requeue(inprogress)`: before killing their processor threads for a
+fetcher of your own, and once the killed threads have unwound (2s at most) for
+Reliable and its subclasses, whose private list holds the payload meanwhile. The
 inherited implementation flushes pending ACKs, derives Reliable's expected private
 list from each unit's `queue`, and attempts to `LREM` its raw `job` payload there.
 It only `RPUSH`es the payload to the public queue if `LREM` removed it. This ownership

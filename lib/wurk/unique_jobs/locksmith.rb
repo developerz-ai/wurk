@@ -129,14 +129,15 @@ module Wurk
       def execute
         raise InvalidArgument, '#execute needs a block' unless block_given?
 
-        acquired = UniqueJobs.redis { |conn| locked?(conn) || acquired_blocking?(conn, nil) }
+        run&.mark(key.digest)
+        acquired = UniqueJobs.redis { |conn| claimed?(conn) || acquired_blocking?(conn, nil) }
         yield if acquired
       end
 
       def unlock(conn = nil) = unlock!(conn)
 
       def unlock!(conn = nil)
-        jid = run_script(:unique_jobs_unlock, conn, argv + [@sync_locked ? 1 : 0])
+        jid = run_script(:unique_jobs_unlock, conn, argv + [@sync_locked ? 1 : 0, run_token])
         reflect(:unlocked, item) if jid == job_id
         jid
       end
@@ -178,7 +179,7 @@ module Wurk
         write_lock_info(conn)
         return false unless primed?(conn, wait)
 
-        !run_script(:unique_jobs_lock, conn, argv).nil?
+        !run_script(:unique_jobs_lock, conn, argv + [run_token]).nil?
       end
 
       def primed?(conn, wait)
@@ -206,13 +207,23 @@ module Wurk
       end
 
       # The lock's own arguments, then what every script appends: the time, the
-      # changelog cap and the gem's script name; unlock's sync flag goes last.
+      # changelog cap and the gem's script name; what only one script takes goes last.
       def run_script(script, conn, args)
         injected = [UniqueJobs.now_f, UniqueJobs.config.max_history.to_i, Script::NAMES.fetch(script)]
         full = args.first(5) + injected + args.drop(5)
         return Script.call(script, conn, keys: key.to_a, argv: full) if conn
 
         UniqueJobs.redis { |c| Script.call(script, c, keys: key.to_a, argv: full) }
+      end
+
+      def run = Run.of(item)
+      def run_token = run&.token_for(key.digest).to_s
+
+      # Enters a lock this jid already holds, as its newest run.
+      def claimed?(conn)
+        return locked?(conn) unless run
+
+        Script.call(:unique_jobs_claim, conn, keys: key.to_a, argv: [job_id, run_token]) == 1
       end
 
       def argv = [job_id, config.pttl, config.type.to_s, config.limit.to_i, item[AT].to_s]

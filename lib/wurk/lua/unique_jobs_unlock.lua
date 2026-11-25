@@ -2,10 +2,13 @@
 -- lock (or the lock was orphaned), nil while another holder keeps it. The "1"
 -- pushed to QUEUED wakes a job blocked on the lock. Every key is in KEYS.
 -- KEYS = [digest, queued, primed, locked, info, changelog, digests, expiring_digests]
--- ARGV = [jid, pttl, lock_type, limit, lock_score, now, max_history, script_name, sync_locked]
+-- ARGV = [jid, pttl, lock_type, limit, lock_score, now, max_history, script_name, sync_locked, run]
+-- `run` is Wurk's: the token of the run unlocking (see unique_jobs_claim.lua), empty
+-- when the unlock is the jid's. A lock marked by another run of the jid is left whole.
 local digest, queued, primed, locked, info, changelog, digests = KEYS[1], KEYS[2], KEYS[3], KEYS[4], KEYS[5], KEYS[6], KEYS[7]
 local job_id, lock_type, limit = ARGV[1], ARGV[3], tonumber(ARGV[4])
 local now, max_history, script_name, sync_locked = tonumber(ARGV[6]), tonumber(ARGV[7]), ARGV[8], ARGV[9] == "1"
+local run = ARGV[10] or ""
 
 local function log(message, prev_jid)
   if not max_history or max_history == 0 then return end
@@ -25,9 +28,17 @@ if sync_locked and limit <= 1 then
 end
 
 local holds_lock = redis.call("HEXISTS", locked, job_id) == 1
+if holds_lock and #run > 0 and redis.call("HGET", locked, job_id) ~= run then
+  log("Superseded by a later run")
+  return nil
+end
 if not holds_lock then
-  redis.call("LREM", queued, -1, job_id)
-  redis.call("LREM", primed, -1, job_id)
+  -- A run that held the lock left the line when it took it: an entry of its jid
+  -- there now is a later run's.
+  if #run == 0 then
+    redis.call("LREM", queued, -1, job_id)
+    redis.call("LREM", primed, -1, job_id)
+  end
   local others = redis.call("LLEN", queued) + redis.call("LLEN", primed) + redis.call("HLEN", locked)
   if others > 0 then
     log("Yielding to other lock holders")

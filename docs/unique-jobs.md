@@ -437,7 +437,8 @@ The native copy writes and reads what the gem 8.1 writes and reads, byte for byt
 - `uniquejobs:<md5>` from `"uniquejobs:" + MD5(JSON(sorted class, queue,
   lock_args[, apartment]))` (SHA3-256 under `digest_algorithm = :modern`), and
   `lock_digest`, `lock_args`, `lock_ttl`, `lock_timeout`, `lock_prefix` in the payload;
-- the STRING holding the jid, `:QUEUED` / `:PRIMED` lists, `:LOCKED` hash, `:INFO`,
+- the STRING holding the jid, `:QUEUED` / `:PRIMED` lists, `:LOCKED` hash (jid to a
+  Unix time, see [two runs of one job](#two-runs-of-one-job-wurk-only)), `:INFO`,
   `<digest>:RUN:*` for runtime locks, the `uniquejobs:digests` and
   `uniquejobs:expiring_digests` sorted sets, `uniquejobs:changelog`, and the
   `uniquejobs:reaper` key that elects one reaper per fleet.
@@ -546,17 +547,19 @@ end
 - `job` is the running job instance (`self` in `perform`), its jid, or its
   payload hash. A jid or an instance is looked up among the unique jobs this
   process is running, so it works inside `perform` or a thread `perform` started,
-  and raises `ArgumentError` anywhere else; a payload works from anywhere.
+  and raises `ArgumentError` anywhere else. A payload works from anywhere; one that
+  is not running in this process is known by its jid alone.
 - `ttl` is seconds (an Integer, a Float or an `ActiveSupport::Duration`). Left
   out, it is the `lock_ttl` the payload carries, the TTL the lock was taken with
   (for a scheduled job that includes the wait until `at`, as at push). Anything
   but a positive number raises `ArgumentError`.
-- One Lua script, atomic: when the jid is still in the lock's `:LOCKED` hash, the
+- One Lua script, atomic: when this run of the jid still holds the lock, the
   lock's keys (the digest, `:LOCKED`, `:INFO`) expire `ttl` from now, and an
   `until_expired` lock's `uniquejobs:expiring_digests` score moves with them, so
   the reaper sees the new expiry. Returns `true`. Otherwise it writes nothing and
   returns `false`: a refresh never takes a lock, so one that comes after expiry,
-  or after another jid took the lock, cannot steal it back. The `:QUEUED` and
+  or after another jid, or a later run of this one, took the lock, cannot steal it
+  back. The `:QUEUED` and
   `:PRIMED` lists belong to waiters and keep their own expiry. A lock taken with
   no TTL is left with none; the call only reports whether it is held.
 - `true` sets the remaining TTL to `ttl`, so a shorter `ttl` shortens it.
@@ -574,6 +577,28 @@ Which lock a refresh renews during `perform`, per type:
 
 `lock_limit:` above 1 keeps every holder's jid in one `:LOCKED` hash, so a renewal
 by any holder extends the expiry of all of them.
+
+### Two runs of one job (Wurk only)
+
+A job can be running twice: an interrupted run past its requeue that is still
+unwinding, or a process cut off from Redis whose job the reaper gave to another. The
+lock admits the second run, because by jid it is the same job, and that is what lets
+a job re-enter the lock of a run that crashed. In the gem, and in Wurk up to 1.20,
+the two were then one holder: whichever ended first released the lock for both, and
+`refresh_lock!` told both they held it.
+
+Each run now marks the lock it enters, and the newest mark is the holder. An older
+run unlocks nothing (its `after_unlock` does not run, and `unlock_failed` is
+reflected), its `refresh_lock!` returns `false`, and an unlock it still owes after a
+Redis outage is dropped. The mark is the value beside the jid in `:LOCKED`: the
+gem keeps the lock's time there and this is the time the run entered, with random
+digits below the microsecond. Nothing else in Redis or in the payload changes.
+
+This fences the lock, not the job: the older run goes on executing until it ends or
+checks. Call `refresh_lock!` before a write that must not be doubled, and stop on
+`false`. A process on the gem or on Wurk 1.20 does not write or check marks, so while
+a fleet mixes them, its unlock still releases the lock under a re-run, as it always
+did. That includes the deploy that brings this in: the pods it stops are the old ones.
 
 ### And the Enterprise API
 

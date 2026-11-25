@@ -174,12 +174,22 @@ are never served from this cache.
 ### Graceful shutdown
 
 On `SIGTERM`, in-flight jobs get until `shutdown_timeout` (default **25s**,
-`config[:timeout]`) to finish. Pending ACKs are flushed first, then whatever is
-still running at the deadline is moved private-list → public queue by
-`bulk_requeue`, using a guarded `RPUSH` then `LREM` in one Lua hop, before the threads
-are killed.
+`config[:timeout]`) to finish. Whatever is still running at the deadline is
+interrupted (`Wurk::Shutdown` raised into its thread) and given up to 2s to unwind.
+Pending ACKs are then flushed, and what is still parked is moved private-list →
+public queue by `bulk_requeue`, using a guarded `RPUSH` then `LREM` in one Lua hop.
 
-That ordering is load-bearing. A job that finished moments before the deadline
+That ordering is load-bearing, twice. A requeued job is running in another process
+within a millisecond, so it goes back only once its own thread is out of its
+`ensure` blocks: those release locks and limiter slots, and save cursors, that the
+next run depends on. A thread that does not unwind in time is requeued all the same,
+and the two runs overlap until the process exits. Until the move the payload sits in
+the private list, so a SIGKILL during the wait loses nothing: the reaper brings it
+back, later than the move would have. (A `config[:fetch_class]` fetcher that is not
+a `Fetcher::Reliable` has no private list, so its jobs are requeued before the
+threads are interrupted.)
+
+And a job that finished moments before the deadline
 has an ACK still pending; requeuing before flushing it would find the payload
 still in the private list, pass the guard, and re-run completed work on every
 graceful shutdown.

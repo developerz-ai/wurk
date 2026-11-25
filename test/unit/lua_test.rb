@@ -48,7 +48,8 @@ class LuaTest < Wurk::Test::UnitCase
          status_write debounce throttle_slot queue_slot fetch_slot fetch_first refresh_slots
          flow_create flow_advance flow_fail flow_abandon
          unique_jobs_queue_and_lock unique_jobs_queue unique_jobs_lock unique_jobs_unlock unique_jobs_delete
-         unique_jobs_delete_by_digest unique_jobs_delete_job_by_digest unique_jobs_refresh count_death].sort,
+         unique_jobs_delete_by_digest unique_jobs_delete_job_by_digest unique_jobs_refresh
+         unique_jobs_claim count_death].sort,
       Wurk::Lua::SCRIPTS.keys.sort
     )
   end

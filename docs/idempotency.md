@@ -21,7 +21,7 @@ retry pays for the call again. Wurk logs each one when the drain deadline passes
 
 ```text
 WARN: Terminating 2 busy threads
-WARN: Interrupting ArticleGenerationJob jid=1f0c… queue=default: past the shutdown deadline, it is requeued to run again
+WARN: Interrupting ArticleGenerationJob jid=1f0c… queue=default: past the shutdown deadline, runs again unless it finishes on its way out
 ```
 
 The payload has no "this is a re-run" field. Sidekiq's job JSON has none, and

@@ -555,6 +555,108 @@ class ManagerTest < Wurk::Test::UnitCase
     assert_includes fetcher.calls, [:bulk_requeue, []]
   end
 
+  # --- hard_shutdown order --------------------------------------------
+
+  # Runs until it is told to stop, then takes its time unwinding, the way a job
+  # with an `ensure` of its own does.
+  class UnwindingJob
+    include Wurk::Job
+
+    class << self
+      attr_accessor :gate
+    end
+
+    def perform(outcome)
+      gate = self.class.gate
+      gate[:started] << true
+      sleep
+    rescue Wurk::Shutdown
+      gate[:unwinding] << true
+      gate[:release].pop
+      gate[:log] << :unwound
+      raise if outcome == 'raise'
+      raise ArgumentError, 'broke on the way out' if outcome == 'fail'
+    end
+  end
+
+  # A payload on the public queue is running elsewhere within a millisecond, so
+  # it must not be there while its own thread is still in `ensure` blocks: those
+  # release the locks the next run takes (TREASURY-F1P).
+  def test_hard_shutdown_requeues_a_job_only_once_its_thread_has_unwound
+    mgr = start_unwinding('raise')
+    stopper = Thread.new { mgr.hard_shutdown }
+    @gate[:unwinding].pop
+
+    assert_equal [0, 1], list_sizes, 'the payload must wait in the private list while its thread unwinds'
+
+    @gate[:release] << true
+    stopper.join
+
+    assert_equal [1, 0], list_sizes
+    assert_equal [:unwound], @gate[:log]
+  end
+
+  # A job that rescues the interrupt and returns has finished: it is ACKed, and
+  # running it again would repeat it.
+  def test_hard_shutdown_does_not_requeue_a_job_that_finishes_while_unwinding
+    mgr = start_unwinding('return')
+    stopper = Thread.new { mgr.hard_shutdown }
+    @gate[:unwinding].pop
+    @gate[:release] << true
+    stopper.join
+
+    assert_equal [0, 0], list_sizes
+  end
+
+  # A thread that will not unwind holds up the requeue only so long: its payload
+  # goes back while it still runs, as one past saving.
+  def test_hard_shutdown_requeues_a_job_whose_thread_never_unwinds
+    mgr = start_unwinding('raise')
+    started = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+    mgr.hard_shutdown
+    elapsed = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - started
+
+    assert_equal [1, 0], list_sizes
+    assert_empty @gate[:log], 'the thread was meant to be still unwinding'
+    assert_operator elapsed, :<, 4, 'hard_shutdown must stay inside the launcher\'s join budget'
+  ensure
+    @gate[:release] << true
+  end
+
+  # The wait is interruptible (an embedded host's own timeout around #stop), and
+  # the payload must go back all the same.
+  def test_hard_shutdown_requeues_even_when_its_wait_is_interrupted
+    mgr = start_unwinding('raise')
+    stopper = Thread.new do
+      mgr.hard_shutdown
+    rescue RuntimeError
+      nil
+    end
+    @gate[:unwinding].pop
+    stopper.raise 'host timeout'
+    stopper.join
+
+    assert_equal [1, 0], list_sizes
+  ensure
+    @gate[:release] << true
+  end
+
+  # Without a private list nothing holds the payload while a thread unwinds, so a
+  # SIGKILL in the wait would lose it: a fetcher of its own requeues first.
+  def test_hard_shutdown_requeues_a_plug_in_fetchers_jobs_before_killing
+    fetcher = PlugInFetcher.new(@capsule)
+    @capsule.fetcher = fetcher
+    mgr = Wurk::Manager.new(@capsule)
+    mgr.workers.each do |w|
+      w.define_singleton_method(:job) { nil }
+      w.define_singleton_method(:kill) { fetcher.calls << :kill }
+    end
+
+    mgr.hard_shutdown
+
+    assert_equal [[:bulk_requeue, []], :kill, :kill, :kill], fetcher.calls
+  end
+
   # --- watchdog lifecycle ----------------------------------------------
 
   # The capsule's per-job watchdog is released by #stop, not #quiet: a quieted
@@ -610,6 +712,27 @@ class ManagerTest < Wurk::Test::UnitCase
 
   def private_queue
     Wurk::Fetcher::Reliable.private_queue_name(@public_queue)
+  end
+
+  # A started Manager whose one worker is inside UnwindingJob#perform.
+  def start_unwinding(outcome)
+    @gate = { started: Queue.new, unwinding: Queue.new, release: Queue.new, log: [] }
+    UnwindingJob.gate = @gate
+    @config.error_handlers.clear
+    @capsule.concurrency = 1
+    mgr = Wurk::Manager.new(@capsule)
+    payload = Wurk.dump_json('class' => UnwindingJob.name, 'jid' => "u-#{object_id}", 'queue' => @queue_name,
+                             'args' => [outcome], 'retry' => false)
+    @pool.with { |c| c.call('LPUSH', @public_queue, payload) }
+    mgr.start
+    @gate[:started].pop
+    mgr.quiet
+    mgr
+  end
+
+  # [public, private]
+  def list_sizes
+    @pool.with { |c| [c.call('LLEN', @public_queue), c.call('LLEN', private_queue)] }
   end
 
   # `fetcher:` is what #acknowledge defers into; a unit without one raises

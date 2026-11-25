@@ -97,12 +97,14 @@ module Wurk
         true
       end
 
-      # Locksmith#unlock only drops a lock this jid holds. Both digests: an
+      # Locksmith#unlock only drops a lock this run holds: the write can land long
+      # after the job, when its jid is running again elsewhere. Both digests: an
       # until_and_while_executing job takes its base lock back when an error
       # crosses it, on top of the `:RUN` lock it may still hold.
       def release_unique_locks(job)
         locksmith = UniqueJobsCompat.locksmith_class
-        digests(job).each { |digest| locksmith.new(job.merge('lock_digest' => digest)).unlock }
+        # A #dup is still this run's payload (UniqueJobs::Run); a #merge need not be.
+        digests(job).each { |digest| locksmith.new(job.dup.update('lock_digest' => digest)).unlock }
       end
 
       def digests(job)
