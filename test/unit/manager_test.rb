@@ -352,14 +352,12 @@ class ManagerTest < Wurk::Test::UnitCase
     killed = []
     workers.each { |w| w.define_singleton_method(:kill) { killed << self } }
 
-    bulk_requeue_args = nil
-    @capsule.fetcher.define_singleton_method(:bulk_requeue) do |jobs|
-      bulk_requeue_args = jobs
-    end
+    requeued = []
+    @capsule.fetcher.define_singleton_method(:bulk_requeue) { |jobs| requeued.concat(jobs) }
 
     mgr.hard_shutdown
 
-    assert_equal [uow_a, uow_b], bulk_requeue_args, 'nil jobs must be compacted out'
+    assert_equal [uow_a, uow_b], requeued, 'nil jobs must be compacted out'
     assert_equal workers.sort_by(&:object_id), killed.sort_by(&:object_id)
   end
 
@@ -555,6 +553,322 @@ class ManagerTest < Wurk::Test::UnitCase
     assert_includes fetcher.calls, [:bulk_requeue, []]
   end
 
+  # --- hard_shutdown order --------------------------------------------
+
+  # Runs until it is told to stop, then takes its time unwinding, the way a job
+  # with an `ensure` of its own does. Each outcome is a way jobs lose the interrupt.
+  class UnwindingJob
+    include Wurk::Job
+
+    class << self
+      attr_accessor :gate
+    end
+
+    sidekiq_retry_in do |*|
+      gate[:booking] << true
+      gate[:release].pop
+      60
+    end
+
+    def perform(outcome)
+      gate[:started] << true
+      return if outcome == 'finish'
+      raise ArgumentError, 'broke before the interrupt' if outcome == 'fail_first'
+
+      wait_for_interrupt(outcome)
+    rescue IOError
+      raise unless outcome == 'ensure'
+    end
+
+    private
+
+    def gate = self.class.gate
+
+    def wait_for_interrupt(outcome)
+      sleep
+    rescue Wurk::Shutdown => e
+      gate[:unwinding] << true
+      gate[:release].pop
+      gate[:log] << :unwound
+      leave(outcome, e)
+    end
+
+    def leave(outcome, interrupt)
+      case outcome
+      when 'swallow' then nil
+      when 'ensure' then raise IOError, 'the cleanup failed'
+      when 'nocause' then raise ArgumentError.new('rewritten'), cause: nil
+      when 'reschedule' then raise Wurk::Job::Interrupted
+      else raise interrupt
+      end
+    end
+  end
+
+  # Swallows what comes out of the job, as an app's catch-all logging does.
+  class SwallowingMiddleware
+    include Wurk::Middleware::ServerMiddleware
+
+    def call(*)
+      yield
+    rescue Exception # rubocop:disable Lint/RescueException
+      nil
+    end
+  end
+
+  # Turns it into an error of its own, with nothing left of what caused it.
+  class RewritingMiddleware
+    include Wurk::Middleware::ServerMiddleware
+
+    def call(*)
+      yield
+    rescue Wurk::Shutdown
+      raise ArgumentError.new('rewritten'), cause: nil
+    end
+  end
+
+  # Holds a job that has performed in its own middleware.
+  class HoldingMiddleware
+    include Wurk::Middleware::ServerMiddleware
+
+    def call(*)
+      yield
+      gate = UnwindingJob.gate
+      Thread.handle_interrupt(Wurk::Shutdown => :never) do
+        gate[:unwinding] << true
+        gate[:release].pop
+      end
+    end
+  end
+
+  # A payload on the public queue is running elsewhere within a millisecond, so
+  # it must not be there while its own thread is still in `ensure` blocks: those
+  # release what the next run takes (TREASURY-F1P).
+  def test_hard_shutdown_requeues_a_job_only_once_its_thread_has_unwound
+    mgr = start_unwinding('raise')
+    stopper = Thread.new { mgr.hard_shutdown }
+    @gate[:unwinding].pop
+
+    assert_equal [0, 1], list_sizes, 'the payload must wait in the private list while its thread unwinds'
+
+    @gate[:release] << true
+    stopper.join
+
+    assert_equal [1, 0], list_sizes
+    assert_equal [:unwound], @gate[:log]
+  end
+
+  # Sent the interrupt before its perform completed, a job is not finished,
+  # whatever it makes of it: swallowed, replaced by its own cleanup's error and
+  # rescued, rewritten with no cause, turned into an iteration stop. At least once.
+  %w[swallow ensure nocause reschedule].each do |outcome|
+    define_method("test_hard_shutdown_requeues_a_job_that_loses_the_interrupt_by_#{outcome}") do
+      mgr = start_unwinding(outcome)
+      interrupt(mgr)
+
+      assert_equal [1, 0], list_sizes
+    end
+  end
+
+  # What it was interrupted into booked nothing: one copy, not a retry beside it.
+  def test_hard_shutdown_books_no_retry_for_an_error_the_interrupt_caused
+    mgr = start_unwinding('nocause', retries: 5)
+    interrupt(mgr)
+
+    assert_equal [1, 0], list_sizes
+    assert_equal 0, booked(Wurk::Keys::RETRY)
+  end
+
+  def test_hard_shutdown_kills_no_job_for_an_error_the_interrupt_caused
+    died = []
+    @config.death_handlers << ->(job, _error) { died << job['jid'] }
+    mgr = start_unwinding('nocause')
+    interrupt(mgr)
+
+    assert_equal [1, 0], list_sizes
+    assert_empty died
+  end
+
+  def test_hard_shutdown_requeues_a_job_whose_middleware_swallows_the_interrupt
+    @capsule.config.server_middleware.add(SwallowingMiddleware)
+    mgr = start_unwinding('raise')
+    interrupt(mgr)
+
+    assert_equal [1, 0], list_sizes
+  end
+
+  def test_hard_shutdown_books_no_retry_for_what_middleware_makes_of_the_interrupt
+    @capsule.config.server_middleware.add(RewritingMiddleware)
+    mgr = start_unwinding('raise', retries: 5)
+    interrupt(mgr)
+
+    assert_equal [1, 0], list_sizes
+    assert_equal 0, booked(Wurk::Keys::RETRY)
+  end
+
+  # The thread's last job completing says nothing about this one.
+  def test_hard_shutdown_requeues_a_swallowed_interrupt_after_a_finished_job
+    mgr = start_unwinding('finish', 'swallow', concurrency: 1)
+    interrupt(mgr)
+
+    assert_equal [1, 0], list_sizes
+  end
+
+  # Finished before the interrupt was sent: its middleware is all that is left,
+  # and running it again would repeat it.
+  def test_hard_shutdown_does_not_requeue_a_job_that_had_finished
+    @capsule.config.server_middleware.add(HoldingMiddleware)
+    mgr = start_unwinding('finish')
+    @gate[:unwinding].pop
+    stopper = Thread.new { mgr.hard_shutdown }
+    wait_until { mgr.workers.all? { |w| w.instance_variable_get(:@interrupted) } }
+    @gate[:release] << true
+    stopper.join
+
+    assert_equal [0, 0], list_sizes
+  end
+
+  # Failed and its retry booked before the interrupt was sent: the retry is the
+  # job's next run. Held where the failure is reported, which is after the booking.
+  def test_hard_shutdown_does_not_requeue_a_job_whose_retry_is_booked
+    mgr = start_unwinding('fail_first', retries: 5)
+    @gate[:release] << true
+    @gate[:reported].pop
+    stopper = Thread.new { mgr.hard_shutdown }
+    wait_until { mgr.workers.all? { |w| w.instance_variable_get(:@interrupted) } }
+    @gate[:report_release] << true
+    stopper.join
+
+    assert_equal [0, 0], list_sizes
+    assert_equal 1, booked(Wurk::Keys::RETRY)
+  end
+
+  # The same, held on its way out of the dispatch.
+  def test_hard_shutdown_does_not_requeue_a_job_leaving_with_its_retry_booked
+    gate = nil
+    @config[:reloader] = proc do |&job|
+      job.call
+    ensure
+      gate[:reported] << true
+      gate[:report_release].pop
+    end
+    mgr = start_unwinding('fail_first', retries: 5) { |made| gate = made }
+    @gate[:release] << true
+    @gate[:reported].pop
+    stopper = Thread.new { mgr.hard_shutdown }
+    wait_until { mgr.workers.all? { |w| w.instance_variable_get(:@interrupted) } }
+    2.times { @gate[:report_release] << true }
+    stopper.join
+
+    assert_equal [0, 0], list_sizes
+    assert_equal 1, booked(Wurk::Keys::RETRY)
+  end
+
+  # Sent while the retry is being booked, the interrupt can cut that short: the
+  # job goes back to its queue or into the retry set, never neither.
+  def test_hard_shutdown_keeps_a_job_that_was_booking_its_retry
+    mgr = start_unwinding('fail_first', retries: 5)
+    @gate[:report_release] << true
+    @gate[:booking].pop
+    stopper = Thread.new { mgr.hard_shutdown }
+    wait_until { mgr.workers.all? { |w| w.instance_variable_get(:@interrupted) } }
+    @gate[:release] << true
+    stopper.join
+
+    assert_equal 1, list_sizes.sum + booked(Wurk::Keys::RETRY)
+  end
+
+  # One slow thread must not hold up the rest of the capsule: each job goes back
+  # as its own thread ends.
+  def test_hard_shutdown_requeues_each_job_as_its_own_thread_ends
+    mgr = start_unwinding('raise', 'raise')
+    stopper = Thread.new { mgr.hard_shutdown }
+    2.times { @gate[:unwinding].pop }
+    @gate[:release] << true
+    wait_until(1) { list_sizes == [1, 1] }
+
+    assert_equal [:unwound], @gate[:log], 'the second thread was meant to be still unwinding'
+
+    @gate[:release] << true
+    stopper.join
+
+    assert_equal [2, 0], list_sizes
+  end
+
+  # A requeue Redis refuses as a thread ends is tried again with the rest.
+  def test_hard_shutdown_retries_a_refused_requeue
+    mgr = start_unwinding('raise')
+    real = @capsule.fetcher.method(:bulk_requeue)
+    refusals = [RedisClient::CannotConnectError.new('down')]
+    @capsule.fetcher.define_singleton_method(:bulk_requeue) do |jobs|
+      raise refusals.pop if refusals.any? && jobs.any?
+
+      real.call(jobs)
+    end
+    interrupt(mgr)
+
+    assert_empty refusals
+    assert_equal [1, 0], list_sizes
+  end
+
+  # The wait and the stragglers' window must end before the Launcher stops
+  # waiting for this Manager and tears Redis down under it.
+  def test_hard_shutdown_fits_the_launchers_budget
+    total = Wurk::Manager::UNWIND_GRACE + Wurk::Manager::STRAGGLER_GRACE
+
+    assert_operator total, :<, Wurk::Launcher::TEARDOWN_GRACE
+    assert_operator total, :<, Wurk::TimerLoop::JOIN_TIMEOUT
+    assert_operator total, :<, Wurk::Swarm::SHUTDOWN_GRACE
+  end
+
+  # A thread that will not unwind holds up the requeue only so long: its payload
+  # goes back while it still runs, as one past saving.
+  def test_hard_shutdown_requeues_a_job_whose_thread_never_unwinds
+    mgr = start_unwinding('raise')
+    started = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+    mgr.hard_shutdown
+    elapsed = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - started
+
+    assert_equal [1, 0], list_sizes
+    assert_empty @gate[:log], 'the thread was meant to be still unwinding'
+    assert_operator elapsed, :<, 4, 'hard_shutdown must stay inside the launcher\'s join budget'
+  ensure
+    @gate[:release] << true
+  end
+
+  # The wait is interruptible (an embedded host's own timeout around #stop), and
+  # the payload must go back all the same.
+  def test_hard_shutdown_requeues_even_when_its_wait_is_interrupted
+    mgr = start_unwinding('raise')
+    stopper = Thread.new do
+      mgr.hard_shutdown
+    rescue RuntimeError
+      nil
+    end
+    @gate[:unwinding].pop
+    stopper.raise 'host timeout'
+    stopper.join
+
+    assert_equal [1, 0], list_sizes
+  ensure
+    @gate[:release] << true
+  end
+
+  # Without a private list nothing holds the payload while a thread unwinds, so a
+  # SIGKILL in the wait would lose it: a fetcher of its own requeues first.
+  def test_hard_shutdown_requeues_a_plug_in_fetchers_jobs_before_killing
+    fetcher = PlugInFetcher.new(@capsule)
+    @capsule.fetcher = fetcher
+    mgr = Wurk::Manager.new(@capsule)
+    mgr.workers.each do |w|
+      w.define_singleton_method(:job) { nil }
+      w.define_singleton_method(:kill) { fetcher.calls << :kill }
+    end
+
+    mgr.hard_shutdown
+
+    assert_equal [[:bulk_requeue, []], :kill, :kill, :kill], fetcher.calls
+  end
+
   # --- watchdog lifecycle ----------------------------------------------
 
   # The capsule's per-job watchdog is released by #stop, not #quiet: a quieted
@@ -610,6 +924,58 @@ class ManagerTest < Wurk::Test::UnitCase
 
   def private_queue
     Wurk::Fetcher::Reliable.private_queue_name(@public_queue)
+  end
+
+  # A started Manager with one worker inside UnwindingJob#perform per outcome.
+  def start_unwinding(*outcomes, retries: false, concurrency: outcomes.size)
+    @gate = { started: Queue.new, unwinding: Queue.new, booking: Queue.new, release: Queue.new, log: [],
+              reported: Queue.new, report_release: Queue.new }
+    UnwindingJob.gate = gate = @gate
+    yield gate if block_given?
+    @config.error_handlers.replace([lambda do |error, context, *|
+      next unless context[:context] == 'Job raised exception' && error.message.start_with?('broke before')
+
+      gate[:reported] << true
+      gate[:report_release].pop
+    end])
+    @capsule.concurrency = concurrency
+    mgr = Wurk::Manager.new(@capsule)
+    payloads = outcomes.each_with_index.map do |outcome, i|
+      Wurk.dump_json('class' => UnwindingJob.name, 'jid' => "#{jid_prefix}#{i}", 'queue' => @queue_name,
+                     'args' => [outcome], 'retry' => retries)
+    end
+    @pool.with { |c| c.call('LPUSH', @public_queue, *payloads) }
+    mgr.start
+    outcomes.size.times { @gate[:started].pop }
+    mgr.quiet
+    mgr
+  end
+
+  def jid_prefix = "u-#{object_id}-"
+
+  # hard_shutdown, with every job let go as soon as it unwinds.
+  def interrupt(mgr)
+    @capsule.concurrency.times { @gate[:release] << true }
+    mgr.hard_shutdown
+  end
+
+  # How many of this test's jobs are in the sorted set. Jobs are pushed by raw
+  # payload, so the set is shared with other tests only by key.
+  def booked(set)
+    @pool.with { |c| c.call('ZRANGE', set, 0, -1) }.count { |raw| raw.include?(jid_prefix) }
+  end
+
+  def wait_until(seconds = 5)
+    deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + seconds
+    until yield
+      flunk 'condition not met in time' if ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) > deadline
+      sleep 0.01
+    end
+  end
+
+  # [public, private]
+  def list_sizes
+    @pool.with { |c| [c.call('LLEN', @public_queue), c.call('LLEN', private_queue)] }
   end
 
   # `fetcher:` is what #acknowledge defers into; a unit without one raises

@@ -7,7 +7,7 @@ module Wurk
   # One per Capsule. Lives inside each forked child and owns the Processor
   # pool. Replaces dead processors on the fly (replace-on-die), forwards
   # the quiet/stop signals received by the Swarm to its processors, and
-  # ensures in-flight UnitsOfWork are bulk_requeued before threads are killed.
+  # ensures the in-flight UnitsOfWork of threads it kills are bulk_requeued.
   #
   # Lifecycle:
   #   * `start`         — spawn each processor thread.
@@ -77,7 +77,7 @@ module Wurk
 
     # Graceful shutdown: quiet first, then poll for workers to clear.
     # If the deadline elapses with workers still alive we fall through to
-    # hard_shutdown, which bulk_requeues their UoWs before killing threads.
+    # hard_shutdown, which kills their threads and bulk_requeues their UoWs.
     def stop(deadline)
       quiet
       # Lifecycle hooks (e.g. :quiet) can be async; give them a tick to settle
@@ -135,42 +135,107 @@ module Wurk
       @shutdown&.call
     end
 
-    # Reached when the deadline expired with workers still busy. Atomically
-    # move their in-flight UoWs private→public (Reliable#bulk_requeue) BEFORE
-    # raising Wurk::Shutdown into the threads, so a job killed mid-perform is
-    # re-run once (Sidekiq's at-least-once contract). `job` is read off another
-    # thread, so a Processor can ACK between this map and the requeue — but
-    # bulk_requeue's guard skips the RPUSH on a miss, so a job that
-    # finished in that window is not resurrected onto the public queue.
+    # How long killed threads may take to unwind before what is left of their jobs
+    # is requeued anyway, and how long the process gives the last of them after
+    # that. Inside what the Launcher and the Swarm allow a Manager past its
+    # deadline (Launcher::TEARDOWN_GRACE, the shortest).
+    UNWIND_GRACE = 2
+    STRAGGLER_GRACE = 1
+    UNWIND_POLL = 0.02
+    private_constant :UNWIND_POLL
+
+    # Reached when the deadline expired with workers still busy: raise
+    # Wurk::Shutdown into each, and move every unfinished job from the private list
+    # back to the public queue (Reliable#bulk_requeue), where it runs again from the
+    # top (Sidekiq's at-least-once contract), as soon as its own thread has ended.
+    # What has not ended within UNWIND_GRACE is requeued under its running thread.
     #
-    # The kill sits in an `ensure`: a bulk_requeue that raises (Redis down
-    # mid-drain) must not leave the processors running — embedded, the host
-    # keeps living after #stop, and those threads would carry on executing jobs
-    # over pools the launcher is about to reset. The requeue error still
-    # propagates to the caller, which reports it.
+    # In that order because a requeued job is running elsewhere within a
+    # millisecond, and an unwinding run still has `ensure` blocks to go: it
+    # releases limiter slots, saves an iteration cursor, rolls back. A run past its
+    # requeue does all that beside the run that replaced it. Waiting costs no job:
+    # until the move it sits in the private list, which a SIGKILL leaves for the
+    # reaper. A fetcher with no private list has nothing holding the payload
+    # meanwhile, so its jobs go back first.
+    #
+    # `job` is read off another thread and before the kill, after which a
+    # Processor drops it. One that had finished, or was booking its retry, when the
+    # interrupt was sent ACKs it (Processor#cut_short?), and bulk_requeue's guard
+    # skips the RPUSH on a miss.
+    #
+    # Every processor is killed even when a requeue raises (Redis down mid-drain):
+    # embedded, the host keeps living after #stop, and those threads would carry
+    # on executing jobs over pools the launcher is about to reset. The requeue
+    # error still propagates to the caller, which reports it.
     def hard_shutdown
       cleanup = workers_snapshot
-      requeue_in_flight(cleanup)
-    ensure
-      if cleanup
-        cleanup.each(&:kill)
-        # The caller typically `exit`s immediately after we return; give
-        # threads a brief window to run their `ensure` blocks.
-        wait_for(::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + 3) { workers_empty? }
+      return if cleanup.empty?
+
+      units = cleanup.to_h { |worker| [worker, worker.job] }.compact
+      if capsule.fetcher.is_a?(Fetcher::Reliable)
+        unwind_then_requeue(cleanup, units)
+      else
+        requeue_then_kill(cleanup, units.values)
       end
+    ensure
+      # The caller typically `exit`s immediately after we return; give threads
+      # that outlived the requeue a brief window to run their `ensure` blocks.
+      wait_for_unwind(cleanup, STRAGGLER_GRACE) if cleanup
     end
 
     private
 
-    def requeue_in_flight(cleanup)
-      return if cleanup.empty?
+    def unwind_then_requeue(cleanup, units)
+      interrupt(cleanup, units.values)
+      requeue_as_they_end(units)
+    ensure
+      # Also flushes the ACKs of the threads that ended, with nothing left to move.
+      capsule.fetcher.bulk_requeue(units.values)
+    end
 
-      jobs = cleanup.map(&:job).compact
-      logger.warn { "Terminating #{cleanup.size} busy threads" }
-      log_interrupted(jobs)
+    # Drops from `units` what it has put back. A refused requeue leaves the rest to
+    # the caller's, at the end of the wait: one more try, not one every poll.
+    def requeue_as_they_end(units)
+      deadline = monotonic + UNWIND_GRACE
+      until units.empty? || monotonic >= deadline
+        ended = units.reject { |worker, _| running?(worker) }
+        return wait_for_unwind(units.keys, deadline - monotonic) unless requeued?(ended.values)
+
+        ended.each_key { |worker| units.delete(worker) }
+        sleep UNWIND_POLL
+      end
+    end
+
+    def requeued?(jobs)
+      capsule.fetcher.bulk_requeue(jobs) if jobs.any?
+      true
+    rescue StandardError => e
+      capsule.config.handle_exception(e, { context: 'Error requeueing a job interrupted by shutdown' })
+      false
+    end
+
+    def requeue_then_kill(cleanup, jobs)
       # `&.` like #quiet: a TERM in the pre-prepare! window (traps install
       # before launcher.run) reaches here with no fetcher built yet.
       capsule.fetcher&.bulk_requeue(jobs)
+    ensure
+      interrupt(cleanup, jobs)
+      wait_for_unwind(cleanup, UNWIND_GRACE)
+    end
+
+    def interrupt(cleanup, jobs)
+      cleanup.each(&:kill)
+      logger.warn { "Terminating #{cleanup.size} busy threads" }
+      log_interrupted(jobs)
+    end
+
+    def running?(worker) = worker.thread&.alive?
+    def monotonic = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+
+    # Polled rather than joined: a join re-raises what ended the thread.
+    def wait_for_unwind(cleanup, seconds)
+      deadline = monotonic + seconds
+      sleep UNWIND_POLL while cleanup.any? { |worker| running?(worker) } && monotonic < deadline
     end
 
     # One WARN per job a deploy cut short, because each one runs again from the

@@ -69,6 +69,8 @@ module Wurk
       @config = capsule
       @callback = callback
       @done = false
+      @interrupted = false
+      @performed = false
       @job = nil
       @thread = nil
       @reloader = resolve_reloader(capsule.config[:reloader])
@@ -92,6 +94,8 @@ module Wurk
       @done = true
       return if @thread.nil?
 
+      # First the flag, then the raise: a job can swallow a raise (#cut_short?).
+      @interrupted = true
       @thread.raise ::Wurk::Shutdown
       @thread.value if wait
     end
@@ -272,6 +276,7 @@ module Wurk
     # arrives while deferred is delivered when this frame returns, after the
     # outcome is booked.
     def process(uow)
+      @performed = false
       Thread.handle_interrupt(IGNORE_SHUTDOWN_INTERRUPTS) { process_deferred(uow) }
     ensure
       uow.release_claim if uow.respond_to?(:release_claim)
@@ -289,7 +294,7 @@ module Wurk
         # on that exit as on every other.
         job_hash = parse_or_kill(jobstr)
         run_job(uow, job_hash, queue, jobstr) if job_hash
-        ack = true
+        ack = !cut_short?
       rescue Wurk::JobRetry::Skip
         # A middleware booked the outcome itself (Limiter::Rescheduled, the
         # interrupt handler's re-push, Encryption's dead routing) — not a
@@ -326,6 +331,29 @@ module Wurk
       end
     end
 
+    # Told to stop before its `perform` completed, so not finished, whatever it
+    # made of the interrupt: jobs rescue Exception, raise out of an `ensure`,
+    # rewrite the error. Not ACKed and no retry booked; the payload stays in the
+    # private list for Manager#hard_shutdown to put back. `@performed` is set by
+    # this thread and `@interrupted` before the raise that follows it, so a job
+    # that completed first is seen as completed.
+    def cut_short? = @interrupted && !@performed
+
+    # Turns any way out of the block, returning included, into the interruption
+    # it is. Handled and Skip pass: their job is booked already.
+    def surface_interrupt
+      result = yield
+      raise ::Wurk::Shutdown if cut_short?
+
+      result
+    rescue Wurk::JobRetry::Handled, ::Wurk::Shutdown
+      raise
+    rescue Exception # rubocop:disable Lint/RescueException
+      raise ::Wurk::Shutdown if cut_short?
+
+      raise
+    end
+
     # Sidekiq's contract (processor.rb, "Job raised exception"): every job
     # failure the retry layer handled reaches config.error_handlers once, with
     # the job's own exception — `Handled` is raised from inside the retry
@@ -340,6 +368,7 @@ module Wurk
     # reason would loop forever, re-running `perform` every time, so it goes to
     # the morgue instead.
     def settle_internal_failure(uow, job_hash, jobstr, error)
+      return false if cut_short?
       return kill_unbookable(job_hash, jobstr, error) if unbookable?(error)
 
       requeue(uow)
@@ -424,14 +453,16 @@ module Wurk
     # there books a retry instead of escaping the retry layer.
     def dispatch(job_hash, queue, jobstr)
       @retrier.global(jobstr, queue) do
-        @job_logger.prepare(job_hash) do
-          @job_logger.call(job_hash, queue) do
-            stats(jobstr, queue) do
-              Wurk::Profiler.call(job_hash) do
-                @reloader.call do
-                  instance = build_instance(job_hash)
-                  @retrier.local(instance, jobstr, queue) do
-                    yield instance
+        surface_interrupt do
+          @job_logger.prepare(job_hash) do
+            @job_logger.call(job_hash, queue) do
+              stats(jobstr, queue) do
+                Wurk::Profiler.call(job_hash) do
+                  @reloader.call do
+                    instance = build_instance(job_hash)
+                    @retrier.local(instance, jobstr, queue) do
+                      surface_interrupt { yield instance }
+                    end
                   end
                 end
               end
@@ -457,21 +488,20 @@ module Wurk
     # still owes Redis goes to FinishedJobCleanup. The rescues sit outside the
     # interruptible scope, so a Shutdown cannot land between them and the ACK.
     def execute_job(instance, job_hash, queue)
-      performed = false
       Thread.handle_interrupt(ALLOW_SHUTDOWN_INTERRUPTS) do
         @capsule.server_middleware.invoke(instance, job_hash, queue) do
           RedisPool.job_performing!
-          result = instance.perform(*job_hash['args'])
-          performed = true
+          result = surface_interrupt { instance.perform(*job_hash['args']) }
+          @performed = true
           result
         end
       end
     rescue Wurk::Shutdown => e
-      raise unless performed
+      raise unless @performed
 
       settle_finished_job(job_hash, e)
     rescue StandardError => e
-      raise unless performed && FinishedJobCleanup.store_error?(e)
+      raise unless @performed && FinishedJobCleanup.store_error?(e)
 
       settle_finished_job(job_hash, e)
     end

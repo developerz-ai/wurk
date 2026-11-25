@@ -1,10 +1,13 @@
 -- sidekiq-unique-jobs 8.x lock.lua: take the lock once the queued jid was primed
 -- (the blocking path). Every key is in KEYS.
 -- KEYS = [digest, queued, primed, locked, info, changelog, digests, expiring_digests]
--- ARGV = [jid, pttl, lock_type, limit, lock_score, now, max_history, script_name]
+-- ARGV = [jid, pttl, lock_type, limit, lock_score, now, max_history, script_name, run]
+-- `run` is Wurk's: the token of the run taking the lock (see unique_jobs_claim.lua),
+-- empty when a push takes it. The gem writes `now` in its place.
 local digest, queued, primed, locked, info, changelog, digests, expiring = KEYS[1], KEYS[2], KEYS[3], KEYS[4], KEYS[5], KEYS[6], KEYS[7], KEYS[8]
 local job_id, pttl, lock_type, limit, lock_score = ARGV[1], tonumber(ARGV[2]), ARGV[3], tonumber(ARGV[4]), ARGV[5]
 local now, max_history, script_name = tonumber(ARGV[6]), tonumber(ARGV[7]), ARGV[8]
+local run = ARGV[9] or ""
 
 local function log(message, prev_jid)
   if not max_history or max_history == 0 then return end
@@ -24,6 +27,7 @@ local function drop_queued()
 end
 
 if redis.call("HEXISTS", locked, job_id) == 1 then
+  if #run > 0 then redis.call("HSET", locked, job_id, run) end
   log("Duplicate")
   drop_queued()
   return job_id
@@ -41,7 +45,7 @@ else
   if #lock_score == 0 then score = now end
   redis.call("ZADD", digests, score, digest)
 end
-redis.call("HSET", locked, job_id, now)
+redis.call("HSET", locked, job_id, #run > 0 and run or now)
 drop_queued()
 
 if pttl and pttl > 0 then

@@ -437,7 +437,8 @@ The native copy writes and reads what the gem 8.1 writes and reads, byte for byt
 - `uniquejobs:<md5>` from `"uniquejobs:" + MD5(JSON(sorted class, queue,
   lock_args[, apartment]))` (SHA3-256 under `digest_algorithm = :modern`), and
   `lock_digest`, `lock_args`, `lock_ttl`, `lock_timeout`, `lock_prefix` in the payload;
-- the STRING holding the jid, `:QUEUED` / `:PRIMED` lists, `:LOCKED` hash, `:INFO`,
+- the STRING holding the jid, `:QUEUED` / `:PRIMED` lists, `:LOCKED` hash (jid to a
+  Unix time, see [two runs of one job](#two-runs-of-one-job-wurk-only)), `:INFO`,
   `<digest>:RUN:*` for runtime locks, the `uniquejobs:digests` and
   `uniquejobs:expiring_digests` sorted sets, `uniquejobs:changelog`, and the
   `uniquejobs:reaper` key that elects one reaper per fleet.
@@ -546,17 +547,19 @@ end
 - `job` is the running job instance (`self` in `perform`), its jid, or its
   payload hash. A jid or an instance is looked up among the unique jobs this
   process is running, so it works inside `perform` or a thread `perform` started,
-  and raises `ArgumentError` anywhere else; a payload works from anywhere.
+  and raises `ArgumentError` anywhere else. A payload works from anywhere; one that
+  is not running in this process is known by its jid alone.
 - `ttl` is seconds (an Integer, a Float or an `ActiveSupport::Duration`). Left
   out, it is the `lock_ttl` the payload carries, the TTL the lock was taken with
   (for a scheduled job that includes the wait until `at`, as at push). Anything
   but a positive number raises `ArgumentError`.
-- One Lua script, atomic: when the jid is still in the lock's `:LOCKED` hash, the
+- One Lua script, atomic: when this run of the jid still holds the lock, the
   lock's keys (the digest, `:LOCKED`, `:INFO`) expire `ttl` from now, and an
   `until_expired` lock's `uniquejobs:expiring_digests` score moves with them, so
   the reaper sees the new expiry. Returns `true`. Otherwise it writes nothing and
   returns `false`: a refresh never takes a lock, so one that comes after expiry,
-  or after another jid took the lock, cannot steal it back. The `:QUEUED` and
+  or after another jid, or a later run of this one, took the lock, cannot steal it
+  back. The `:QUEUED` and
   `:PRIMED` lists belong to waiters and keep their own expiry. A lock taken with
   no TTL is left with none; the call only reports whether it is held.
 - `true` sets the remaining TTL to `ttl`, so a shorter `ttl` shortens it.
@@ -574,6 +577,49 @@ Which lock a refresh renews during `perform`, per type:
 
 `lock_limit:` above 1 keeps every holder's jid in one `:LOCKED` hash, so a renewal
 by any holder extends the expiry of all of them.
+
+### Two runs of one job (Wurk only)
+
+A job can be running twice: an interrupted run past its requeue that is still
+unwinding, or a process cut off from Redis whose job the reaper gave to another. The
+lock admits the second run, because by jid it is the same job, and that is what lets
+a job re-enter the lock of a run that crashed. In the gem, and in Wurk up to 1.20,
+the two were then one holder: whichever ended first released the lock for both, and
+`refresh_lock!` told both they held it.
+
+Each run now marks the lock it enters, and the newest mark is the holder. An older
+run unlocks nothing (its `after_unlock` does not run, and `unlock_failed` is
+reflected), its `refresh_lock!` returns `false`, and an unlock it still owes after a
+Redis outage is dropped. The mark is the value beside the jid in `:LOCKED`: the
+gem keeps the lock's time there and this is the time the run entered, with random
+digits below the microsecond. A value that is no mark (a lock the gem or Wurk 1.20
+took, or one a snapshot put back) is the jid's, as before. Nothing else in Redis, and
+nothing in the payload's JSON, changes.
+
+A run cut short by a shutdown also **keeps its runtime lock** (`while_executing`,
+`until_and_while_executing`), as one that crashed does and as `until_executed` always
+did: the job is requeued and walks back into it. The gem releases it, and the lock
+goes to whoever is waiting; the interrupted job then comes back to a conflict, which
+drops it, buries it or pushes it again as another job. Other jobs of the
+digest meet the lock as held until the re-run ends, or its TTL or the reaper frees it.
+
+For the same reason an `until_and_while_executing` job that still holds its runtime
+lock runs when it comes back, although its push lock may be a successor's by now. The
+gem drops it.
+
+This fences the lock, not the job: the older run goes on executing until it ends or
+checks. Call `refresh_lock!` before a write that must not be doubled, and stop on
+`false`.
+
+Two things leave a run as the gem would have it, known by its jid alone:
+
+- **A process on the gem or on Wurk 1.20** neither writes nor checks marks, so while a
+  fleet mixes them its unlock still releases the lock under a re-run. That includes the
+  deploy that brings this in: the pods it stops are the old ones. Rolling back, a 1.20
+  process handed an interrupted `until_and_while_executing` job whose successor is
+  already queued drops it, as 1.20 always did, and now leaves its runtime lock to the TTL.
+- **A Redis at `maxmemory`** refuses the mark. The lock was taken at push, so the job
+  runs, unmarked ([at maxmemory](reliability.md#at-maxmemory)).
 
 ### And the Enterprise API
 

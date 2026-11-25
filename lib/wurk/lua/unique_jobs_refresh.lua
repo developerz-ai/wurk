@@ -1,14 +1,26 @@
 -- Wurk only: sidekiq-unique-jobs 8.x has no refresh. Pushes out the expiry of a
 -- lock this jid still holds, re-applying from now what lock.lua and
 -- queue_and_lock.lua set when the lock was taken. Takes nothing: a jid that is
--- not in LOCKED gets 0 and no key is written. Every key is in KEYS.
+-- not in LOCKED, or is there for a later run of it, gets 0 and no key is written.
+-- Every key is in KEYS.
 -- KEYS = [digest, queued, primed, locked, info, changelog, digests, expiring_digests]
--- ARGV = [jid, pttl, now]
--- Returns 1 when this jid holds the lock, 0 otherwise.
+-- ARGV = [jid, pttl, now, run]
+-- `run` is the token of the run renewing (see unique_jobs_claim.lua), empty when
+-- the caller is known by jid alone.
+-- Returns 1 when the caller holds the lock, 0 otherwise.
 local digest, locked, info, expiring = KEYS[1], KEYS[4], KEYS[5], KEYS[8]
-local job_id, pttl, now = ARGV[1], tonumber(ARGV[2]), tonumber(ARGV[3])
+local job_id, pttl, now, run = ARGV[1], tonumber(ARGV[2]), tonumber(ARGV[3]), ARGV[4]
 
-if redis.call("HEXISTS", locked, job_id) == 0 then
+-- A value that is another run's mark (fifteen decimals, UniqueJobs::Run.token). Any
+-- other value says only that the jid holds the lock: one the gem or an older Wurk
+-- wrote, or a snapshot put back.
+local function another_runs(holder)
+  local decimals = string.match(holder, "^%d+%.(%d+)$")
+  return #run > 0 and holder ~= run and decimals and #decimals == 15
+end
+
+local holder = redis.call("HGET", locked, job_id)
+if not holder or another_runs(holder) then
   return 0
 end
 

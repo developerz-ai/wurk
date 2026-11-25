@@ -129,14 +129,17 @@ module Wurk
       def execute
         raise InvalidArgument, '#execute needs a block' unless block_given?
 
-        acquired = UniqueJobs.redis { |conn| locked?(conn) || acquired_blocking?(conn, nil) }
+        # Minted before the script that writes it: a run killed in between must
+        # still recognize its mark.
+        marks[key.digest] = Run.token if marks
+        acquired = UniqueJobs.redis { |conn| claimed?(conn) || acquired_blocking?(conn, nil) }
         yield if acquired
       end
 
       def unlock(conn = nil) = unlock!(conn)
 
       def unlock!(conn = nil)
-        jid = run_script(:unique_jobs_unlock, conn, argv + [@sync_locked ? 1 : 0])
+        jid = run_script(:unique_jobs_unlock, conn, argv + [@sync_locked ? 1 : 0, run_token])
         reflect(:unlocked, item) if jid == job_id
         jid
       end
@@ -178,7 +181,7 @@ module Wurk
         write_lock_info(conn)
         return false unless primed?(conn, wait)
 
-        !run_script(:unique_jobs_lock, conn, argv).nil?
+        !run_script(:unique_jobs_lock, conn, argv + [run_token]).nil?
       end
 
       def primed?(conn, wait)
@@ -206,13 +209,40 @@ module Wurk
       end
 
       # The lock's own arguments, then what every script appends: the time, the
-      # changelog cap and the gem's script name; unlock's sync flag goes last.
+      # changelog cap and the gem's script name; what only one script takes goes last.
       def run_script(script, conn, args)
         injected = [UniqueJobs.now_f, UniqueJobs.config.max_history.to_i, Script::NAMES.fetch(script)]
         full = args.first(5) + injected + args.drop(5)
         return Script.call(script, conn, keys: key.to_a, argv: full) if conn
 
         UniqueJobs.redis { |c| Script.call(script, c, keys: key.to_a, argv: full) }
+      end
+
+      def marks = Run.marks_of(item)
+
+      # Empty until this run has entered the lock: what it does to any other lock
+      # (the push lock of until_and_while_executing) is by jid, as in the gem.
+      def run_token = marks&.fetch(key.digest, nil).to_s
+
+      # Enters a lock this jid already holds, as its newest run.
+      def claimed?(conn)
+        return locked?(conn) unless marks
+
+        Script.call(:unique_jobs_claim, conn, keys: key.to_a, argv: [job_id, run_token]) == 1
+      rescue RedisClient::CommandError, Script::LuaError => e
+        raise unless UniqueJobsCompat::OOM.match?(e.message)
+
+        claimed_unmarked?(conn)
+      end
+
+      # A server at maxmemory refuses the mark, and the lock was taken at push: the
+      # job runs, its lock its jid's as in the gem. The mark goes with the refusal,
+      # or the unlock would take what it finds there for a later run's. Dragonfly
+      # words the refusal as a failed script, so it arrives as a LuaError.
+      def claimed_unmarked?(conn)
+        held = locked?(conn)
+        marks.delete(key.digest) if held
+        held
       end
 
       def argv = [job_id, config.pttl, config.type.to_s, config.limit.to_i, item[AT].to_s]

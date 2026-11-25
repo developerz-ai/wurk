@@ -8,34 +8,14 @@ module Wurk
     # run (which a crashed run then holds for just as long). Wurk only: the gem
     # sets a lock's TTL once, when the lock is taken.
     #
-    # One script (`unique_jobs_refresh.lua`) checks that the jid is still in the
-    # lock's LOCKED hash and only then re-applies the expiry; it never takes a
-    # lock, so a refresh that comes too late returns false and the caller
-    # decides what a lost lock means for its run.
+    # One script (`unique_jobs_refresh.lua`) checks that this run (see Run) still
+    # holds the lock and only then re-applies the expiry; it never takes a lock, so
+    # a refresh that comes too late, or from a run a later one of the same jid
+    # superseded, returns false and the caller decides what that means for it.
     class LockRefresh
       # The types whose lock during `perform` is the runtime one, `<digest>:RUN`.
       # until_and_while_executing gave up its push lock when `perform` started.
       RUNTIME_LOCKS = [Lock::WhileExecuting, Lock::UntilAndWhileExecuting].freeze
-
-      # The payload of every unique job running in this process, by jid, so the
-      # job (or a thread it started) can name its lock by jid alone. Filled by
-      # the server middleware around `perform`.
-      module Running
-        @items = {}
-        @mutex = ::Mutex.new
-
-        class << self
-          def track(item)
-            jid = item[JID]
-            @mutex.synchronize { @items[jid] = item }
-            yield
-          ensure
-            @mutex.synchronize { @items.delete(jid) }
-          end
-
-          def [](jid) = @mutex.synchronize { @items[jid] }
-        end
-      end
 
       def initialize(job, ttl: nil)
         @item = item_for(job)
@@ -44,7 +24,8 @@ module Wurk
 
       def call
         UniqueJobs.redis do |conn|
-          Script.call(:unique_jobs_refresh, conn, keys: key.to_a, argv: [@item[JID], @pttl, UniqueJobs.now_f])
+          Script.call(:unique_jobs_refresh, conn, keys: key.to_a,
+                                                  argv: [@item[JID], @pttl, UniqueJobs.now_f, run_token])
         end == 1
       end
 
@@ -53,12 +34,12 @@ module Wurk
       def item_for(job)
         item = case job
                when ::Hash then job
-               when ::String then running(job)
+               when ::String then running(Run.of_jid(job), job)
                else
                  raise ::ArgumentError, "expected a job payload, a jid or a job instance, got #{job.inspect}" \
                    unless job.class.respond_to?(:get_sidekiq_options)
 
-                 running(job.jid)
+                 running(Run.of_worker(job) || Run.of_jid(job.jid), job.jid)
                end
         [JID, LOCK, LOCK_DIGEST].each do |field|
           raise ::ArgumentError, "not a unique job payload: no `#{field}` in #{item.inspect}" unless item[field]
@@ -66,10 +47,19 @@ module Wurk
         item
       end
 
-      def running(jid)
-        Running[jid] || raise(::ArgumentError,
-                              "no job #{jid.inspect} is running under a Wurk::UniqueJobs lock in this process; " \
-                              'refresh_lock! by jid works only inside its perform (or a thread it started)')
+      def running(run, jid)
+        return run.item if run
+
+        raise ::ArgumentError, "no job #{jid.inspect} is running under a Wurk::UniqueJobs lock in this process; " \
+                               'refresh_lock! by jid works only inside its perform (or a thread it started)'
+      end
+
+      # A payload that is not the running job's own object is known by jid only:
+      # the run of that jid here answers for it, and a payload that runs nowhere
+      # in this process renews by jid.
+      def run_token
+        marks = Run.marks_of(@item) || Run.of_jid(@item[JID])&.marks
+        marks&.fetch(key.digest, nil).to_s
       end
 
       # Seconds, from the caller or else the TTL the lock was taken with: the

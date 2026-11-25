@@ -82,7 +82,7 @@ module Wurk
         def call(worker, item, _queue, &)
           return yield unless lockable?(worker, item)
 
-          with_context(:server) { LockRefresh::Running.track(item) { lock_instance.execute(&) } }
+          with_context(:server) { Run.track(worker, item) { lock_instance.execute(&) } }
         end
       end
     end

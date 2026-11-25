@@ -15,6 +15,9 @@ module Wurk
     class BookkeepingFailed < ::StandardError; end
 
     STORE_ERRORS = [RedisClient::Error, ConnectionPool::Error, ConnectionPool::TimeoutError].freeze
+    # How a lock script's error is raised, by either copy of sidekiq-unique-jobs.
+    # Dragonfly words a refusal at maxmemory as one.
+    SCRIPT_ERRORS = %w[Wurk::UniqueJobs::Script::LuaError SidekiqUniqueJobs::Script::LuaError].freeze
     # Past this many owed jobs the oldest is reported and dropped.
     MEMORY = 10_000
     RETRY_EVERY = 1.0
@@ -30,7 +33,10 @@ module Wurk
     @next_try = 0.0
 
     class << self
-      def store_error?(error) = STORE_ERRORS.any? { |klass| error.is_a?(klass) }
+      def store_error?(error)
+        STORE_ERRORS.any? { |klass| error.is_a?(klass) } ||
+          (SCRIPT_ERRORS.include?(error.class.name) && UniqueJobsCompat::OOM.match?(error.message))
+      end
 
       # Reports the failure, tries the owed writes once, keeps what did not land.
       def settle(job, error, pool:, config:)
@@ -97,12 +103,14 @@ module Wurk
         true
       end
 
-      # Locksmith#unlock only drops a lock this jid holds. Both digests: an
+      # Locksmith#unlock only drops a lock this run holds: the write can land long
+      # after the job, when its jid is running again elsewhere. Both digests: an
       # until_and_while_executing job takes its base lock back when an error
       # crosses it, on top of the `:RUN` lock it may still hold.
       def release_unique_locks(job)
         locksmith = UniqueJobsCompat.locksmith_class
-        digests(job).each { |digest| locksmith.new(job.merge('lock_digest' => digest)).unlock }
+        # A #dup is still this run's payload (UniqueJobs::Run); a #merge need not be.
+        digests(job).each { |digest| locksmith.new(job.dup.update('lock_digest' => digest)).unlock }
       end
 
       def digests(job)
