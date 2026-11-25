@@ -32,7 +32,7 @@ class MetricsDeathsTest < Wurk::Test::UnitCase
   # The promote script writes its field with cjson: whatever json version is
   # installed, Ruby must write the same bytes.
   def test_field_is_the_bytes_redis_cjson_writes
-    ['A/B', '</script>', "L\u2028S", 'Plain::Job', 'q"uote', 'back\\slash'].each do |klass|
+    ['A/B', '</script>', "L\u2028S", 'Plain::Job', 'q"uote', "del\u007f", 'back\\slash'].each do |klass|
       cjson = @pool.with { |c| c.call('EVAL', 'return cjson.encode({ARGV[1], ARGV[2]})', 0, 'q', klass) }
 
       assert_equal cjson.dup.force_encoding(Encoding::UTF_8), Deaths.field('queue' => 'q', 'class' => klass), klass

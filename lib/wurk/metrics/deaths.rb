@@ -20,13 +20,16 @@ module Wurk
     # fleet does not). #record reports a failed count, which may or may not have
     # landed (a lost reply); the schedule-promote script cannot report, and drops it.
     #
-    # `/` is escaped here as Redis's cjson escapes it, so a pair the schedule-promote
-    # script counts lands on the same field. json's `script_safe` did it until 3.2.0.
+    # Fields are escaped as Redis's cjson escapes them (CJSON_ESCAPES), so a pair the
+    # schedule-promote script counts lands on the same field. json's `script_safe`
+    # escaped `/` until 3.2.0.
     module Deaths
       MAX_SERIES = 500
       UNKNOWN = 'unknown'
       OTHER = 'other'
       OVERFLOW = ::JSON.generate([OTHER, OTHER]).freeze
+      # What cjson escapes and json does not.
+      CJSON_ESCAPES = { '/' => '\\/', "\u007f" => '\u007f' }.freeze
       # Name, help and type of the `/metrics` family (Metrics::Prometheus), whose
       # samples are #samples. Read from shared Redis, so every scrape target
       # reports the same value: aggregate with `max`.
@@ -50,7 +53,7 @@ module Wurk
           job = payload.is_a?(::String) ? parse(payload) : payload
           job = {} unless job.is_a?(::Hash)
           ::JSON.generate([label(job['queue']) || UNKNOWN, label(job['wrapped']) || label(job['class']) || UNKNOWN])
-                .gsub('/', '\\/')
+                .gsub(%r{[/\u007f]}, CJSON_ESCAPES)
         end
 
         # `[[{ 'queue' => q, 'class' => c }, count], …]` from an HGETALL reply
