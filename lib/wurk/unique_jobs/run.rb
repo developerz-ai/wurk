@@ -12,11 +12,12 @@ module Wurk
     # and the newest mark is the holder. A run that finds another mark there has
     # been superseded: it unlocks and renews nothing.
     #
-    # Tied to the payload object the run was given, never written into it: the
-    # payload goes back to Redis unchanged, and whatever unlocks later with that
-    # object (FinishedJobCleanup) is still this run.
+    # What a run leaves on the payload object it was given is its marks, a Hash of
+    # Strings that Marshal and #dup carry along: whatever unlocks or renews later
+    # with that object, or a copy of it, is still this run. Never in its JSON: the
+    # payload goes back to Redis unchanged.
     class Run
-      IVAR = :@wurk_unique_run
+      IVAR = :@wurk_unique_marks
       private_constant :IVAR
 
       @running = []
@@ -27,16 +28,16 @@ module Wurk
         # as long as the block takes.
         def track(worker, item)
           run = new(worker, item)
-          item.instance_variable_set(IVAR, run)
+          item.instance_variable_set(IVAR, run.marks)
           @mutex.synchronize { @running << run }
           yield
         ensure
           @mutex.synchronize { @running.delete_if { |other| other.equal?(run) } }
         end
 
-        # The run this payload object, or the one it is a #dup of, belongs to; nil
-        # for one that never ran here.
-        def of(item) = item.instance_variable_get(IVAR)
+        # The marks of the run this payload belongs to, nil for one that never ran:
+        # digest to the mark the run has put on that lock.
+        def marks_of(item) = item.instance_variable_get(IVAR)
 
         def of_worker(worker) = @mutex.synchronize { @running.find { |run| run.worker.equal?(worker) } }
 
@@ -53,28 +54,22 @@ module Wurk
 
         # Wire-compatible: what the gem keeps beside a jid in LOCKED is the time,
         # and its dashboard reads it back as one. This is the time too, with
-        # random digits below the microsecond to make it this run's alone.
+        # random digits below the microsecond to make it this run's alone. Fifteen
+        # decimals is also how the scripts know a mark: a lock time, which a server
+        # prints from a double, cannot have as many.
         def token = format('%.6f%09d', UniqueJobs.now_f, ::SecureRandom.random_number(10**9))
       end
 
-      attr_reader :worker, :item
+      attr_reader :worker, :item, :marks
 
       def initialize(worker, item)
         @worker = worker
         @item = item
         @thread = ::Thread.current
-        @tokens = {}
+        @marks = {}
       end
 
       def here? = @thread.equal?(::Thread.current)
-
-      # Minted before the script that writes it: a run killed in between must
-      # still recognize its mark.
-      def mark(digest) = @tokens[digest] ||= Run.token
-
-      # nil until this run has entered the lock: what it does to any other lock
-      # (the push lock of until_and_while_executing) is by jid, as in the gem.
-      def token_for(digest) = @tokens[digest]
     end
   end
 end

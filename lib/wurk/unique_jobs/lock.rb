@@ -231,16 +231,28 @@ module Wurk
         end
 
         def execute(&)
-          executed = locksmith.execute do
-            yield
-            item[JID]
-          ensure
-            unlock_and_callback
-          end
+          executed = locksmith.execute { perform_and_unlock(&) }
           return if executed
 
           reflect(:execution_failed, item)
           call_strategy(origin: :server, &)
+        end
+
+        private
+
+        # A run cut short by a shutdown keeps its lock, as one that crashed does:
+        # the job is put back and re-enters it by jid. Released, it would go to
+        # whoever waits, and the job would come back to a conflict, which drops,
+        # buries or re-pushes it. The gem releases it.
+        def perform_and_unlock
+          interrupted = false
+          yield
+          item[JID]
+        rescue Wurk::Shutdown
+          interrupted = true
+          raise
+        ensure
+          unlock_and_callback unless interrupted
         end
       end
 
@@ -255,8 +267,11 @@ module Wurk
       class UntilAndWhileExecuting < BaseLock
         def lock(origin: :client, &) = client_lock(origin: origin, &)
 
+        # A job that holds its runtime lock has started before and was cut short. Its
+        # push lock went then, to a successor for all we know, and no longer says
+        # whether it may run.
         def execute
-          if locksmith.unlock
+          if locksmith.unlock || runtime_lock.locked?
             runtime_lock.execute { return yield }
           else
             reflect(:unlock_failed, item)

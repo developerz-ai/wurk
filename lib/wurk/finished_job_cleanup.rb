@@ -15,6 +15,9 @@ module Wurk
     class BookkeepingFailed < ::StandardError; end
 
     STORE_ERRORS = [RedisClient::Error, ConnectionPool::Error, ConnectionPool::TimeoutError].freeze
+    # How a lock script's error is raised, by either copy of sidekiq-unique-jobs.
+    # Dragonfly words a refusal at maxmemory as one.
+    SCRIPT_ERRORS = %w[Wurk::UniqueJobs::Script::LuaError SidekiqUniqueJobs::Script::LuaError].freeze
     # Past this many owed jobs the oldest is reported and dropped.
     MEMORY = 10_000
     RETRY_EVERY = 1.0
@@ -30,7 +33,10 @@ module Wurk
     @next_try = 0.0
 
     class << self
-      def store_error?(error) = STORE_ERRORS.any? { |klass| error.is_a?(klass) }
+      def store_error?(error)
+        STORE_ERRORS.any? { |klass| error.is_a?(klass) } ||
+          (SCRIPT_ERRORS.include?(error.class.name) && UniqueJobsCompat::OOM.match?(error.message))
+      end
 
       # Reports the failure, tries the owed writes once, keeps what did not land.
       def settle(job, error, pool:, config:)

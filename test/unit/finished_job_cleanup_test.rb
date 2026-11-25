@@ -135,6 +135,19 @@ class FinishedJobCleanupTest < Wurk::Test::UnitCase
     assert_instance_of ArgumentError, @errors.last.first
   end
 
+  # Dragonfly at maxmemory refuses the unlock as a failed script. The job is done:
+  # that must not book a second run of it. Any other script failure is a bug.
+  def test_a_lock_script_refused_for_memory_is_the_stores_error
+    oom, bug = ['-ERR Out of memory', 'WRONGTYPE'].map do |reason|
+      refused = RedisClient::CommandError.new("ERR Error running script (call to f_1): @user_script:15: #{reason}")
+      Wurk::UniqueJobs::Script::LuaError.new(refused, Wurk::UniqueJobs::Script::Source.new('x.lua', 'src'))
+    end
+
+    assert Wurk::FinishedJobCleanup.store_error?(oom)
+    refute Wurk::FinishedJobCleanup.store_error?(bug)
+    refute Wurk::FinishedJobCleanup.store_error?(RuntimeError.new('GPU out of memory'))
+  end
+
   def test_the_memory_is_bounded_and_says_what_it_dropped
     FakeLocksmith.failing = true
     original = Wurk::FinishedJobCleanup::MEMORY

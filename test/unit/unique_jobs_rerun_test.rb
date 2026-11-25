@@ -74,8 +74,8 @@ class UniqueJobsRerunTest < Wurk::Test::UnitCase
 
     def finish
       @fiber.resume
-    rescue Wurk::Shutdown
-      :unwound
+    rescue Wurk::Shutdown, ArgumentError
+      :ended
     end
   end
 
@@ -128,20 +128,21 @@ class UniqueJobsRerunTest < Wurk::Test::UnitCase
 
   # ---- the incident -------------------------------------------------------
 
-  # TREASURY-F1P: the re-run's lock survives the interrupted run's unwind, for
-  # every type whose lock is held during `perform`.
-  [Jobs::Running, Jobs::Both].each do |klass|
+  # TREASURY-F1P: the re-run's lock survives the end of the run before it, for
+  # every type whose lock is held during `perform`, however that run ends.
+  [Jobs::Running, Jobs::Both].product([Wurk::Shutdown, ArgumentError, nil]).each do |klass, outcome|
     name = klass.get_sidekiq_options['lock']
 
-    define_method("test_#{name}_an_unwinding_run_leaves_the_reruns_lock_alone") do
+    define_method("test_#{name}_a_run_ending_with_#{outcome || 'success'}_leaves_the_reruns_lock_alone") do
       push(klass, 'acct-1')
       job = payload(klass)
       digest = held_digest(job)
-      old = job_run(job, Wurk::Shutdown).start
+      old = job_run(job, outcome).start
       new = rerun(job)
 
       assert_predicate new, :entered?, 'the re-run must re-enter its own lock'
-      assert_equal :unwound, old.finish
+      old.finish
+
       assert_equal [job['jid']], holders(digest), 'the old run freed the lock the re-run holds'
       assert refresh!(new.worker), 'the re-run no longer passes as the holder'
       refute_predicate job_run(UJ::Job.prepare(other(job))).start, :entered?, 'a third job ran beside the re-run'
@@ -271,7 +272,7 @@ class UniqueJobsRerunTest < Wurk::Test::UnitCase
   def test_each_rerun_supersedes_every_run_before_it
     push(Jobs::Running, 'acct-1')
     job = payload(Jobs::Running)
-    runs = Array.new(3) { job_run(job, Wurk::Shutdown).start }
+    runs = [ArgumentError, ArgumentError, nil].map { |outcome| job_run(job, outcome).start }
 
     held = runs.map { |r| refresh!(r.worker) }
 
@@ -293,7 +294,7 @@ class UniqueJobsRerunTest < Wurk::Test::UnitCase
     push(Jobs::Running, 'acct-1')
     job = payload(Jobs::Running)
     digest = held_digest(job)
-    old = job_run(job, Wurk::Shutdown).start
+    old = job_run(job, ArgumentError).start
     UJ::Digests.new.delete_by_digest(job['lock_digest'].delete_suffix(':RUN'))
     new = rerun(job)
     old.finish
@@ -309,7 +310,7 @@ class UniqueJobsRerunTest < Wurk::Test::UnitCase
     push(Jobs::Running, 'acct-1')
     job = payload(Jobs::Running)
     digest = held_digest(job)
-    old = job_run(job, Wurk::Shutdown).start
+    old = job_run(job, ArgumentError).start
     UJ::Digests.new.delete_by_digest(job['lock_digest'].delete_suffix(':RUN'))
     Wurk.redis { |c| c.call('LPUSH', "#{digest}:QUEUED", job['jid']) }
     old.finish
@@ -322,7 +323,7 @@ class UniqueJobsRerunTest < Wurk::Test::UnitCase
     job = payload(Jobs::TwoAtOnce)
     digest = held_digest(job)
     sibling = job_run(UJ::Job.prepare(other(job))).start
-    old = job_run(job, Wurk::Shutdown).start
+    old = job_run(job, ArgumentError).start
     new = rerun(job)
     old.finish
 
@@ -340,10 +341,117 @@ class UniqueJobsRerunTest < Wurk::Test::UnitCase
   def test_a_waiting_run_that_finds_its_jid_already_locked_becomes_the_holder
     key = UJ::Key.new('uniquejobs:rerun-duplicate')
     Wurk.redis { |c| c.call('HSET', key.locked, 'same', '1764000000.1') }
-    argv = ['same', 0, 'while_executing', 1, '', 1_764_000_001.5, 0, 'lock.lua', '1764000001.5']
+    mark = UJ::Run.token
+    argv = ['same', 0, 'while_executing', 1, '', 1_764_000_001.5, 0, 'lock.lua', mark]
     Wurk.redis { |c| UJ::Script.call(:unique_jobs_lock, c, keys: key.to_a, argv: argv) }
 
-    assert_equal('1764000001.5', Wurk.redis { |c| c.call('HGET', key.locked, 'same') })
+    assert_equal(mark, Wurk.redis { |c| c.call('HGET', key.locked, 'same') })
+  end
+
+  # ---- an interrupted run keeps its lock ----------------------------------
+
+  # Released on the way out, a runtime lock goes to whoever waits for it, and the
+  # interrupted job meets a conflict when it comes back: dropped, dead or pushed
+  # again as another job. Kept, it is the one its re-run walks into.
+  [Jobs::Running, Jobs::Both].each do |klass|
+    name = klass.get_sidekiq_options['lock']
+
+    define_method("test_#{name}_an_interrupted_run_keeps_its_lock_until_it_runs_again") do
+      push(klass, 'acct-1')
+      job = payload(klass)
+      old = job_run(job, Wurk::Shutdown).start
+      old.finish
+
+      assert_equal [job['jid']], holders(held_digest(job))
+      refute_predicate job_run(UJ::Job.prepare(other(job))).start, :entered?, 'another job took its lock'
+      again = rerun(job)
+
+      assert_predicate again, :entered?
+      again.finish
+
+      assert_empty holders(held_digest(job))
+    end
+  end
+
+  # What raised was the job's own: the lock is released as ever.
+  def test_while_executing_a_failed_run_releases_its_lock
+    push(Jobs::Running, 'acct-1')
+    job = payload(Jobs::Running)
+    old = job_run(job, ArgumentError).start
+
+    old.finish
+
+    assert_empty holders(held_digest(job))
+  end
+
+  # A successor may be pushed as soon as the job starts, and holds the push lock
+  # by the time the interrupted job comes back: it has started already, and must
+  # run again rather than be dropped for a lock it gave up.
+  def test_until_and_while_executing_an_interrupted_run_comes_back_past_its_successor
+    push(Jobs::Both, 'acct-1')
+    job = payload(Jobs::Both)
+    old = job_run(job, Wurk::Shutdown).start
+    successor = push(Jobs::Both, 'acct-1')
+    old.finish
+
+    assert successor
+    again = job_run(job).start
+
+    assert_predicate again, :entered?, 'the interrupted job was dropped'
+    again.finish
+
+    assert_equal [successor], holders(job['lock_digest']), 'the successor must keep its push lock'
+    assert_empty holders(held_digest(job))
+  end
+
+  # A job that never started and lost its push lock still does not run.
+  def test_until_and_while_executing_a_job_whose_push_lock_went_to_another_does_not_run
+    push(Jobs::Both, 'acct-1')
+    job = payload(Jobs::Both)
+    UJ::Digests.new.delete_by_digest(job['lock_digest'])
+    push(Jobs::Both, 'acct-1')
+
+    refute_predicate job_run(job).start, :entered?
+  end
+
+  # ---- values no run wrote ------------------------------------------------
+
+  # A lock pushed by the gem or Wurk 1.20, or put back by a snapshot or failover
+  # from before this run entered it: the jid's, with nothing to say another run
+  # of it came since. `1.79e+9` is how a server prints the number the gem writes.
+  ['1764000000.1234', '1764000000', '1.7955788086062095e+9'].each_with_index do |value, i|
+    define_method("test_a_value_no_run_wrote_is_held_by_the_jid_#{i}") do
+      push(Jobs::Pushed, 'acct-1')
+      job = payload(Jobs::Pushed)
+      held = job_run(job).start
+      Wurk.redis { |c| c.call('HSET', "#{job['lock_digest']}:LOCKED", job['jid'], value) }
+
+      assert refresh!(held.worker), 'refused to renew a lock no other run marked'
+      held.finish
+
+      assert_empty holders(job['lock_digest']), 'left a lock no other run marked'
+    end
+  end
+
+  # Every mark is recognizable as one, whatever the clock's digits.
+  def test_a_mark_always_has_fifteen_decimals
+    [0.0, 1_764_000_000.0, 1_764_000_000.5, 1_764_000_000.123456].each do |now|
+      assert_match(/\A\d+\.\d{15}\z/, at(now) { UJ::Run.token })
+    end
+  end
+
+  # ---- the payload object ---------------------------------------------------
+
+  # Apps and middleware deep-copy a payload through Marshal.
+  def test_the_payload_of_a_running_job_can_be_marshalled
+    push(Jobs::Pushed, 'acct-1')
+    job = payload(Jobs::Pushed)
+    held = job_run(job).start
+    copy = Marshal.load(Marshal.dump(held.item))
+
+    assert_equal held.item, copy
+    assert refresh!(copy), 'a copy of the run\'s payload is still its run\'s'
+    held.finish
   end
 
   # ---- the owed unlock ----------------------------------------------------
@@ -430,6 +538,14 @@ class UniqueJobsRerunTest < Wurk::Test::UnitCase
   end
 
   private
+
+  # Minitest 6 dropped minitest/mock; swap one singleton method and restore it.
+  def at(now)
+    UJ.define_singleton_method(:now_f) { now }
+    yield
+  ensure
+    UJ.define_singleton_method(:now_f) { self.now.to_f }
+  end
 
   def settle(item)
     config = Wurk.configuration

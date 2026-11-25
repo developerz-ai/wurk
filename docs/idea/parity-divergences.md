@@ -216,9 +216,9 @@ the private list, where orphan reclaim picks it up.
 
 ## Interrupted jobs are requeued after their threads unwind
 
-**Wurk:** `Manager#hard_shutdown` raises `Wurk::Shutdown` into every busy thread,
-waits up to 2s for them to unwind, then calls `bulk_requeue` with their jobs. With a
-fetcher that is not a `Fetcher::Reliable` it keeps Sidekiq's order.
+**Wurk:** `Manager#hard_shutdown` raises `Wurk::Shutdown` into every busy thread
+and calls `bulk_requeue` with each job as its thread ends, and with the rest after 2s.
+With a fetcher that is not a `Fetcher::Reliable` it keeps Sidekiq's order.
 
 **Spec:** free §13 — "On hard shutdown, in-flight jobs are `bulk_requeue`d before
 threads killed."
@@ -227,13 +227,16 @@ threads killed."
 here the private list does, so a process that dies in the wait loses nothing. And a
 requeued job starts elsewhere within a millisecond, while the interrupted run still
 has its `ensure` blocks to go: requeued first, it unlocked a sidekiq-unique-jobs
-lock under the run that had just re-entered it. Waiting also stops a job that
-finishes, or books a retry, on its way out from running again as well. The cost is
-that the job is visible up to 2s later, inside the 5s the swarm allows past its
-shutdown timeout; a process SIGKILLed in those 2s comes back through the reaper
-instead, which counts as a poison-pill recovery.
+lock under the run that had just re-entered it. At least once holds as it does there:
+a job sent the interrupt before its `perform` completed is requeued even if it
+swallowed it (`Processor#cut_short?`). One that had completed, or booked its retry,
+is not, where Sidekiq may run it again. The cost is that a job whose thread is slow
+to end is visible up to 2s later, inside the 5s the swarm allows past its shutdown
+timeout; a process SIGKILLed in those 2s comes back through the reaper instead, which
+counts as a poison-pill recovery.
 
-**Anchor:** `lib/wurk/manager.rb` (`hard_shutdown`), free §13.
+**Anchor:** `lib/wurk/manager.rb` (`hard_shutdown`), `lib/wurk/processor.rb`
+(`cut_short?`), free §13.
 
 ## Limiter `ttl` below 24h is raised to 24h
 

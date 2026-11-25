@@ -135,31 +135,33 @@ module Wurk
       @shutdown&.call
     end
 
-    # How long a killed thread may take to unwind before its job is requeued
-    # anyway, and how long the process gives the last ones after that. Together
-    # what Swarm::SHUTDOWN_GRACE and the Launcher's join allow for.
+    # How long killed threads may take to unwind before what is left of their jobs
+    # is requeued anyway, and how long the process gives the last of them after
+    # that. Inside what the Launcher and the Swarm allow a Manager past its
+    # deadline (Launcher::TEARDOWN_GRACE, the shortest).
     UNWIND_GRACE = 2
     STRAGGLER_GRACE = 1
     UNWIND_POLL = 0.02
-    private_constant :UNWIND_GRACE, :STRAGGLER_GRACE, :UNWIND_POLL
+    private_constant :UNWIND_POLL
 
     # Reached when the deadline expired with workers still busy: raise
-    # Wurk::Shutdown into each, give it UNWIND_GRACE to unwind, then move what is
-    # still in the private list back to the public queue (Reliable#bulk_requeue),
-    # where it runs again from the top (Sidekiq's at-least-once contract).
+    # Wurk::Shutdown into each, and move every unfinished job from the private list
+    # back to the public queue (Reliable#bulk_requeue), where it runs again from the
+    # top (Sidekiq's at-least-once contract), as soon as its own thread has ended.
+    # What has not ended within UNWIND_GRACE is requeued under its running thread.
     #
     # In that order because a requeued job is running elsewhere within a
     # millisecond, and an unwinding run still has `ensure` blocks to go: it
-    # releases unique locks and limiter slots, saves an iteration cursor. A run
-    # past its requeue does all that under the run that replaced it. Waiting costs
-    # no job: until the move it sits in the private list, which a SIGKILL leaves
-    # for the reaper. A fetcher with no private list has nothing holding the
-    # payload meanwhile, so its jobs go back first.
+    # releases limiter slots, saves an iteration cursor, rolls back. A run past its
+    # requeue does all that beside the run that replaced it. Waiting costs no job:
+    # until the move it sits in the private list, which a SIGKILL leaves for the
+    # reaper. A fetcher with no private list has nothing holding the payload
+    # meanwhile, so its jobs go back first.
     #
     # `job` is read off another thread and before the kill, after which a
-    # Processor drops it. One that ACKs afterwards (the job finished on its way
-    # out, or booked a retry) is not resurrected: bulk_requeue's guard skips the
-    # RPUSH on a miss.
+    # Processor drops it. One that had finished, or was booking its retry, when the
+    # interrupt was sent ACKs it (Processor#cut_short?), and bulk_requeue's guard
+    # skips the RPUSH on a miss.
     #
     # Every processor is killed even when a requeue raises (Redis down mid-drain):
     # embedded, the host keeps living after #stop, and those threads would carry
@@ -169,11 +171,11 @@ module Wurk
       cleanup = workers_snapshot
       return if cleanup.empty?
 
-      jobs = cleanup.map(&:job).compact
+      units = cleanup.to_h { |worker| [worker, worker.job] }.compact
       if capsule.fetcher.is_a?(Fetcher::Reliable)
-        unwind_then_requeue(cleanup, jobs)
+        unwind_then_requeue(cleanup, units)
       else
-        requeue_then_kill(cleanup, jobs)
+        requeue_then_kill(cleanup, units.values)
       end
     ensure
       # The caller typically `exit`s immediately after we return; give threads
@@ -183,11 +185,33 @@ module Wurk
 
     private
 
-    def unwind_then_requeue(cleanup, jobs)
-      interrupt(cleanup, jobs)
-      wait_for_unwind(cleanup, UNWIND_GRACE)
+    def unwind_then_requeue(cleanup, units)
+      interrupt(cleanup, units.values)
+      requeue_as_they_end(units)
     ensure
-      capsule.fetcher.bulk_requeue(jobs)
+      # Also flushes the ACKs of the threads that ended, with nothing left to move.
+      capsule.fetcher.bulk_requeue(units.values)
+    end
+
+    # Drops from `units` what it has put back. A refused requeue leaves the rest to
+    # the caller's, at the end of the wait: one more try, not one every poll.
+    def requeue_as_they_end(units)
+      deadline = monotonic + UNWIND_GRACE
+      until units.empty? || monotonic >= deadline
+        ended = units.reject { |worker, _| running?(worker) }
+        return wait_for_unwind(units.keys, deadline - monotonic) unless requeued?(ended.values)
+
+        ended.each_key { |worker| units.delete(worker) }
+        sleep UNWIND_POLL
+      end
+    end
+
+    def requeued?(jobs)
+      capsule.fetcher.bulk_requeue(jobs) if jobs.any?
+      true
+    rescue StandardError => e
+      capsule.config.handle_exception(e, { context: 'Error requeueing a job interrupted by shutdown' })
+      false
     end
 
     def requeue_then_kill(cleanup, jobs)
@@ -205,14 +229,13 @@ module Wurk
       log_interrupted(jobs)
     end
 
+    def running?(worker) = worker.thread&.alive?
+    def monotonic = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+
     # Polled rather than joined: a join re-raises what ended the thread.
     def wait_for_unwind(cleanup, seconds)
-      deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + seconds
-      while cleanup.any? { |w| w.thread&.alive? }
-        return if ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) >= deadline
-
-        sleep UNWIND_POLL
-      end
+      deadline = monotonic + seconds
+      sleep UNWIND_POLL while cleanup.any? { |worker| running?(worker) } && monotonic < deadline
     end
 
     # One WARN per job a deploy cut short, because each one runs again from the
@@ -223,9 +246,7 @@ module Wurk
 
     def log_interrupted(jobs)
       jobs.first(REQUEUE_LOG_LIMIT).each do |uow|
-        logger.warn do
-          "Interrupting #{describe_job(uow)}: past the shutdown deadline, runs again unless it finishes on its way out"
-        end
+        logger.warn { "Interrupting #{describe_job(uow)}: past the shutdown deadline, it is requeued to run again" }
       end
       extra = jobs.size - REQUEUE_LOG_LIMIT
       logger.warn { "Interrupting #{extra} more in-flight jobs, which run again too" } if extra.positive?

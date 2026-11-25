@@ -58,8 +58,8 @@ module Wurk
       # the run of that jid here answers for it, and a payload that runs nowhere
       # in this process renews by jid.
       def run_token
-        run = Run.of(@item) || Run.of_jid(@item[JID])
-        run&.token_for(key.digest).to_s
+        marks = Run.marks_of(@item) || Run.of_jid(@item[JID])&.marks
+        marks&.fetch(key.digest, nil).to_s
       end
 
       # Seconds, from the caller or else the TTL the lock was taken with: the

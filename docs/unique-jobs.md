@@ -592,13 +592,34 @@ run unlocks nothing (its `after_unlock` does not run, and `unlock_failed` is
 reflected), its `refresh_lock!` returns `false`, and an unlock it still owes after a
 Redis outage is dropped. The mark is the value beside the jid in `:LOCKED`: the
 gem keeps the lock's time there and this is the time the run entered, with random
-digits below the microsecond. Nothing else in Redis or in the payload changes.
+digits below the microsecond. A value that is no mark (a lock the gem or Wurk 1.20
+took, or one a snapshot put back) is the jid's, as before. Nothing else in Redis, and
+nothing in the payload's JSON, changes.
+
+A run cut short by a shutdown also **keeps its runtime lock** (`while_executing`,
+`until_and_while_executing`), as one that crashed does and as `until_executed` always
+did: the job is requeued and walks back into it. The gem releases it, and the lock
+goes to whoever is waiting; the interrupted job then comes back to a conflict, which
+drops it, buries it or pushes it again as another job. Other jobs of the
+digest meet the lock as held until the re-run ends, or its TTL or the reaper frees it.
+
+For the same reason an `until_and_while_executing` job that still holds its runtime
+lock runs when it comes back, although its push lock may be a successor's by now. The
+gem drops it.
 
 This fences the lock, not the job: the older run goes on executing until it ends or
 checks. Call `refresh_lock!` before a write that must not be doubled, and stop on
-`false`. A process on the gem or on Wurk 1.20 does not write or check marks, so while
-a fleet mixes them, its unlock still releases the lock under a re-run, as it always
-did. That includes the deploy that brings this in: the pods it stops are the old ones.
+`false`.
+
+Two things leave a run as the gem would have it, known by its jid alone:
+
+- **A process on the gem or on Wurk 1.20** neither writes nor checks marks, so while a
+  fleet mixes them its unlock still releases the lock under a re-run. That includes the
+  deploy that brings this in: the pods it stops are the old ones. Rolling back, a 1.20
+  process handed an interrupted `until_and_while_executing` job whose successor is
+  already queued drops it, as 1.20 always did, and now leaves its runtime lock to the TTL.
+- **A Redis at `maxmemory`** refuses the mark. The lock was taken at push, so the job
+  runs, unmarked ([at maxmemory](reliability.md#at-maxmemory)).
 
 ### And the Enterprise API
 

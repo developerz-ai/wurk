@@ -11,8 +11,16 @@
 local digest, locked, info, expiring = KEYS[1], KEYS[4], KEYS[5], KEYS[8]
 local job_id, pttl, now, run = ARGV[1], tonumber(ARGV[2]), tonumber(ARGV[3]), ARGV[4]
 
+-- A value that is another run's mark (fifteen decimals, UniqueJobs::Run.token). Any
+-- other value says only that the jid holds the lock: one the gem or an older Wurk
+-- wrote, or a snapshot put back.
+local function another_runs(holder)
+  local decimals = string.match(holder, "^%d+%.(%d+)$")
+  return #run > 0 and holder ~= run and decimals and #decimals == 15
+end
+
 local holder = redis.call("HGET", locked, job_id)
-if not holder or (#run > 0 and holder ~= run) then
+if not holder or another_runs(holder) then
   return 0
 end
 

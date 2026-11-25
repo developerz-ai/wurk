@@ -10,6 +10,14 @@ local job_id, lock_type, limit = ARGV[1], ARGV[3], tonumber(ARGV[4])
 local now, max_history, script_name, sync_locked = tonumber(ARGV[6]), tonumber(ARGV[7]), ARGV[8], ARGV[9] == "1"
 local run = ARGV[10] or ""
 
+-- A value that is another run's mark (fifteen decimals, UniqueJobs::Run.token). Any
+-- other value says only that the jid holds the lock: one the gem or an older Wurk
+-- wrote, or a snapshot put back.
+local function another_runs(holder)
+  local decimals = string.match(holder, "^%d+%.(%d+)$")
+  return #run > 0 and holder ~= run and decimals and #decimals == 15
+end
+
 local function log(message, prev_jid)
   if not max_history or max_history == 0 then return end
   local entry = cjson.encode({digest = digest, job_id = job_id, script = script_name, message = message, time = now, prev_jid = prev_jid})
@@ -27,8 +35,9 @@ if sync_locked and limit <= 1 then
   return job_id
 end
 
-local holds_lock = redis.call("HEXISTS", locked, job_id) == 1
-if holds_lock and #run > 0 and redis.call("HGET", locked, job_id) ~= run then
+local holder = redis.call("HGET", locked, job_id)
+local holds_lock = holder and true or false
+if holder and another_runs(holder) then
   log("Superseded by a later run")
   return nil
 end

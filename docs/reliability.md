@@ -175,15 +175,21 @@ are never served from this cache.
 
 On `SIGTERM`, in-flight jobs get until `shutdown_timeout` (default **25s**,
 `config[:timeout]`) to finish. Whatever is still running at the deadline is
-interrupted (`Wurk::Shutdown` raised into its thread) and given up to 2s to unwind.
-Pending ACKs are then flushed, and what is still parked is moved private-list →
-public queue by `bulk_requeue`, using a guarded `RPUSH` then `LREM` in one Lua hop.
+interrupted (`Wurk::Shutdown` raised into its thread). Each job is moved
+private-list → public queue as soon as its own thread has ended, by `bulk_requeue`:
+pending ACKs flushed, then a guarded `RPUSH` and `LREM` in one Lua hop. A thread that
+has not ended within 2s has its job moved while it still runs.
+
+A job sent the interrupt before its `perform` completed is requeued whatever it made
+of it: swallowed it with `rescue Exception`, raised something else, returned early. It
+is not ACKed and books no retry. A job that had completed, or whose retry was already
+booked, is not run again for it.
 
 That ordering is load-bearing, twice. A requeued job is running in another process
 within a millisecond, so it goes back only once its own thread is out of its
-`ensure` blocks: those release locks and limiter slots, and save cursors, that the
-next run depends on. A thread that does not unwind in time is requeued all the same,
-and the two runs overlap until the process exits. Until the move the payload sits in
+`ensure` blocks: those release limiter slots, save cursors and roll back what the next
+run starts from. A thread that does not unwind in time runs beside the run that
+replaces it until the process exits. Until the move the payload sits in
 the private list, so a SIGKILL during the wait loses nothing: the reaper brings it
 back, later than the move would have. (A `config[:fetch_class]` fetcher that is not
 a `Fetcher::Reliable` has no private list, so its jobs are requeued before the
@@ -505,6 +511,7 @@ lasts, so watch for `Redis is at maxmemory`.
 | Requeue at shutdown, a stranded job put back | Work, through the same flag |
 | Dashboard retry or kill | The push is refused and the job goes back to its set, through the same flag |
 | Heartbeat | Its write is refused, so a claim also writes the identity hash and moves `beat`: a worker still fetching is not read as dead. A worker with every thread in a long job has no claim to write it with until a thread frees up. Stats and metrics writes are dropped |
+| A unique job (`lock:`) entering the lock it took at push | Works, on Dragonfly too: the run goes unmarked ([two runs of one job](unique-jobs.md#two-runs-of-one-job-wurk-only)). Taking a lock is a write and is refused |
 | Queues under `global_concurrency` | Not claimed through this path, since it skips the slot ledger |
 | Enqueues, scheduling | Still refused: that pressure is what you want producers to feel |
 

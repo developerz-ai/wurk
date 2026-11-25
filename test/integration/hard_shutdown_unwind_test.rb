@@ -32,6 +32,43 @@ class HardShutdownLockedJob
   def note(log, step) = Wurk.redis { |c| c.call('RPUSH', log, step) }
 end
 
+# Another thread's job, slow to unwind.
+class HardShutdownSlowJob
+  include Wurk::Job
+
+  sidekiq_options retry: false
+
+  def perform
+    Wurk.redis { |c| c.call('SET', 'hsu-slow', '1', 'EX', 60) }
+    sleep 30
+  ensure
+    sleep 1.7
+  end
+end
+
+# Two jobs of one key, so that one can meet the other's lock.
+class HardShutdownKeyedJob
+  include Wurk::Job
+
+  sidekiq_options lock: :while_executing, lock_ttl: 60, retry: false,
+                  lock_args_method: ->(args) { [args[0]] }
+
+  # A later job outlasts whatever holds the first one up.
+  def perform(log, name)
+    Wurk.redis { |c| c.call('RPUSH', log, "#{name}_in") }
+    sleep(name == 'first' && ::Process.pid == HardShutdownUnwindTest.observer_pid ? 0.3 : 5)
+    Wurk.redis { |c| c.call('RPUSH', log, "#{name}_done") }
+  end
+end
+
+class HardShutdownWaitingJob < HardShutdownKeyedJob
+  sidekiq_options lock_timeout: 5
+end
+
+class HardShutdownRejectedJob < HardShutdownKeyedJob
+  sidekiq_options on_conflict: :reject
+end
+
 # A deploy in miniature: one process is past its shutdown deadline with a unique
 # job in flight, another is already running and fetching the same queue.
 class HardShutdownUnwindTest < Wurk::Test::UnitCase
@@ -117,36 +154,70 @@ class HardShutdownUnwindTest < Wurk::Test::UnitCase
     stop(manager)
   end
 
+  # While one thread is slow to unwind, the other's job must not lose its lock to a
+  # later job of the same key and come back to a conflict, which drops it (no
+  # strategy), buries it (`reject`) or pushes it again as another job (`reschedule`).
+  # `lock_timeout` is the case no speed of requeue can win: the later job is
+  # already waiting when the lock is let go.
+  %w[Keyed Waiting Rejected].each do |kind|
+    define_method("test_an_interrupted_#{kind.downcase}_job_is_not_lost_to_a_later_one_of_its_key") do
+      klass = Object.const_get("HardShutdown#{kind}Job")
+      push_class(klass, @log, 'first')
+      push_class(HardShutdownSlowJob)
+      Wurk.redis { |c| c.call('DEL', 'hsu-slow') }
+      @child = fork_worker(concurrency: 2, &:hard_shutdown)
+      wait_for_step('first_in')
+      wait_until { Wurk.redis { |c| c.call('GET', 'hsu-slow') } }
+      manager = build_manager(concurrency: 4)
+      manager.start
+      push_class(klass, @log, 'later')
+      sleep 0.2
+      ::Process.kill('USR1', @child)
+      sleep 0.3
+      push_class(klass, @log, 'later_still')
+      wait_for_step('first_done')
+
+      assert_equal 2, steps.count('first_in'), 'the interrupted job must run again'
+      refute_includes Wurk.redis { |c| c.call('ZRANGE', 'dead', 0, -1) }.join, '"first"'
+    ensure
+      stop(manager)
+    end
+  end
+
   private
 
-  def push(unwind)
+  def push_class(klass, *args)
     Wurk.configuration.client_middleware.add(UJ::Middleware::Client)
-    Wurk::Client.push('class' => HardShutdownLockedJob, 'args' => [@log, unwind], 'queue' => @queue)
+    Wurk::Client.push('class' => klass, 'args' => args, 'queue' => @queue)
   ensure
     Wurk.configuration.client_middleware.remove(UJ::Middleware::Client)
   end
 
-  def build_manager
+  def push(unwind)
+    push_class(HardShutdownLockedJob, @log, unwind)
+  end
+
+  def build_manager(concurrency: 1)
     config = Wurk::Configuration.new
     config.logger = ::Logger.new(IO::NULL)
     config.redis = { url: Wurk::Test.redis_url }
     config.server_middleware.add(UJ::Middleware::Server)
     capsule = config.default_capsule
     capsule.queues = [@queue]
-    capsule.concurrency = 1
+    capsule.concurrency = concurrency
     capsule.prepare!
     Wurk::Manager.new(capsule)
   end
 
   # A worker process that quiets and runs the block on USR1.
-  def fork_worker
+  def fork_worker(concurrency: 1)
     ::Process.fork do
       $stdout.reopen(IO::NULL)
       $stderr.reopen(IO::NULL)
       Wurk.configuration.reset_redis_pools!
       signalled = ::Queue.new
       trap('USR1') { signalled << true }
-      manager = build_manager
+      manager = build_manager(concurrency: concurrency)
       manager.start
       signalled.pop
       manager.quiet
