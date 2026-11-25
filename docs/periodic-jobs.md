@@ -414,6 +414,15 @@ compute the same occurrence for every schedule shape tested (zones with and
 without DST, both 2026 US clock changes), and both pollers ticking through one
 minute push one job.
 
+**An unloadable class is skipped, not pushed.** The same guard applies to native
+sidekiq-cron entries: if the class named by a fired entry cannot be loaded in the
+process (deleted, renamed, or a rollback to code that predates it), the poller
+claims the occurrence and skips it. No job is pushed. It logs a WARN naming the
+class and the entry, and hands a `Wurk::SidekiqCron::Job::UnknownWorkerClass`
+to your error handlers once per entry per process (as the loop guard does).
+A vanished class cannot turn into a retry storm, because pushing the bare name
+would run with the entry's default retries.
+
 **The gem wins when both are present.** With `sidekiq-cron` in the bundle, Wurk
 registers no `Sidekiq::Cron` autoload, its `sidekiq/cron*` files load the gem's,
 and the Launcher starts no native poller (asserted by the same interop run).
