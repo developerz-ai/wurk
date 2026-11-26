@@ -1,0 +1,129 @@
+// ── Busy page ────────────────────────────────────────────────────────────────
+// Process cards in a responsive grid. A pod is a host of one process, so a
+// Kubernetes fleet is many one-card hosts: those share one grid instead of a
+// header and a row each. A host running several processes keeps its section.
+
+@use '../abstracts' as *;
+
+.busy-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, to-rem(300)), 1fr));
+  gap: to-rem(12);
+}
+
+.busy-host {
+  margin-bottom: to-rem(24);
+
+  &__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: to-rem(8);
+    margin-bottom: to-rem(10);
+  }
+
+  &__name {
+    font-weight: 600;
+    font-size: to-rem(15);
+  }
+}
+
+.busy-card {
+  display: flex;
+  flex-direction: column;
+  gap: to-rem(10);
+  min-width: 0;
+  padding: to-rem(14) to-rem(16);
+
+  &__head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: to-rem(8);
+    min-width: 0;
+  }
+
+  &__title {
+    font-weight: 600;
+    font-size: to-rem(14.5);
+    @include truncate;
+  }
+
+  &__sub {
+    color: var(--text-muted);
+    font-size: to-rem(12);
+    @include truncate;
+  }
+
+  &__flags {
+    display: flex;
+    align-items: center;
+    gap: to-rem(6);
+    flex-shrink: 0;
+  }
+
+  &__stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: to-rem(8);
+  }
+
+  &__label {
+    font-size: to-rem(10.5);
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    @include truncate;
+  }
+
+  &__value {
+    font-size: to-rem(13);
+    font-variant-numeric: tabular-nums;
+    @include truncate;
+  }
+
+  &__busy {
+    font-weight: 600;
+    font-size: to-rem(16);
+  }
+
+  &__facts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: to-rem(4) to-rem(14);
+    color: var(--text-muted);
+    font-size: to-rem(12);
+    font-variant-numeric: tabular-nums;
+  }
+
+  &__actions {
+    display: flex;
+    gap: to-rem(6);
+    margin-top: auto;
+  }
+}
+
+.busy-queues {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: to-rem(4);
+
+  &__toggle {
+    font-family: var(--font-mono);
+    font-size: to-rem(10.5);
+    color: var(--accent);
+    background: none;
+    border: 0;
+    padding: to-rem(3) to-rem(4);
+    cursor: pointer;
+
+    &:hover {
+      text-decoration: underline;
+    }
+
+    &:focus-visible {
+      @include focus-ring;
+    }
+  }
+}

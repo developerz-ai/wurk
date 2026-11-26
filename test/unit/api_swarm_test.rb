@@ -158,6 +158,8 @@ class ApiSwarmTest < Wurk::Test::UnitCase
     assert_equal 'Fake CPU', host['cpu_model']
     assert_equal 8, host['cores']
     assert_equal 16_000_000, host['memory_total_kb']
+    assert_in_delta 1.5, host['cpu_limit']
+    assert_equal 2_097_152, host['memory_limit_kb']
   end
 
   # The slot table is the one the heartbeats describe, not the one this
@@ -748,7 +750,8 @@ class ApiSwarmTest < Wurk::Test::UnitCase
       'hostname' => hostname, 'started_at' => started_at || (@now - 600), 'pid' => pid, 'tag' => tag,
       'concurrency' => concurrency, 'capsules' => { 'default' => { 'weights' => weights_for(queues) } },
       'labels' => ['x'], 'identity' => identity, 'version' => version, 'embedded' => embedded,
-      'cpu_model' => 'Fake CPU', 'cores' => 8, 'memory_total_kb' => 16_000_000
+      'cpu_model' => 'Fake CPU', 'cores' => 8, 'memory_total_kb' => 16_000_000,
+      'cpu_limit' => 1.5, 'memory_limit_kb' => 2_097_152
     }
     @pool.with do |c|
       c.call('SADD', 'processes', identity)

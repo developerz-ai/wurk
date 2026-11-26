@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require_relative '../test_helper'
+require 'tmpdir'
+require 'fileutils'
 
 # Drives Wurk::Heartbeat against real Redis. Each test owns a unique
 # identity so parallel runs can't collide on the global `processes` SET
@@ -96,7 +98,9 @@ class HeartbeatTest < Wurk::Test::UnitCase
       %("embedded":false),
       %("cpu_model":#{json[facts['cpu_model']]}),
       %("cores":#{json[facts['cores']]}),
-      %("memory_total_kb":#{json[facts['memory_total_kb']]}})
+      %("memory_total_kb":#{json[facts['memory_total_kb']]}),
+      %("cpu_limit":#{json[facts['cpu_limit']]}),
+      %("memory_limit_kb":#{json[facts['memory_limit_kb']]}})
     ].join(',')
     written = @pool.with { |c| c.call('HGET', @identity, 'info') }
 
@@ -115,6 +119,40 @@ class HeartbeatTest < Wurk::Test::UnitCase
     assert_operator info['cores'], :>, 0
     assert_operator info['memory_total_kb'], :>, 0
     assert_kind_of String, info['cpu_model'] if info['cpu_model']
+  end
+
+  # Inside a pod, cores and memory_total_kb are the node's; the limits are
+  # the cgroup's, and only one tighter than the machine is reported.
+  def test_limits_report_a_cgroup_cap_tighter_than_the_machine
+    hb = build_heartbeat
+    with_cgroup('cpu.max' => "150000 100000\n", 'memory.max' => "#{2 * (1024**3)}\n") do |cgroup|
+      assert_in_delta 1.5, hb.send(:cpu_limit, 8, **cgroup)
+      assert_equal 2 * 1024 * 1024, hb.send(:memory_limit_kb, 64 * 1024 * 1024, **cgroup)
+    end
+  end
+
+  def test_the_smallest_cpu_quota_is_not_rounded_away
+    hb = build_heartbeat
+
+    with_cgroup('cpu.max' => "1000 1000000\n") do |cgroup|
+      assert_in_delta 0.001, hb.send(:cpu_limit, 8, **cgroup), 1e-9
+    end
+  end
+
+  def test_limits_are_nil_when_the_cap_is_not_tighter_than_the_machine
+    hb = build_heartbeat
+    with_cgroup('cpu.max' => "1600000 100000\n", 'memory.max' => "#{128 * (1024**3)}\n") do |cgroup|
+      assert_nil hb.send(:cpu_limit, 8, **cgroup)
+      assert_nil hb.send(:memory_limit_kb, 64 * 1024 * 1024, **cgroup)
+    end
+  end
+
+  def test_limits_are_nil_without_a_cgroup
+    hb = build_heartbeat
+    with_cgroup({}) do |cgroup|
+      assert_nil hb.send(:cpu_limit, 8, **cgroup)
+      assert_nil hb.send(:memory_limit_kb, 64 * 1024 * 1024, **cgroup)
+    end
   end
 
   def test_host_facts_are_memoized_per_instance
@@ -540,6 +578,14 @@ class HeartbeatTest < Wurk::Test::UnitCase
   end
 
   private
+
+  def with_cgroup(files)
+    root = Dir.mktmpdir('wurk-cgroup')
+    files.each { |name, body| File.write(File.join(root, name), body) }
+    yield(root: root, proc_cgroup: File.join(root, 'proc-self-cgroup'))
+  ensure
+    FileUtils.remove_entry(root)
+  end
 
   def build_statsd_client(recorder)
     client = Object.new

@@ -96,7 +96,8 @@ module Wurk
         {
           hostname: hostname, processes: group.size,
           concurrency: sum(group, 'concurrency'), busy: sum(group, 'busy'), rss_kb: sum(group, 'rss'),
-          cpu_model: facts['cpu_model'], cores: facts['cores'], memory_total_kb: facts['memory_total_kb']
+          cpu_model: facts['cpu_model'], cores: facts['cores'], memory_total_kb: facts['memory_total_kb'],
+          cpu_limit: facts['cpu_limit'], memory_limit_kb: facts['memory_limit_kb']
         }
       end
 
