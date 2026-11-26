@@ -127,3 +127,53 @@
     }
   }
 }
+
+// Node filter/grouping and the "on <node>" label (Kubernetes only).
+.busy-nodes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: to-rem(6);
+  margin-bottom: to-rem(14);
+
+  .chip[aria-pressed='true'] {
+    border-color: var(--accent);
+    background: color-mix(in oklch, var(--accent) 14%, var(--surface-strong));
+  }
+
+  &__count {
+    color: var(--text-muted);
+    margin-inline-start: to-rem(4);
+  }
+
+  &__group {
+    display: inline-flex;
+    align-items: center;
+    gap: to-rem(6);
+    margin-inline-start: to-rem(8);
+    font-size: to-rem(12);
+    color: var(--text-muted);
+  }
+}
+
+.busy-node {
+  min-width: 0;
+  overflow-wrap: anywhere;
+
+  &__zone {
+    color: var(--text-muted);
+  }
+}
+
+.busy-node-section {
+  margin-bottom: to-rem(20);
+
+  &__title {
+    display: flex;
+    align-items: center;
+    gap: to-rem(8);
+    font-size: to-rem(14);
+    font-weight: 600;
+    margin-bottom: to-rem(10);
+  }
+}

@@ -149,7 +149,7 @@ class ApiSwarmTest < Wurk::Test::UnitCase
   # Host hardware facts belong to the box, so they ride the host roll-up once
   # rather than repeating on every child the box is running.
   def test_swarm_reports_host_hardware_once_per_host
-    beat('a', hostname: 'box-a')
+    beat('a', hostname: 'box-a', node: nil)
     beat('b', hostname: 'box-a')
 
     _status, _headers, body = get('/v1/swarm')
@@ -160,6 +160,8 @@ class ApiSwarmTest < Wurk::Test::UnitCase
     assert_equal 16_000_000, host['memory_total_kb']
     assert_in_delta 1.5, host['cpu_limit']
     assert_equal 2_097_152, host['memory_limit_kb']
+    assert_equal 'node-a', host['node']
+    assert_equal 'zone-1', host['node_zone']
   end
 
   # The slot table is the one the heartbeats describe, not the one this
@@ -744,14 +746,14 @@ class ApiSwarmTest < Wurk::Test::UnitCase
   # production bytes rather than a shape invented for the test.
   def beat(label, hostname: "box-#{@ns}", pid: 4321, tag: 'web', concurrency: 10, busy: 0,
            queues: %w[critical default], version: '1.2.3', embedded: false, quiet: false,
-           rss: 100_000, rtt_us: 400, beat_at: nil, started_at: nil)
+           rss: 100_000, rtt_us: 400, beat_at: nil, started_at: nil, node: 'node-a')
     identity = "#{hostname}:#{pid}:#{label}#{@ns}"
     info = {
       'hostname' => hostname, 'started_at' => started_at || (@now - 600), 'pid' => pid, 'tag' => tag,
       'concurrency' => concurrency, 'capsules' => { 'default' => { 'weights' => weights_for(queues) } },
       'labels' => ['x'], 'identity' => identity, 'version' => version, 'embedded' => embedded,
       'cpu_model' => 'Fake CPU', 'cores' => 8, 'memory_total_kb' => 16_000_000,
-      'cpu_limit' => 1.5, 'memory_limit_kb' => 2_097_152
+      'cpu_limit' => 1.5, 'memory_limit_kb' => 2_097_152, 'node' => node, 'node_zone' => node && 'zone-1'
     }
     @pool.with do |c|
       c.call('SADD', 'processes', identity)

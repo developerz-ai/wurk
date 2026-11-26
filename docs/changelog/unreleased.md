@@ -1,1 +1,5 @@
 # Unreleased
+
+### Added
+
+- **Busy page: the node a pod runs on.** On Kubernetes a process's hostname is its pod's name. The heartbeat now also reports `node`, the first one set of `WURK_NODE_NAME`, `K8S_NODE_NAME` and `NODE_NAME` (set it from the downward API's `spec.nodeName`), and `node_zone` from `WURK_NODE_ZONE`. Both are null when unset, and both appear in `/api/processes` and in `/v1/swarm`'s hosts. Each single-process card, and each multi-process host's header, shows "on <node>" with its zone. A row of node chips, with process counts, filters the cards to one node, and a toggle groups them under a heading per node. The label comes from the environment, not from detecting Kubernetes: a host where none of those variables is set reports no node, and its page looks as before.

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@solidjs/testing-library';
+import { render, screen, fireEvent, waitFor, within } from '@solidjs/testing-library';
 import { QueryClient, QueryClientProvider } from '@tanstack/solid-query';
 import Busy from './Busy';
 import { t } from '../i18n';
@@ -222,6 +222,96 @@ describe('Busy', () => {
     expect(podB).toHaveTextContent('q9');
     // pod-a, new and in front, did not inherit pod-b's open list.
     expect(screen.getByText('pod-a').closest('.card')).toHaveTextContent(t('busy.more_queues', { n: 4 }));
+  });
+
+  const pod = (name: string, node?: string, zone?: string) => ({
+    ...PROCESSES[2],
+    identity: `${name}:1:x`,
+    hostname: name,
+    pid: 1,
+    ...(node ? { node } : {}),
+    ...(zone ? { node_zone: zone } : {}),
+  });
+
+  it('shows the node a pod runs on, with its zone', async () => {
+    stubProcesses([pod('pod-a', 'egress-2', 'us-east-1a')]);
+    renderBusy();
+
+    expect(await screen.findByText(t('busy.on_node', { node: 'egress-2' }), { exact: false })).toBeInTheDocument();
+    expect(screen.getByText(/us-east-1a/)).toBeInTheDocument();
+  });
+
+  // A bare host reports no node: its hostname already is the machine.
+  it('shows no node line, filter or grouping when no process reports a node', async () => {
+    renderBusy();
+    await screen.findByText('host-a');
+
+    expect(screen.queryByText(/^on /)).toBeNull();
+    expect(screen.queryByRole('group', { name: t('busy.nodes') })).toBeNull();
+  });
+
+  it('filters the cards to one node and groups them by node', async () => {
+    stubProcesses([pod('pod-a', 'node-1'), pod('pod-b', 'node-2'), pod('pod-c', 'node-1'), pod('pod-d')]);
+    const { container } = renderBusy();
+    await screen.findByText('pod-a');
+
+    const filters = screen.getByRole('group', { name: t('busy.nodes') });
+    expect(within(filters).getByRole('button', { name: /node-1/ })).toHaveTextContent(/node-1\s*2$/);
+    expect(within(filters).getByRole('button', { name: /node-2/ })).toHaveTextContent(/node-2\s*1$/);
+    fireEvent.click(within(filters).getByRole('button', { name: /node-2/ }));
+    expect(screen.queryByText('pod-a')).toBeNull();
+    expect(screen.getByText('pod-b')).toBeInTheDocument();
+
+    fireEvent.click(within(filters).getByRole('button', { name: t('busy.all_nodes') }));
+    fireEvent.click(within(filters).getByRole('checkbox', { name: t('busy.group_by_node') }));
+
+    const titles = [...container.querySelectorAll('.busy-node-section__title')].map((h) => h.textContent?.trim());
+    expect(titles).toEqual(['node-1', 'node-2', t('busy.no_node')]);
+    const first = container.querySelectorAll('.busy-node-section')[0];
+    expect(first).toHaveTextContent('pod-a');
+    expect(first).toHaveTextContent('pod-c');
+    expect(first).not.toHaveTextContent('pod-b');
+  });
+
+  // Two namespaces can each run a pod of one name, on different nodes.
+  it('keeps same-named pods on different nodes apart', async () => {
+    stubProcesses([
+      { ...pod('worker', 'node-1'), identity: 'worker:1:a' },
+      { ...pod('worker', 'node-2'), identity: 'worker:1:b' },
+    ]);
+    renderBusy();
+    const filters = await screen.findByRole('group', { name: t('busy.nodes') });
+
+    fireEvent.click(within(filters).getByRole('button', { name: /node-2/ }));
+    expect(screen.getAllByText('worker')).toHaveLength(1);
+    expect(screen.getByText(t('busy.on_node', { node: 'node-2' }), { exact: false })).toBeInTheDocument();
+  });
+
+  // The node a filter named stops reporting: every card shows again.
+  it('drops a filter whose node is gone after a poll', async () => {
+    let rows = [pod('pod-a', 'node-1'), pod('pod-b', 'node-2')];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => ({
+        ok: true,
+        status: 200,
+        json: async () => (url.includes('/api/processes') ? rows : url.includes('/api/meta') ? { read_only: true } : []),
+      }) as Response),
+    );
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(() => (
+      <QueryClientProvider client={client}>
+        <Busy />
+      </QueryClientProvider>
+    ));
+    const filters = await screen.findByRole('group', { name: t('busy.nodes') });
+    fireEvent.click(within(filters).getByRole('button', { name: /node-2/ }));
+    expect(screen.queryByText('pod-a')).toBeNull();
+
+    rows = [pod('pod-a', 'node-1'), pod('pod-c')];
+    await client.invalidateQueries({ queryKey: ['processes'] });
+    expect(await screen.findByText('pod-a')).toBeInTheDocument();
+    expect(screen.getByText('pod-c')).toBeInTheDocument();
   });
 
   it('renders a live heartbeat from the API `beat` field', async () => {

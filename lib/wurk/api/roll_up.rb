@@ -91,13 +91,17 @@ module Wurk
         grouped.map { |hostname, group| host(hostname, group) }.sort_by { |host| host[:hostname].to_s }
       end
 
+      def reported(group, field) = group.lazy.map { |process| process[field] }.find { |value| !value.nil? }
+
       def host(hostname, group)
         facts = group.first
         {
           hostname: hostname, processes: group.size,
           concurrency: sum(group, 'concurrency'), busy: sum(group, 'busy'), rss_kb: sum(group, 'rss'),
           cpu_model: facts['cpu_model'], cores: facts['cores'], memory_total_kb: facts['memory_total_kb'],
-          cpu_limit: facts['cpu_limit'], memory_limit_kb: facts['memory_limit_kb']
+          cpu_limit: facts['cpu_limit'], memory_limit_kb: facts['memory_limit_kb'],
+          # A worker older than 1.24 reports no node; take it from one that does.
+          node: reported(group, 'node'), node_zone: reported(group, 'node_zone')
         }
       end
 
