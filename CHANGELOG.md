@@ -4,6 +4,10 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 Each release's notes live in their own file under [`docs/changelog/`](docs/changelog/); this page is the index, newest first. Not released yet: [`docs/changelog/unreleased.md`](docs/changelog/unreleased.md) ([diff since the last release][Unreleased]). A pull request with a user-visible change adds its line there.
 
+## [1.24.0] - 2026-11-26
+
+The Busy page shows the Kubernetes node each process runs on: the heartbeat reports `node` (from `WURK_NODE_NAME`, set from the downward API) and `node_zone`, each card says "on <node>", and node chips filter or group the cards by node. Without those variables nothing changes. [Release notes](docs/changelog/1.24.0.md).
+
 ## [1.23.0] - 2026-11-26
 
 The dashboard stops flickering: a modal opens on the click with a placeholder sized like its content, a page shows its own skeleton (or its cached rows) instead of waiting on its data, and retry, delete, kill, pause, clear and quiet apply on the click and roll back with a toast if the request fails. sidekiq-unique-jobs, native: a waiting lock's `:PRIMED` hand-off list now gets a TTL with the move that fills it, and the reaper gives a TTL to any list left without one (by earlier versions, or a failover between the two). [Release notes](docs/changelog/1.23.0.md).
@@ -204,7 +208,8 @@ Releases publish to RubyGems through GitHub Actions OIDC trusted publishing, and
 
 First public (pre-1.0) release. [Release notes](docs/changelog/0.0.1.md).
 
-[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.23.0...HEAD
+[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.24.0...HEAD
+[1.24.0]: https://github.com/developerz-ai/wurk/compare/v1.23.0...v1.24.0
 [1.23.0]: https://github.com/developerz-ai/wurk/compare/v1.22.0...v1.23.0
 [1.22.0]: https://github.com/developerz-ai/wurk/compare/v1.21.0...v1.22.0
 [1.21.0]: https://github.com/developerz-ai/wurk/compare/v1.20.0...v1.21.0
