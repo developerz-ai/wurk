@@ -231,9 +231,9 @@ triages issues, reviews and merges pull requests, and lands dependency updates;
 every comment it posts is marked as coming from a bot. What that means for you:
 
 - **Issues.** A bug report needs steps, expected, actual and version. If the
-  agent asks for one of them and hears nothing, it reminds you at 7 days and
-  closes the issue at 14. Answer on the closed issue and it reopens. Separately,
-  issues quiet for 30 days are swept: the agent posts a comment before closing,
+  agent asks for one of them and hears nothing, it reminds you and closes
+  the issue after 60 days. Answer on the closed issue and it reopens. Separately,
+  issues quiet for 60 days are swept: the agent posts a comment before closing,
   never closes first. As the reporter, reply to keep your issue open.
   <!-- Updated by editor:policy[bot]. -->
 - **Pull requests.** A PR merges when the required checks are green and the
@@ -242,8 +242,8 @@ every comment it posts is marked as coming from a bot. What that means for you:
   The `main-protection` ruleset is the single authority for which checks a merge
   requires — read the live list with `gh api repos/developerz-ai/wurk/rulesets`
   rather than trusting any copy in the docs. When the next move is yours (a red
-  required check, an open review thread, a conflict), the agent pings at 7 and
-  14 days and closes the PR at 21 (28 for a draft). Push or reply and it picks
+  required check, an open review thread, a conflict), the agent pings you and
+  closes the PR after 60 days without a move from you. Push or reply and it picks
   the PR back up.
 - **A "no" comes early and with a reason.** A change the project will not take
   (see [Conventions](#conventions) and the `non_goals` list in
