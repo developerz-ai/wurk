@@ -62,10 +62,10 @@ tone:
   voice: friendly
   language: en
 
-# Quiet issues are swept after 30 days: post a comment before closing, never close
+# Quiet issues are swept after 60 days: post a comment before closing, never close
 # first. A reporter can keep an issue open by replying. — editor:policy[bot]
 triage:
-  stale_after_days: 30
+  stale_after_days: 60
   stale_action: comment_then_close
   # No `skip_project_members` (schema default false; owner ruling 2026-10-23: "wurk and ultimate
   # should be full ai maintained"). An issue opened by an org member or an invited collaborator is
@@ -85,10 +85,10 @@ triage:
   # Dogfood: lower than the 0.6 default so a moderately-scoped plan hands off to
   # the coding fleet instead of escalating for review (exercises the handoff loop).
   confidence_threshold: 0.4
-  # An issue waiting on its reporter for the repro fields is reminded at 7 days
-  # and closed at 14, with the missing items and the way to reopen. This repro
-  # lifecycle is separate from the general 30-day quiet-issue sweep above. — editor:policy[bot]
-  close_unanswered_repro_after_days: 14
+  # An issue waiting on its reporter for the repro fields is reminded, then closed
+  # after 60 days, with the missing items and the way to reopen. This repro
+  # lifecycle is separate from the general 60-day quiet-issue sweep above. — editor:policy[bot]
+  close_unanswered_repro_after_days: 60
   # What this project will not take, from CLAUDE.md's "Never" list: the entries
   # that describe a change someone could propose. The two left out
   # (`--no-verify`, force-pushing `main`) are rules for how to work, not
@@ -207,10 +207,10 @@ pr:
     - "frontend (vitest)"
     - "actionlint (workflow lint)"
   # A pull request whose next move is its author's (a red required check, an
-  # unresolved review thread, a change request, a conflict) is pinged at 7 and
-  # 14 days and closed at 21 (a draft at 28), with the reason and the way to
-  # reopen. One waiting on us, on a reviewer, or on CI is never timed.
-  close_awaiting_author_after_days: 21
+  # unresolved review thread, a change request, a conflict) is pinged, then
+  # closed after 60 days, with the reason and the way to reopen. One waiting on
+  # us, on a reviewer, or on CI is never timed.
+  close_awaiting_author_after_days: 60
   # OWNERSHIP — a dependabot docker bump that moves the oven/bun tag stays red on
   # this repo's own toolchain-pins gate (test/unit/toolchain_pins_test.rb) until
   # the matching pins land: the `bun-version:` inputs in
@@ -319,9 +319,10 @@ devops:
   watch: off
 
 # branches: a branch with no new commit this long is tagged archive/<branch>/<date> at its last
-# commit, then deleted. 14 (owner, 2026-11-26: keep the repos cleaned). false keeps every branch.
+# commit, then deleted. 60 (owner, 2026-11-26: open-source repos drop what sits idle 60 days, the
+# same clock as stale PRs and issues). false keeps every branch.
 branches:
-  close_inactive_after_days: 14
+  close_inactive_after_days: 60
 
 # scout: the platform's daily survey files only what is already BROKEN (red CI, failing tests, a
 # security advisory, a broken build or link), never an improvement idea (owner, 2026-11-26).
