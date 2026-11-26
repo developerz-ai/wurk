@@ -228,6 +228,45 @@ describe('optimistic actions', () => {
     expect(await screen.findByText('Job1')).toBeInTheDocument();
   });
 
+  // The hand-off from the edited list to the settle response: Job1 must not
+  // show for a frame between the edit lifting and the new list rendering.
+  it('hands over from the edited list to the settle response without showing the row', async () => {
+    let answer!: (r: Reply) => void;
+    let settle!: (r: Reply) => void;
+    let held = false;
+    handler = (url, method) => {
+      if (method === 'POST') return new Promise((res) => (answer = res));
+      if (url.pathname.endsWith('/api/retries')) return held ? new Promise((res) => (settle = res)) : page(2);
+      return never();
+    };
+    stub();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mount('/retries', '/retries', Retries);
+
+    fireEvent.click((await screen.findByText('Job1')).closest('tr')!);
+    fireEvent.click(within(document.querySelector('dialog[open]') as HTMLElement).getByRole('button', { name: t('actions.delete') }));
+    await waitFor(() => expect(screen.queryByText('Job1')).toBeNull());
+
+    let reappeared = false;
+    const watch = new MutationObserver((records) => {
+      for (const r of records) {
+        for (const node of r.addedNodes) if (node.textContent?.includes('Job1')) reappeared = true;
+        if (r.type === 'characterData' && r.target.textContent?.includes('Job1')) reappeared = true;
+      }
+    });
+    watch.observe(document.body, { childList: true, subtree: true, characterData: true });
+    held = true;
+    answer({ ok: true });
+    await waitFor(() => expect(settle).toBeDefined());
+    settle({ total: 2, page: 0, count: 2, entries: [entry(2), entry(3)] });
+    expect(await screen.findByText('Job3')).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 20));
+    watch.disconnect();
+
+    expect(reappeared).toBe(false);
+    expect(screen.queryByText('Job1')).toBeNull();
+  });
+
   // A count cannot tell whether the server already applied the action, so it
   // is edited once: a poll that already has the server's lower count shows it
   // as it is, not one lower again.
