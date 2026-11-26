@@ -1,5 +1,5 @@
-import { batch, createComputed, createMemo, on, onCleanup } from 'solid-js';
-import { createStore, reconcile } from 'solid-js/store';
+import { batch, createComputed, createMemo, createSignal, on, onCleanup } from 'solid-js';
+import { createStore } from 'solid-js/store';
 import {
   QueryObserver,
   useQueryClient,
@@ -18,10 +18,9 @@ import {
 // non-modal) whenever a modal read a query that had not loaded yet, and it held
 // navigation on the old page until the new page's data arrived. Every page
 // already draws its own skeleton from `isPending`, so here `data` is a plain
-// store field: undefined until the first response, never a suspension.
+// signal: undefined until the first response, never a suspension.
 //
-// Same observer, cache and options as solid-query's hook; `data` is reconciled
-// by index (solid-query's default), so rows keep their identity across polls.
+// Same observer, cache and options as solid-query's hook.
 export function useQuery<TQueryFnData = unknown, TError = DefaultError, TData = TQueryFnData, TQueryKey extends QueryKey = QueryKey>(
   options: UseQueryOptions<TQueryFnData, TError, TData, TQueryKey>,
 ): UseQueryResult<TData, TError> {
@@ -32,13 +31,21 @@ export function useQuery<TQueryFnData = unknown, TError = DefaultError, TData = 
     return o;
   });
   const observer = new QueryObserver<TQueryFnData, TError, TData, TQueryFnData, TQueryKey>(client, defaulted());
-  const [state, setState] = createStore<QueryObserverResult<TData, TError>>(observer.getOptimisticResult(defaulted()));
+  const initial = observer.getOptimisticResult(defaulted());
+  const [state, setState] = createStore<QueryObserverResult<TData, TError>>({ ...initial, data: undefined } as QueryObserverResult<TData, TError>);
+  // `data` lives in a signal holding the query cache's own object, not in the
+  // store: a store merges a new object into the one it holds, which would
+  // write into the cache's previous data (the data a rollback snapshot in
+  // optimistic.ts keeps). The cache never edits data in place and shares
+  // structure, so a row that did not change is the same object on the next
+  // poll and a <For> keeps its DOM.
+  const [data, setData] = createSignal<TData | undefined>(initial.data);
 
   const apply = (result: QueryObserverResult<TData, TError>) => {
-    const { data, ...rest } = result;
+    const { data: next, ...rest } = result;
     batch(() => {
       setState(rest as Partial<QueryObserverResult<TData, TError>>);
-      setState('data' as never, reconcile(data as never, { key: null, merge: false }) as never);
+      setData(() => next);
     });
   };
 
@@ -56,7 +63,9 @@ export function useQuery<TQueryFnData = unknown, TError = DefaultError, TData = 
     ),
   );
 
-  return state as UseQueryResult<TData, TError>;
+  return new Proxy(state, {
+    get: (target, prop) => (prop === 'data' ? data() : Reflect.get(target, prop)),
+  }) as UseQueryResult<TData, TError>;
 }
 
 // Warm the cache for a query a click is about to need (a row's detail on

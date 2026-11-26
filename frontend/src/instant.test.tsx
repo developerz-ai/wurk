@@ -162,6 +162,36 @@ describe('optimistic actions', () => {
     await waitFor(() => expect(toasts().some((x) => x.kind === 'error')).toBe(true));
   });
 
+  // A poll sent after the click can be read before the server applied it. The
+  // row must not come back and leave again.
+  it('keeps a deleted row gone through a poll that answers before the server applied it', async () => {
+    let answer!: (r: Reply) => void;
+    let lists = 0;
+    handler = (url, method) => {
+      if (method === 'POST') return new Promise((res) => (answer = res));
+      if (url.pathname.endsWith('/api/retries')) {
+        lists += 1;
+        return page(2);
+      }
+      return never();
+    };
+    stub();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const { client } = mount('/retries', '/retries', Retries);
+
+    fireEvent.click((await screen.findByText('Job1')).closest('tr')!);
+    fireEvent.click(within(document.querySelector('dialog[open]') as HTMLElement).getByRole('button', { name: t('actions.delete') }));
+    await waitFor(() => expect(screen.queryByText('Job1')).toBeNull());
+
+    const before = lists;
+    await client.refetchQueries({ queryKey: ['retries'] });
+    expect(lists).toBeGreaterThan(before);
+    expect(screen.queryByText('Job1')).toBeNull();
+    expect(screen.getByText('Job2')).toBeInTheDocument();
+
+    answer({ ok: true });
+  });
+
   it('pauses a queue at once, then takes the server state the settle refetch reads', async () => {
     let afterPost = false;
     let answer!: (r: Reply) => void;
