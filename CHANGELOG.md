@@ -6,7 +6,7 @@ Each release's notes live in their own file under [`docs/changelog/`](docs/chang
 
 ## [1.23.0] - 2026-11-26
 
-The dashboard stops flickering: a modal opens on the click with a placeholder sized like its content, a page shows its own skeleton (or its cached rows) instead of waiting on its data, and retry, delete, kill, pause, clear and quiet apply on the click and roll back with a toast if the request fails. sidekiq-unique-jobs, native: a waiting lock's `:PRIMED` hand-off list always expires, and the reaper gives the lists earlier versions left a TTL. [Release notes](docs/changelog/1.23.0.md).
+The dashboard stops flickering: a modal opens on the click with a placeholder sized like its content, a page shows its own skeleton (or its cached rows) instead of waiting on its data, and retry, delete, kill, pause, clear and quiet apply on the click and roll back with a toast if the request fails. sidekiq-unique-jobs, native: a waiting lock's `:PRIMED` hand-off list now gets a TTL with the move that fills it, and the reaper gives a TTL to any list left without one (by earlier versions, or a failover between the two). [Release notes](docs/changelog/1.23.0.md).
 
 ## [1.22.0] - 2026-11-26
 
