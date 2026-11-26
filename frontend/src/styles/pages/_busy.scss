@@ -157,7 +157,8 @@
 }
 
 .busy-node {
-  white-space: nowrap;
+  min-width: 0;
+  overflow-wrap: anywhere;
 
   &__zone {
     color: var(--text-muted);

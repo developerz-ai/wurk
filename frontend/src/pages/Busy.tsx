@@ -65,6 +65,7 @@ type ControlTarget =
   | { signal: Signal; scope: 'one'; identity: string };
 
 interface HostGroup {
+  key: string;
   hostname: string;
   processes: Process[];
   busy: number;
@@ -81,15 +82,19 @@ interface HostGroup {
   nodeZone?: string;
 }
 
-// Processes carrying the same `hostname` run on one machine — fold them into
-// a single host section so a multi-process swarm reads as one box.
+// Processes carrying the same `hostname` (and node, when they report one: two
+// namespaces can each run a pod of one name) run on one machine — fold them
+// into a single host section so a multi-process swarm reads as one box.
+export const hostKey = (p: { hostname: string; node?: string | null }) => (p.node ? `${p.hostname}@${p.node}` : p.hostname);
+
 function groupByHost(processes: Process[]): HostGroup[] {
   const groups = new Map<string, HostGroup>();
   for (const proc of processes) {
-    let g = groups.get(proc.hostname);
+    const key = hostKey(proc);
+    let g = groups.get(key);
     if (!g) {
-      g = { hostname: proc.hostname, processes: [], busy: 0, concurrency: 0, rssKb: 0 };
-      groups.set(proc.hostname, g);
+      g = { key, hostname: proc.hostname, processes: [], busy: 0, concurrency: 0, rssKb: 0 };
+      groups.set(key, g);
     }
     g.processes.push(proc);
     g.busy += proc.busy;
@@ -494,31 +499,46 @@ export default function Busy() {
   // Nodes the heartbeats report, with how many processes run on each. A
   // filter keeps one node's cards; grouping puts each node's cards under its
   // own heading. Both hide away when no process reports a node.
-  const [nodeFilter, setNodeFilter] = createSignal<string | null>(null);
-  const [byNode, setByNode] = createSignal(false);
-  const nodes = createMemo(() => {
+  const [pickedNode, setNodeFilter] = createSignal<string | null>(null);
+  const [groupPicked, setByNode] = createSignal(false);
+  const nodeCounts = createMemo(() => {
     const counts = new Map<string, number>();
     for (const g of hosts()) if (g.node) counts.set(g.node, (counts.get(g.node) ?? 0) + g.processes.length);
-    return [...counts.entries()].sort(([a], [b]) => a.localeCompare(b));
+    return counts;
   });
-  const shown = createMemo(() => {
+  const nodes = createMemo(() => [...nodeCounts().keys()].sort((a, b) => a.localeCompare(b)), undefined, {
+    equals: (a, b) => a.length === b.length && a.every((n, i) => n === b[i]),
+  });
+  // A filter or grouping outlives the node it named only as long as that node
+  // reports: once it is gone (its last pod stopped), every card shows again.
+  const nodeFilter = () => {
+    const n = pickedNode();
+    return n !== null && nodeCounts().has(n) ? n : null;
+  };
+  const byNode = () => groupPicked() && nodes().length > 0;
+  // One pass per poll: each section's swarm hosts and single-process hosts.
+  const layout = createMemo(() => {
     const only = nodeFilter();
-    return only === null ? hosts() : hosts().filter((g) => g.node === only);
+    const grouped = byNode();
+    const out = new Map<string, { swarm: HostGroup[]; solo: HostGroup[] }>();
+    for (const g of hosts()) {
+      if (only !== null && g.node !== only) continue;
+      const section = grouped ? (g.node ?? '') : '';
+      let bucket = out.get(section);
+      if (!bucket) out.set(section, (bucket = { swarm: [], solo: [] }));
+      (g.processes.length > 1 ? bucket.swarm : bucket.solo).push(g);
+    }
+    return out;
   });
-  const sections = createMemo(() => {
-    if (!byNode()) return [''];
-    const names = [...new Set(shown().map((g) => g.node ?? ''))];
-    return names.sort((a, b) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b)));
-  });
-  const inSection = (section: string, g: HostGroup) => !byNode() || (g.node ?? '') === section;
-  const swarmHosts = (section: string) => shown().filter((g) => g.processes.length > 1 && inSection(section, g));
-  const soloHosts = (section: string) => shown().filter((g) => g.processes.length === 1 && inSection(section, g));
+  const sections = createMemo(() =>
+    [...layout().keys()].sort((a, b) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b))),
+  );
   const signal = (sig: Signal, identity: string) => {
     if (sig === 'stop' && !confirmStop(t('actions.scope_this_process'))) return;
     control.mutate({ signal: sig, scope: 'one', identity });
   };
   const procById = createMemo(() => new Map((query.data ?? []).map((p) => [p.identity, p])));
-  const hostByName = createMemo(() => new Map(hosts().map((g) => [g.hostname, g])));
+  const hostByName = createMemo(() => new Map(hosts().map((g) => [g.key, g])));
   // A row a poll just dropped can be read once more before its card is
   // disposed; it keeps its last value for that read.
   const latest = <T,>(read: () => T | undefined) => createMemo<T>((prev) => read() ?? prev, read() as T);
@@ -610,14 +630,14 @@ export default function Busy() {
                     {t('busy.all_nodes')}
                   </button>
                   <For each={nodes()}>
-                    {([node, count]) => (
+                    {(node) => (
                       <button
                         type="button"
                         class="chip"
                         aria-pressed={nodeFilter() === node}
                         onClick={() => setNodeFilter(nodeFilter() === node ? null : node)}
                       >
-                        <Icon name="server" /> {node} <span class="busy-nodes__count">{count}</span>
+                        <Icon name="server" /> {node} <span class="busy-nodes__count">{nodeCounts().get(node)}</span>
                       </button>
                     )}
                   </For>
@@ -635,7 +655,7 @@ export default function Busy() {
                         <Icon name="server" /> {section === '' ? t('busy.no_node') : section}
                       </h2>
                     </Show>
-                  <For each={swarmHosts(section).map((g) => g.hostname)}>
+                  <For each={layout().get(section)?.swarm.map((g) => g.key) ?? []}>
                     {(name) => {
                       const group = latest(() => hostByName().get(name));
                       return (
@@ -648,10 +668,10 @@ export default function Busy() {
                       );
                     }}
                   </For>
-                  <Show when={soloHosts(section).length > 0}>
+                  <Show when={(layout().get(section)?.solo.length ?? 0) > 0}>
                     <div class="busy-grid">
-                      <For each={soloHosts(section).map((g) => g.processes[0].identity)}>
-                        {(id) => card(id, procById().get(id)!.hostname)}
+                      <For each={layout().get(section)!.solo.map((g) => g.processes[0].identity)}>
+                        {(id) => card(id, hostKey(procById().get(id)!))}
                       </For>
                     </div>
                   </Show>

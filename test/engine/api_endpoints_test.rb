@@ -276,6 +276,7 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     assert_in_delta 2.0, row[:cpu_limit]
     assert_equal 4_194_304, row[:memory_limit_kb]
     assert_equal 'k8s-node-1', row[:node]
+    assert row.key?(:node_zone), 'node_zone rides the row even when unset'
     assert_nil row[:node_zone]
     assert_in_delta Time.now.to_f, row[:beat], 5
     assert_equal({ busy: 2, concurrency: 10, rss: 262_144 }, row.slice(:busy, :concurrency, :rss))
