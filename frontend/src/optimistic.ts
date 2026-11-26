@@ -24,20 +24,24 @@ export interface Patch {
 export interface OptimisticContext {
   id: number;
   snapshot: Array<[QueryKey, unknown]>;
-  written: Array<[QueryKey, unknown]>;
-  startedAt: number;
-  patches: Patch[];
+  // Each one-shot write's query and its dataUpdateCount right after it.
+  written: Array<[QueryKey, number]>;
 }
 
-const active = new Map<number, Patch[]>();
+interface Entry {
+  patches: Patch[];
+  // Queries (by hash) that have had a successful fetch started after the
+  // request completed: the server's own state, which the edit no longer
+  // touches.
+  fresh: Set<string>;
+}
+
+const active = new Map<number, Entry>();
 const [version, setVersion] = createSignal(0);
 let nextId = 0;
+const bump = () => setVersion((v) => v + 1);
 
-function setActive(id: number, patches: Patch[] | null) {
-  if (patches) active.set(id, patches);
-  else active.delete(id);
-  setVersion((v) => v + 1);
-}
+const hash = (key: QueryKey) => JSON.stringify(key);
 
 function startsWith(key: QueryKey, prefix: QueryKey): boolean {
   return prefix.every((part, i) => JSON.stringify(part) === JSON.stringify(key[i]));
@@ -45,12 +49,14 @@ function startsWith(key: QueryKey, prefix: QueryKey): boolean {
 
 // The in-flight view edits for `queryKey`, applied in the order the actions
 // were taken. Read reactively: useQuery re-selects when an action starts or
-// ends.
+// ends, or when one of its queries gets a fetch of its own.
 export function applyPending<T>(queryKey: QueryKey, data: T): T {
   version();
+  const h = hash(queryKey);
   let out = data;
-  for (const patches of active.values()) {
-    for (const p of patches) {
+  for (const entry of active.values()) {
+    if (entry.fresh.has(h)) continue;
+    for (const p of entry.patches) {
       if (!p.oneShot && out !== undefined && startsWith(queryKey, p.queryKey)) out = p.update(out);
     }
   }
@@ -60,7 +66,7 @@ export function applyPending<T>(queryKey: QueryKey, data: T): T {
 // Tests: drop every in-flight edit, as a page reload would.
 export function resetOptimistic() {
   active.clear();
-  setVersion((v) => v + 1);
+  bump();
 }
 
 export function pendingVersion() {
@@ -70,52 +76,66 @@ export function pendingVersion() {
 // Mutation lifecycle for an optimistic action. onMutate cancels in-flight
 // polls of the edited queries, writes the one-shot edits (keeping what they
 // replace) and turns the view edits on. On failure `rollback` turns them off
-// and restores the one-shot data where the cache still holds what the edit
-// wrote (a newer poll stays); the caller still raises its toast. On settle the
-// edited queries refetch, and the view edits stay on until every edited
-// query has a successful fetch from after the action: a failed refetch
-// would otherwise hand back the stale list with the row in it.
+// and restores each one-shot write no later fetch has replaced (a newer poll
+// stays); the caller still raises its toast. On success the view edit stays
+// on, per query, until that query has a successful fetch started after the
+// request completed: a poll read before the server applied the action, or a
+// failed refetch, never brings the row back, and a query that is not on
+// screen keeps the edit until it is fetched again.
 export function optimistic<V>(qc: QueryClient, patches: (vars: V) => Patch[], refresh: QueryKey[]) {
+  const cache = qc.getQueryCache();
   return {
     onMutate: async (vars: V): Promise<OptimisticContext> => {
       const ps = patches(vars);
       await Promise.all(ps.map((p) => qc.cancelQueries({ queryKey: p.queryKey })));
       const oneShot = ps.filter((p) => p.oneShot);
       const snapshot = oneShot.flatMap((p) => qc.getQueriesData({ queryKey: p.queryKey }));
-      const written: Array<[QueryKey, unknown]> = [];
+      const written: Array<[QueryKey, number]> = [];
       for (const p of oneShot) {
         for (const [key, old] of qc.getQueriesData({ queryKey: p.queryKey })) {
-          if (old !== undefined) written.push([key, qc.setQueryData(key, p.update(old))]);
+          if (old === undefined) continue;
+          qc.setQueryData(key, p.update(old));
+          written.push([key, qc.getQueryState(key)?.dataUpdateCount ?? -1]);
         }
       }
       const id = (nextId += 1);
-      setActive(id, ps);
-      return { id, snapshot, written, startedAt: Date.now(), patches: ps };
+      active.set(id, { patches: ps, fresh: new Set() });
+      bump();
+      return { id, snapshot, written };
     },
     rollback: (ctx: OptimisticContext | undefined) => {
       if (!ctx) return;
-      setActive(ctx.id, null);
+      active.delete(ctx.id);
+      bump();
       for (const [key, data] of ctx.snapshot) {
-        const ours = ctx.written.find(([k]) => JSON.stringify(k) === JSON.stringify(key))?.[1];
-        if (qc.getQueryData(key) === ours) qc.setQueryData(key, data);
+        const ours = ctx.written.find(([k]) => hash(k) === hash(key))?.[1];
+        if (qc.getQueryState(key)?.dataUpdateCount === ours) qc.setQueryData(key, data);
       }
     },
-    onSettled: async (_data: unknown, error: unknown, _vars: unknown, ctx: OptimisticContext | undefined) => {
-      await Promise.all(refresh.map((key) => qc.invalidateQueries({ queryKey: key }))).catch(() => undefined);
-      if (!ctx || error) {
-        if (ctx) setActive(ctx.id, null);
-        return;
+    onSettled: (_data: unknown, error: unknown, _vars: unknown, ctx: OptimisticContext | undefined) => {
+      const entry = ctx && !error ? active.get(ctx.id) : undefined;
+      if (ctx && entry) {
+        // A fetch counts only if it started after this point: one already in
+        // flight may have read the server before the action applied.
+        const after = new Set<string>();
+        const release = cache.subscribe((event) => {
+          if (!active.has(ctx.id)) return release();
+          const q = event.query;
+          if (!entry.patches.some((p) => startsWith(q.queryKey, p.queryKey))) return;
+          if (event.type === 'updated' && event.action.type === 'fetch') after.add(q.queryHash);
+          if (event.type === 'updated' && event.action.type === 'success' && !event.action.manual && after.has(q.queryHash)) {
+            entry.fresh.add(hash(q.queryKey));
+            bump();
+          }
+          const left = entry.patches.some((p) => cache.findAll({ queryKey: p.queryKey }).some((x) => !entry.fresh.has(hash(x.queryKey))));
+          if (!left) {
+            release();
+            active.delete(ctx.id);
+            bump();
+          }
+        });
       }
-      const stale = () =>
-        ctx.patches.some((p) =>
-          qc.getQueryCache().findAll({ queryKey: p.queryKey }).some((q) => q.state.dataUpdatedAt < ctx.startedAt),
-        );
-      if (!stale()) return setActive(ctx.id, null);
-      const release = qc.getQueryCache().subscribe(() => {
-        if (stale()) return;
-        release();
-        setActive(ctx.id, null);
-      });
+      for (const key of refresh) void qc.invalidateQueries({ queryKey: key });
     },
   };
 }

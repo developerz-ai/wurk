@@ -217,8 +217,10 @@ describe('optimistic actions', () => {
     await waitFor(() => expect(settle).toBeDefined());
     await new Promise((r) => setTimeout(r, 20));
     expect(screen.queryByText('Job1')).toBeNull();
-    settle({ total: 1, page: 0, count: 1, entries: [entry(2)] });
-    await waitFor(() => expect(screen.getByText('Job2')).toBeInTheDocument());
+    // The settle response carries a row the optimistic list never had, so the
+    // page is seen to take it over.
+    settle({ total: 2, page: 0, count: 2, entries: [entry(2), entry(3)] });
+    expect(await screen.findByText('Job3')).toBeInTheDocument();
     await new Promise((r) => setTimeout(r, 0));
     watch.disconnect();
     expect(reappeared).toBe(false);
@@ -262,23 +264,31 @@ describe('optimistic actions', () => {
     answer({ ok: true });
   });
 
-  it('keeps a deleted row gone when the refetch after the action fails', async () => {
+  // A poll read while the POST was in flight (the old list, Job1 in it) and a
+  // failed refetch after it: neither is a fetch of the server after the
+  // action, so the row stays hidden.
+  it('keeps a deleted row gone through a stale poll and a failed refetch', async () => {
+    let answer!: (r: Reply) => void;
     let failLists = false;
     handler = (url, method) => {
-      if (method === 'POST') return { ok: true };
+      if (method === 'POST') return new Promise((res) => (answer = res));
       if (url.pathname.endsWith('/api/retries')) return failLists ? { status: 503 } : page(2);
       return never();
     };
     stub();
     vi.spyOn(window, 'confirm').mockReturnValue(true);
-    mount('/retries', '/retries', Retries);
+    const { client } = mount('/retries', '/retries', Retries);
 
     fireEvent.click((await screen.findByText('Job1')).closest('tr')!);
-    failLists = true;
     fireEvent.click(within(document.querySelector('dialog[open]') as HTMLElement).getByRole('button', { name: t('actions.delete') }));
-
     await waitFor(() => expect(screen.queryByText('Job1')).toBeNull());
-    await new Promise((r) => setTimeout(r, 50));
+
+    await client.refetchQueries({ queryKey: ['retries'] }); // the stale poll
+    expect(screen.queryByText('Job1')).toBeNull();
+
+    failLists = true;
+    answer({ ok: true });
+    expect(await screen.findByText(t('common.refresh_failed'))).toBeInTheDocument();
     expect(screen.queryByText('Job1')).toBeNull();
   });
 
