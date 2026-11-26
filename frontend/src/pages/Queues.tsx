@@ -63,10 +63,12 @@ const JOB_SORT: Accessors<QueueJob> = {
   enqueued: (j) => j.enqueued_at,
 };
 
-// The queue list's (and the stats tiles') size for `name`, moved by `f`.
+// The queue list's size for `name`, moved by `f`. One-shot: a size cannot
+// tell whether the server already applied the action (optimistic.ts).
 function queueSize(name: string, f: (n: number) => number): Patch {
   return {
     queryKey: ['queues'],
+    oneShot: true,
     update: (old: QueueSummary[]) => old.map((q) => (q.name === name ? { ...q, size: Math.max(0, f(q.size)) } : q)),
   };
 }

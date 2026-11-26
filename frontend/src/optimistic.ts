@@ -1,67 +1,102 @@
+import { createSignal } from 'solid-js';
 import type { QueryClient, QueryKey } from '@tanstack/solid-query';
 
-// One cache edit an action makes before its request returns: every cached
-// query under `queryKey` (a prefix: all pages and filters of a list) gets
-// `update` applied to its data.
+// One edit an action makes to what the page shows before its request returns,
+// to every cached query under `queryKey` (a prefix: all pages and filters of a
+// list).
+//
+// By default the edit is a view over the cached data: useQuery (query.ts)
+// applies it to whatever the cache holds, including a poll that answers
+// while the action is in flight, so a removed row never comes back on screen,
+// not even for a frame. Such an edit must be idempotent against data that
+// already reflects the action (drop rows by key, set a flag), since the poll
+// after the server applied it passes through it too.
+//
+// A `oneShot` edit is written into the cache once instead, for counters that
+// cannot be stated idempotently (/api/stats): a later poll replaces it with
+// the server's count, which is right either way.
 export interface Patch {
   queryKey: QueryKey;
   update: (old: any) => any; // eslint-disable-line @typescript-eslint/no-explicit-any
+  oneShot?: boolean;
 }
 
 export interface OptimisticContext {
+  id: number;
   snapshot: Array<[QueryKey, unknown]>;
-  release: () => void;
 }
 
-// Mutation lifecycle for an optimistic action. onMutate cancels the in-flight
-// polls of the patched queries (a response sent before the action would
-// otherwise land after it and put the row back), keeps their data, then
-// applies the patches, so the row leaves or the badge flips on click.
-// `rollback` restores the kept data when the request fails; the caller still
-// raises its toast. onSettled refetches `refresh`, so the next server state
-// replaces the guess, success or failure.
-//
-// Until the request settles, a poll that answers in the meantime (sent after
-// the click, read before the server applied it) gets the patches applied to
-// its data too, so the row does not come back and leave again; two actions in
-// flight each keep their own edit on top.
-export function optimistic<V>(qc: QueryClient, patches: (vars: V) => Patch[], refresh: QueryKey[]) {
-  return {
-    onMutate: async (vars: V): Promise<OptimisticContext> => {
-      const ps = patches(vars);
-      await Promise.all(ps.map((p) => qc.cancelQueries({ queryKey: p.queryKey })));
-      const snapshot = ps.flatMap((p) => qc.getQueriesData({ queryKey: p.queryKey }));
-      for (const p of ps) {
-        qc.setQueriesData({ queryKey: p.queryKey }, (old: unknown) => (old === undefined ? old : p.update(old)));
-      }
-      const release = qc.getQueryCache().subscribe((event) => {
-        if (event.type !== 'updated' || event.action.type !== 'success' || event.action.manual) return;
-        const p = ps.find((patch) => startsWith(event.query.queryKey, patch.queryKey));
-        const data = event.query.state.data;
-        if (p && data !== undefined) qc.setQueryData(event.query.queryKey, p.update(data));
-      });
-      return { snapshot, release };
-    },
-    rollback: (ctx: OptimisticContext | undefined) => {
-      ctx?.release();
-      for (const [key, data] of ctx?.snapshot ?? []) qc.setQueryData(key, data);
-    },
-    onSettled: (_data: unknown, _error: unknown, _vars: unknown, ctx: OptimisticContext | undefined) => {
-      ctx?.release();
-      for (const key of refresh) void qc.invalidateQueries({ queryKey: key });
-    },
-  };
+const active = new Map<number, Patch[]>();
+const [version, setVersion] = createSignal(0);
+let nextId = 0;
+
+function setActive(id: number, patches: Patch[] | null) {
+  if (patches) active.set(id, patches);
+  else active.delete(id);
+  setVersion((v) => v + 1);
 }
 
 function startsWith(key: QueryKey, prefix: QueryKey): boolean {
   return prefix.every((part, i) => JSON.stringify(part) === JSON.stringify(key[i]));
 }
 
+// The in-flight view edits for `queryKey`, applied in the order the actions
+// were taken. Read reactively: useQuery re-selects when an action starts or
+// ends.
+export function applyPending<T>(queryKey: QueryKey, data: T): T {
+  version();
+  let out = data;
+  for (const patches of active.values()) {
+    for (const p of patches) {
+      if (!p.oneShot && out !== undefined && startsWith(queryKey, p.queryKey)) out = p.update(out);
+    }
+  }
+  return out;
+}
+
+export function pendingVersion() {
+  return version();
+}
+
+// Mutation lifecycle for an optimistic action. onMutate cancels in-flight
+// polls of the edited queries, writes the one-shot edits (keeping what they
+// replace) and turns the view edits on. On failure `rollback` turns them off
+// and restores the one-shot data; the caller still raises its toast. On
+// settle the edited queries refetch, and the view edits stay on until that
+// refetch has landed, so the row does not reappear in between.
+export function optimistic<V>(qc: QueryClient, patches: (vars: V) => Patch[], refresh: QueryKey[]) {
+  return {
+    onMutate: async (vars: V): Promise<OptimisticContext> => {
+      const ps = patches(vars);
+      await Promise.all(ps.map((p) => qc.cancelQueries({ queryKey: p.queryKey })));
+      const oneShot = ps.filter((p) => p.oneShot);
+      const snapshot = oneShot.flatMap((p) => qc.getQueriesData({ queryKey: p.queryKey }));
+      for (const p of oneShot) {
+        qc.setQueriesData({ queryKey: p.queryKey }, (old: unknown) => (old === undefined ? old : p.update(old)));
+      }
+      const id = (nextId += 1);
+      setActive(id, ps);
+      return { id, snapshot };
+    },
+    rollback: (ctx: OptimisticContext | undefined) => {
+      if (!ctx) return;
+      setActive(ctx.id, null);
+      for (const [key, data] of ctx.snapshot) qc.setQueryData(key, data);
+    },
+    onSettled: async (_data: unknown, _error: unknown, _vars: unknown, ctx: OptimisticContext | undefined) => {
+      await Promise.all(refresh.map((key) => qc.invalidateQueries({ queryKey: key }))).catch(() => undefined);
+      if (ctx) setActive(ctx.id, null);
+    },
+  };
+}
+
 // `counts` adds to the matching numeric fields of /api/stats (the nav badges
-// and dashboard tiles), never below zero.
+// and dashboard tiles), never below zero. One-shot: a count cannot tell
+// whether the server already applied the action.
 export function statsPatch(counts: Record<string, number>): Patch {
   return {
     queryKey: ['stats'],
+    oneShot: true,
     update: (old: Record<string, unknown>) => {
       const next = { ...old };
       for (const [field, delta] of Object.entries(counts)) {

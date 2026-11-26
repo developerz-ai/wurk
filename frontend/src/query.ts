@@ -10,6 +10,7 @@ import {
   type UseQueryOptions,
   type UseQueryResult,
 } from '@tanstack/solid-query';
+import { applyPending, pendingVersion } from './optimistic';
 
 // useQuery without Suspense. @tanstack/solid-query backs `data` with a
 // createResource, so reading `data` before the first response suspends the
@@ -25,9 +26,15 @@ export function useQuery<TQueryFnData = unknown, TError = DefaultError, TData = 
   options: UseQueryOptions<TQueryFnData, TError, TData, TQueryKey>,
 ): UseQueryResult<TData, TError> {
   const client = useQueryClient();
+  // In-flight optimistic edits (optimistic.ts) apply on top of the cached
+  // data through `select`; the memo re-runs when an action starts or ends.
   const defaulted = createMemo(() => {
+    pendingVersion();
     const o = client.defaultQueryOptions(options());
     o._optimisticResults = 'optimistic';
+    const userSelect = o.select;
+    const key = o.queryKey;
+    o.select = (raw: TQueryFnData) => applyPending(key, (userSelect ? userSelect(raw) : raw) as TData);
     return o;
   });
   const observer = new QueryObserver<TQueryFnData, TError, TData, TQueryFnData, TQueryKey>(client, defaulted());

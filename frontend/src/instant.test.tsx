@@ -9,6 +9,8 @@ import Busy from './pages/Busy';
 import Queues from './pages/Queues';
 import { t } from './i18n';
 import { Toasts, dismissToast, toasts } from './toast';
+import { useQuery } from './query';
+import { getJSON } from './http';
 
 // Pages render inside the app's route <Suspense> (App.tsx). Every case here
 // mounts them under one, whose fallback must never show: a page draws its own
@@ -183,11 +185,60 @@ describe('optimistic actions', () => {
     fireEvent.click(within(document.querySelector('dialog[open]') as HTMLElement).getByRole('button', { name: t('actions.delete') }));
     await waitFor(() => expect(screen.queryByText('Job1')).toBeNull());
 
+    // Any moment the row is back in the DOM counts, not only the end state.
+    let reappeared = false;
+    const watch = new MutationObserver((records) => {
+      for (const r of records) {
+        for (const node of r.addedNodes) if (node.textContent?.includes('Job1')) reappeared = true;
+        if (r.type === 'characterData' && r.target.textContent?.includes('Job1')) reappeared = true;
+      }
+    });
+    watch.observe(document.body, { childList: true, subtree: true, characterData: true });
     const before = lists;
     await client.refetchQueries({ queryKey: ['retries'] });
+    await new Promise((r) => setTimeout(r, 0));
+    watch.disconnect();
+    expect(reappeared).toBe(false);
     expect(lists).toBeGreaterThan(before);
     expect(screen.queryByText('Job1')).toBeNull();
     expect(screen.getByText('Job2')).toBeInTheDocument();
+
+    answer({ ok: true });
+  });
+
+  // A count cannot tell whether the server already applied the action, so it
+  // is edited once: a poll that already has the server's lower count shows it
+  // as it is, not one lower again.
+  it('does not take a deleted entry off a count the server already lowered', async () => {
+    let answer!: (r: Reply) => void;
+    let retries = 2;
+    handler = (url, method) => {
+      if (method === 'POST') return new Promise((res) => (answer = res));
+      if (url.pathname.endsWith('/api/stats')) return { retries };
+      if (url.pathname.endsWith('/api/retries')) return page(2);
+      return never();
+    };
+    stub();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const StatsProbe = () => {
+      const q = useQuery(() => ({ queryKey: ['stats'], queryFn: () => getJSON<{ retries: number }>('/wurk/api/stats') }));
+      return <output data-testid="retries-count">{q.data?.retries}</output>;
+    };
+    const { client } = mount('/retries', '/retries', () => (
+      <>
+        <StatsProbe />
+        <Retries />
+      </>
+    ));
+    await waitFor(() => expect(screen.getByTestId('retries-count')).toHaveTextContent('2'));
+
+    fireEvent.click((await screen.findByText('Job1')).closest('tr')!);
+    fireEvent.click(within(document.querySelector('dialog[open]') as HTMLElement).getByRole('button', { name: t('actions.delete') }));
+    await waitFor(() => expect(screen.getByTestId('retries-count')).toHaveTextContent('1'));
+
+    retries = 1; // the server applied the delete; its reply is still on the way
+    await client.refetchQueries({ queryKey: ['stats'] });
+    expect(screen.getByTestId('retries-count')).toHaveTextContent('1');
 
     answer({ ok: true });
   });
