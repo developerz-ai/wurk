@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@solidjs/testing-library';
 import { QueryClient, QueryClientProvider } from '@tanstack/solid-query';
-import { MemoryRouter, Route, createMemoryHistory } from '@solidjs/router';
-import { Suspense, type Component } from 'solid-js';
+import { A, MemoryRouter, Route, createMemoryHistory } from '@solidjs/router';
+import { Suspense, lazy, type Component, type ParentProps } from 'solid-js';
+import RouteProgress from './components/RouteProgress';
 import Retries from './pages/Retries';
 import Busy from './pages/Busy';
 import Queues from './pages/Queues';
@@ -161,14 +162,15 @@ describe('optimistic actions', () => {
     await waitFor(() => expect(toasts().some((x) => x.kind === 'error')).toBe(true));
   });
 
-  it('pauses a queue at once and keeps it paused once the server agrees', async () => {
-    let paused = false;
+  it('pauses a queue at once, then takes the server state the settle refetch reads', async () => {
+    let afterPost = false;
     let answer!: (r: Reply) => void;
     handler = (url, method) => {
       if (method === 'POST') {
-        return new Promise((res) => (answer = (r) => { paused = true; res(r); }));
+        return new Promise((res) => (answer = (r) => { afterPost = true; res(r); }));
       }
-      if (url.pathname.endsWith('/api/queues')) return [{ name: 'default', size: 3, latency: 0, paused }];
+      // Distinguishable: only the refetch after the POST reports 7 jobs.
+      if (url.pathname.endsWith('/api/queues')) return [{ name: 'default', size: afterPost ? 7 : 3, latency: 0, paused: afterPost }];
       return never();
     };
     stub();
@@ -176,9 +178,45 @@ describe('optimistic actions', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: t('actions.pause') }));
     expect(await screen.findByRole('button', { name: t('actions.unpause') })).toBeInTheDocument();
+    expect(screen.queryByText('7')).toBeNull();
 
     answer({ ok: true });
-    await waitFor(() => expect(paused).toBe(true));
+    expect(await screen.findByText('7')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: t('actions.unpause') })).toBeInTheDocument();
+  });
+});
+
+describe('navigation', () => {
+  // A page chunk the idle preload has not fetched yet: the router keeps the old
+  // page while it loads, and the bar says the click registered.
+  it('shows route progress on the click while the next chunk loads', async () => {
+    handler = () => never();
+    stub();
+    let loadChunk!: (m: { default: Component }) => void;
+    const Slow = lazy(() => new Promise<{ default: Component }>((res) => (loadChunk = res)));
+    const Shell: Component<ParentProps> = (props) => (
+      <>
+        <RouteProgress />
+        <A href="/slow">go</A>
+        <Suspense fallback={<div>{FALLBACK}</div>}>{props.children}</Suspense>
+      </>
+    );
+    const history = createMemoryHistory();
+    history.set({ value: '/', replace: true });
+    render(() => (
+      <MemoryRouter history={history} root={Shell}>
+        <Route path="/" component={() => <div>OLD PAGE</div>} />
+        <Route path="/slow" component={Slow} />
+      </MemoryRouter>
+    ));
+
+    fireEvent.click(await screen.findByText('go'));
+
+    await waitFor(() => expect(screen.getByRole('progressbar')).toBeInTheDocument());
+    expect(screen.getByText('OLD PAGE')).toBeInTheDocument();
+
+    loadChunk({ default: () => <div>NEW PAGE</div> });
+    expect(await screen.findByText('NEW PAGE')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('progressbar')).toBeNull());
   });
 });

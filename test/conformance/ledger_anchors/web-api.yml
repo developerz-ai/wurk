@@ -93,8 +93,7 @@
 - entry: "Queue job-delete takes `jid`, not the spec's `key_val`"
   anchor: "frontend/src/pages/Queues.tsx#L107-L114"
   fragment: |-
-    mutationFn: (jid: string) =>
-      post(`${basePath()}/api/queues/${encodeURIComponent(props.name)}/delete`, { jid }),
+    mutationFn: (jid: string) => post(`${basePath()}/api/queues/${encodeURIComponent(props.name)}/delete`, { jid }),
 - entry: "Queue job-delete takes `jid`, not the spec's `key_val`"
   anchor: "test/engine/api_mutations_test.rb#L487-L500"
   fragment: |-

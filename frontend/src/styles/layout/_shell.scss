@@ -91,3 +91,15 @@
     min-height: to-rem(38);
   }
 }
+
+// RouteProgress: a thin bar along the top while the router waits on a page.
+.route-progress {
+  position: fixed;
+  inset: 0 0 auto;
+  height: to-rem(2);
+  z-index: 300;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  background-size: 50% 100%;
+  background-repeat: no-repeat;
+  animation: route-progress 1s linear infinite;
+}

@@ -1,4 +1,6 @@
 import { Router, Route } from '@solidjs/router';
+import { preloadPages, registerPages } from './pageChunks';
+import RouteProgress from './components/RouteProgress';
 import { QueryClient, QueryClientProvider } from '@tanstack/solid-query';
 import { Suspense, lazy, createSignal, createEffect, onCleanup, onMount, type ParentProps } from 'solid-js';
 import { Show } from 'solid-js';
@@ -34,16 +36,16 @@ const Search = lazy(() => import('./pages/Search'));
 const Extension = lazy(() => import('./pages/Extension'));
 const NotFound = lazy(() => import('./pages/NotFound'));
 
-// Once the first page is up, fetch the other pages' chunks while the browser
-// is idle: navigation then never waits on a chunk (the old page stayed on
-// screen, with no feedback, until the new chunk arrived).
-const PAGES = [Dashboard, Queues, Retries, Scheduled, Dead, Busy, Batches, BatchDetail, Flows, FlowDetail, Limiters, Cron, Metrics, Profiles, Search];
-function preloadPages() {
-  const run = () => PAGES.forEach((p) => void p.preload());
-  if (typeof window === 'undefined') return;
-  if ('requestIdleCallback' in window) window.requestIdleCallback(run, { timeout: 3000 });
-  else setTimeout(run, 1500);
-}
+// The nav preloads a page's chunk on hover through this table (pageChunks.ts),
+// and every chunk loads once the browser is idle.
+registerPages(
+  {
+    '/': Dashboard, '/queues': Queues, '/retries': Retries, '/scheduled': Scheduled, '/dead': Dead,
+    '/busy': Busy, '/batches': Batches, '/flows': Flows, '/limiters': Limiters, '/cron': Cron,
+    '/metrics': Metrics, '/profiles': Profiles, '/search': Search, '/ext/': Extension,
+  },
+  [BatchDetail, FlowDetail, NotFound],
+);
 
 const qc = new QueryClient({
   defaultOptions: {
@@ -157,6 +159,7 @@ function Layout(props: ParentProps) {
             transition: prefersReducedMotion() ? 'none' : 'margin var(--dur-page) var(--ease-emphasized)',
           }}
         >
+          <RouteProgress />
           <ReadOnlyBanner />
           <ErrorBoundary>
             <Suspense fallback={<PageSkeleton />}>{props.children}</Suspense>
