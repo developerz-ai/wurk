@@ -313,7 +313,8 @@ schedules:
     brief_file: .dz/briefs/improve.md
 
 # devops: off (owner, 2026-11-26: one PR per advisory was too much noise). Advisories arrive through
-# Dependabot instead, batched weekly per ecosystem (.github/dependabot.yml).
+# Dependabot instead: version bumps weekly, security bumps grouped into one PR per ecosystem
+# (.github/dependabot.yml).
 devops:
   watch: off
 
