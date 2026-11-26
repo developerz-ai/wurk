@@ -37,6 +37,10 @@ interface Process {
   memory_total_kb?: number;
   cpu_limit?: number | null;
   memory_limit_kb?: number | null;
+  // The Kubernetes node a pod runs on (WURK_NODE_NAME from the downward API),
+  // and its zone; absent on a bare host, whose hostname already is the machine.
+  node?: string | null;
+  node_zone?: string | null;
   version?: string;
   embedded?: boolean;
   leader?: boolean;
@@ -73,6 +77,8 @@ interface HostGroup {
   // The cgroup's caps (a pod's limits), absent on a machine nothing caps.
   cpuLimit?: number;
   memoryLimitKb?: number;
+  node?: string;
+  nodeZone?: string;
 }
 
 // Processes carrying the same `hostname` run on one machine — fold them into
@@ -94,6 +100,8 @@ function groupByHost(processes: Process[]): HostGroup[] {
     g.memoryTotalKb ??= proc.memory_total_kb;
     g.cpuLimit ??= proc.cpu_limit ?? undefined;
     g.memoryLimitKb ??= proc.memory_limit_kb ?? undefined;
+    g.node ??= proc.node ?? undefined;
+    g.nodeZone ??= proc.node_zone ?? undefined;
   }
   return [...groups.values()].sort((a, b) => a.hostname.localeCompare(b.hostname));
 }
@@ -277,13 +285,30 @@ function HostFacts(props: { group: HostGroup }) {
   );
 }
 
+// "on <node>" for a host that runs on a Kubernetes node; nothing elsewhere.
+function NodeLabel(props: { group: HostGroup }) {
+  return (
+    <Show when={props.group.node}>
+      {(node) => (
+        <span class="busy-node" title={props.group.nodeZone ? `${node()} · ${props.group.nodeZone}` : node()}>
+          <Icon name="server" /> {t('busy.on_node', { node: node() })}
+          <Show when={props.group.nodeZone}>
+            <span class="busy-node__zone"> · {props.group.nodeZone}</span>
+          </Show>
+        </span>
+      )}
+    </Show>
+  );
+}
+
 // The same facts as one muted line, for a card that stands for its host.
 function CardFacts(props: { group: HostGroup }) {
   const cpu = () => cpuFact(props.group);
   const mem = () => memFact(props.group);
   return (
-    <Show when={cpu() || mem()}>
+    <Show when={cpu() || mem() || props.group.node}>
       <div class="busy-card__facts" title={props.group.cpuModel ?? undefined}>
+        <NodeLabel group={props.group} />
         <Show when={cpu()}>{(c) => <span title={c().title}><Icon name="microchip" /> {c().text}</span>}</Show>
         <Show when={mem()}>{(m) => <span title={m().title}><Icon name="memory" /> {m().text}</span>}</Show>
       </div>
@@ -301,6 +326,7 @@ function HostHeader(props: { group: HostGroup }) {
       <span class="badge badge-muted">
         {props.group.processes.length} {t('dashboard.processes').toLowerCase()}
       </span>
+      <NodeLabel group={props.group} />
       <HostFacts group={props.group} />
       <span class="badge badge-muted" style={{ 'font-variant-numeric': 'tabular-nums' }}>
         {t('table.busy')} {props.group.busy} / {props.group.concurrency}
@@ -465,8 +491,28 @@ export default function Busy() {
   const hosts = createMemo(() => groupByHost(query.data ?? []));
   // A host running several processes (a swarm) gets a section; hosts of one
   // process (a pod each, on Kubernetes) share a single grid of cards.
-  const swarmHosts = createMemo(() => hosts().filter((g) => g.processes.length > 1));
-  const soloHosts = createMemo(() => hosts().filter((g) => g.processes.length === 1));
+  // Nodes the heartbeats report, with how many processes run on each. A
+  // filter keeps one node's cards; grouping puts each node's cards under its
+  // own heading. Both hide away when no process reports a node.
+  const [nodeFilter, setNodeFilter] = createSignal<string | null>(null);
+  const [byNode, setByNode] = createSignal(false);
+  const nodes = createMemo(() => {
+    const counts = new Map<string, number>();
+    for (const g of hosts()) if (g.node) counts.set(g.node, (counts.get(g.node) ?? 0) + g.processes.length);
+    return [...counts.entries()].sort(([a], [b]) => a.localeCompare(b));
+  });
+  const shown = createMemo(() => {
+    const only = nodeFilter();
+    return only === null ? hosts() : hosts().filter((g) => g.node === only);
+  });
+  const sections = createMemo(() => {
+    if (!byNode()) return [''];
+    const names = [...new Set(shown().map((g) => g.node ?? ''))];
+    return names.sort((a, b) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b)));
+  });
+  const inSection = (section: string, g: HostGroup) => !byNode() || (g.node ?? '') === section;
+  const swarmHosts = (section: string) => shown().filter((g) => g.processes.length > 1 && inSection(section, g));
+  const soloHosts = (section: string) => shown().filter((g) => g.processes.length === 1 && inSection(section, g));
   const signal = (sig: Signal, identity: string) => {
     if (sig === 'stop' && !confirmStop(t('actions.scope_this_process'))) return;
     control.mutate({ signal: sig, scope: 'one', identity });
@@ -553,26 +599,65 @@ export default function Busy() {
                   the row objects, and keying on those would remount each card,
                   folding open queue lists and dropping focus; keying on position
                   would move a focused Stop button onto another worker. */}
-              <For each={swarmHosts().map((g) => g.hostname)}>
-                {(name) => {
-                  const group = latest(() => hostByName().get(name));
-                  return (
-                    <section class="busy-host">
-                      <HostHeader group={group()} />
-                      <div class="busy-grid">
-                        <For each={group().processes.map((p) => p.identity)}>{(id) => card(id)}</For>
-                      </div>
-                    </section>
-                  );
-                }}
-              </For>
-              <Show when={soloHosts().length > 0}>
-                <div class="busy-grid">
-                  <For each={soloHosts().map((g) => g.processes[0].identity)}>
-                    {(id) => card(id, procById().get(id)!.hostname)}
+              <Show when={nodes().length > 0}>
+                <div class="busy-nodes" role="group" aria-label={t('busy.nodes')}>
+                  <button
+                    type="button"
+                    class="chip"
+                    aria-pressed={nodeFilter() === null}
+                    onClick={() => setNodeFilter(null)}
+                  >
+                    {t('busy.all_nodes')}
+                  </button>
+                  <For each={nodes()}>
+                    {([node, count]) => (
+                      <button
+                        type="button"
+                        class="chip"
+                        aria-pressed={nodeFilter() === node}
+                        onClick={() => setNodeFilter(nodeFilter() === node ? null : node)}
+                      >
+                        <Icon name="server" /> {node} <span class="busy-nodes__count">{count}</span>
+                      </button>
+                    )}
                   </For>
+                  <label class="busy-nodes__group">
+                    <input type="checkbox" checked={byNode()} onChange={(e) => setByNode(e.currentTarget.checked)} />
+                    {t('busy.group_by_node')}
+                  </label>
                 </div>
               </Show>
+              <For each={sections()}>
+                {(section) => (
+                  <section class={byNode() ? 'busy-node-section' : undefined}>
+                    <Show when={byNode()}>
+                      <h2 class="busy-node-section__title">
+                        <Icon name="server" /> {section === '' ? t('busy.no_node') : section}
+                      </h2>
+                    </Show>
+                  <For each={swarmHosts(section).map((g) => g.hostname)}>
+                    {(name) => {
+                      const group = latest(() => hostByName().get(name));
+                      return (
+                        <section class="busy-host">
+                          <HostHeader group={group()} />
+                          <div class="busy-grid">
+                            <For each={group().processes.map((p) => p.identity)}>{(id) => card(id)}</For>
+                          </div>
+                        </section>
+                      );
+                    }}
+                  </For>
+                  <Show when={soloHosts(section).length > 0}>
+                    <div class="busy-grid">
+                      <For each={soloHosts(section).map((g) => g.processes[0].identity)}>
+                        {(id) => card(id, procById().get(id)!.hostname)}
+                      </For>
+                    </div>
+                  </Show>
+                  </section>
+                )}
+              </For>
             </Show>
 
             <Modal

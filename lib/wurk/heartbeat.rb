@@ -46,6 +46,12 @@ module Wurk
     BEAT_PAUSE = 10
     TTL_SECONDS = 60
 
+    # The machine a container runs on, which its hostname (the pod's name)
+    # does not say. Set from the downward API (`spec.nodeName`); nil when unset,
+    # as on a bare host, where the hostname already is the machine.
+    NODE_NAME_ENV = %w[WURK_NODE_NAME K8S_NODE_NAME NODE_NAME].freeze
+    NODE_ZONE_ENV = %w[WURK_NODE_ZONE].freeze
+
     OOM_REFRESH_SLOTS = "#{Fetcher::OomDrain::HEADER}#{Lua::SCRIPTS.fetch(:refresh_slots)}".freeze
 
     # KEYS = [processes, identity, work], ARGV = [info_json, beat, ttl_seconds, tid, work_json, ...]
@@ -294,6 +300,9 @@ module Wurk
     # drop-in wire contract holds. Best-effort: nil/0 when the platform has
     # no readable source (the dashboard renders a dash).
     #
+    # `node` and `node_zone` name the Kubernetes node (and its zone) a pod
+    # runs on, from env; nil elsewhere.
+    #
     # `cores` and `memory_total_kb` are the machine's, which inside a
     # container is the node's. `cpu_limit` (CPUs, may be fractional) and
     # `memory_limit_kb` are the cgroup's caps, nil when nothing caps tighter
@@ -309,9 +318,19 @@ module Wurk
           'cores' => host_cores,
           'memory_total_kb' => total_kb,
           'cpu_limit' => cpu_limit(host_cores),
-          'memory_limit_kb' => memory_limit_kb(total_kb)
+          'memory_limit_kb' => memory_limit_kb(total_kb),
+          'node' => node_env(NODE_NAME_ENV),
+          'node_zone' => node_env(NODE_ZONE_ENV)
         }
       end
+    end
+
+    def node_env(names, env = ENV)
+      names.each do |name|
+        value = env[name].to_s.strip
+        return value unless value.empty?
+      end
+      nil
     end
 
     def cpu_limit(host_cores, **cgroup)

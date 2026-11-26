@@ -100,7 +100,9 @@ class HeartbeatTest < Wurk::Test::UnitCase
       %("cores":#{json[facts['cores']]}),
       %("memory_total_kb":#{json[facts['memory_total_kb']]}),
       %("cpu_limit":#{json[facts['cpu_limit']]}),
-      %("memory_limit_kb":#{json[facts['memory_limit_kb']]}})
+      %("memory_limit_kb":#{json[facts['memory_limit_kb']]}),
+      %("node":#{json[facts['node']]}),
+      %("node_zone":#{json[facts['node_zone']]}})
     ].join(',')
     written = @pool.with { |c| c.call('HGET', @identity, 'info') }
 
@@ -153,6 +155,25 @@ class HeartbeatTest < Wurk::Test::UnitCase
       assert_nil hb.send(:cpu_limit, 8, **cgroup)
       assert_nil hb.send(:memory_limit_kb, 64 * 1024 * 1024, **cgroup)
     end
+  end
+
+  # The node a pod runs on comes from the downward API; WURK_NODE_NAME wins
+  # over the other common names, and a blank value counts as unset.
+  def test_node_reads_the_first_set_env_name
+    hb = build_heartbeat
+    names = Wurk::Heartbeat::NODE_NAME_ENV
+
+    assert_equal 'egress-2', hb.send(:node_env, names, { 'WURK_NODE_NAME' => 'egress-2', 'NODE_NAME' => 'other' })
+    assert_equal 'worker-3', hb.send(:node_env, names, { 'WURK_NODE_NAME' => ' ', 'K8S_NODE_NAME' => 'worker-3' })
+    assert_equal 'w', hb.send(:node_env, names, { 'NODE_NAME' => 'w' })
+    assert_nil hb.send(:node_env, names, {})
+  end
+
+  def test_node_zone_reads_wurk_node_zone
+    hb = build_heartbeat
+
+    assert_equal 'us-east-1a', hb.send(:node_env, Wurk::Heartbeat::NODE_ZONE_ENV, { 'WURK_NODE_ZONE' => 'us-east-1a' })
+    assert_nil hb.send(:node_env, Wurk::Heartbeat::NODE_ZONE_ENV, {})
   end
 
   def test_host_facts_are_memoized_per_instance

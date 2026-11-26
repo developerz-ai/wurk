@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@solidjs/testing-library';
+import { render, screen, fireEvent, waitFor, within } from '@solidjs/testing-library';
 import { QueryClient, QueryClientProvider } from '@tanstack/solid-query';
 import Busy from './Busy';
 import { t } from '../i18n';
@@ -222,6 +222,53 @@ describe('Busy', () => {
     expect(podB).toHaveTextContent('q9');
     // pod-a, new and in front, did not inherit pod-b's open list.
     expect(screen.getByText('pod-a').closest('.card')).toHaveTextContent(t('busy.more_queues', { n: 4 }));
+  });
+
+  const pod = (name: string, node?: string, zone?: string) => ({
+    ...PROCESSES[2],
+    identity: `${name}:1:x`,
+    hostname: name,
+    pid: 1,
+    ...(node ? { node } : {}),
+    ...(zone ? { node_zone: zone } : {}),
+  });
+
+  it('shows the node a pod runs on, with its zone', async () => {
+    stubProcesses([pod('pod-a', 'egress-2', 'us-east-1a')]);
+    renderBusy();
+
+    expect(await screen.findByText(t('busy.on_node', { node: 'egress-2' }), { exact: false })).toBeInTheDocument();
+    expect(screen.getByText(/us-east-1a/)).toBeInTheDocument();
+  });
+
+  // A bare host reports no node: its hostname already is the machine.
+  it('shows no node line, filter or grouping when no process reports a node', async () => {
+    renderBusy();
+    await screen.findByText('host-a');
+
+    expect(screen.queryByText(/^on /)).toBeNull();
+    expect(screen.queryByRole('group', { name: t('busy.nodes') })).toBeNull();
+  });
+
+  it('filters the cards to one node and groups them by node', async () => {
+    stubProcesses([pod('pod-a', 'node-1'), pod('pod-b', 'node-2'), pod('pod-c', 'node-1'), pod('pod-d')]);
+    const { container } = renderBusy();
+    await screen.findByText('pod-a');
+
+    const filters = screen.getByRole('group', { name: t('busy.nodes') });
+    fireEvent.click(within(filters).getByRole('button', { name: /node-2/ }));
+    expect(screen.queryByText('pod-a')).toBeNull();
+    expect(screen.getByText('pod-b')).toBeInTheDocument();
+
+    fireEvent.click(within(filters).getByRole('button', { name: t('busy.all_nodes') }));
+    fireEvent.click(within(filters).getByRole('checkbox', { name: t('busy.group_by_node') }));
+
+    const titles = [...container.querySelectorAll('.busy-node-section__title')].map((h) => h.textContent?.trim());
+    expect(titles).toEqual(['node-1', 'node-2', t('busy.no_node')]);
+    const first = container.querySelectorAll('.busy-node-section')[0];
+    expect(first).toHaveTextContent('pod-a');
+    expect(first).toHaveTextContent('pod-c');
+    expect(first).not.toHaveTextContent('pod-b');
   });
 
   it('renders a live heartbeat from the API `beat` field', async () => {
