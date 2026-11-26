@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/solid-query';
+import { useQuery } from '../query';
 import { createEffect, createSignal, onCleanup, onMount, untrack, For, Show } from 'solid-js';
 import { useSearchParams } from '@solidjs/router';
 import { t } from '../i18n';

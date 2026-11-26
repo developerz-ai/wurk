@@ -1,0 +1,423 @@
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import { render, screen, fireEvent, waitFor, within } from '@solidjs/testing-library';
+import { QueryClient, QueryClientProvider } from '@tanstack/solid-query';
+import { MemoryRouter, Route, createMemoryHistory } from '@solidjs/router';
+import { Suspense, lazy, type Component } from 'solid-js';
+import { Layout } from './App';
+import Retries from './pages/Retries';
+import Busy from './pages/Busy';
+import Queues from './pages/Queues';
+import { t } from './i18n';
+import { Toasts, dismissToast, toasts } from './toast';
+import { useQuery } from './query';
+import { getJSON } from './http';
+import { resetOptimistic } from './optimistic';
+
+// Pages render inside the app's route <Suspense> (App.tsx). Every case here
+// mounts them under one, whose fallback must never show: a page draws its own
+// skeleton, a modal opens on the click, and polls and actions never blank it.
+
+const NOW = Math.floor(Date.now() / 1000);
+const FALLBACK = 'ROUTE-SUSPENSE-FALLBACK';
+
+function entry(i: number) {
+  return { jid: `jid${i}`, klass: `Job${i}`, args: [i], error_class: 'RuntimeError', error_message: 'boom', at: NOW + 60, retry_count: 1, score: NOW + 60 + i };
+}
+const page = (n: number) => ({ total: n, page: 0, count: n, entries: Array.from({ length: n }, (_, i) => entry(i + 1)) });
+
+type Reply = unknown | { status: number; body?: unknown } | Promise<unknown>;
+let handler: (url: URL, method: string) => Reply;
+
+function stub() {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), 'http://x');
+    const reply = url.pathname.endsWith('/api/meta') ? { read_only: false } : await handler(url, init?.method ?? 'GET');
+    if (reply && typeof reply === 'object' && 'status' in reply && typeof (reply as { status: unknown }).status === 'number') {
+      const { status, body } = reply as { status: number; body?: unknown };
+      return { ok: status < 300, status, json: async () => body ?? {} } as Response;
+    }
+    return { ok: true, status: 200, json: async () => reply } as Response;
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
+
+function mount(path: string, routePath: string, component: Component, client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
+  const history = createMemoryHistory();
+  history.set({ value: path, replace: true });
+  const view = render(() => (
+    <QueryClientProvider client={client}>
+      <Suspense fallback={<div>{FALLBACK}</div>}>
+        <MemoryRouter history={history}>
+          <Route path={routePath} component={component} />
+        </MemoryRouter>
+      </Suspense>
+      <Toasts />
+    </QueryClientProvider>
+  ));
+  return { client, ...view };
+}
+
+const never = () => new Promise(() => {});
+
+beforeEach(() => {
+  HTMLDialogElement.prototype.showModal = vi.fn(function (this: HTMLDialogElement) {
+    this.setAttribute('open', '');
+  });
+  HTMLDialogElement.prototype.close = vi.fn(function (this: HTMLDialogElement) {
+    this.removeAttribute('open');
+  });
+});
+
+afterEach(() => {
+  resetOptimistic();
+  vi.unstubAllGlobals();
+  for (const toast of toasts()) dismissToast(toast.id);
+});
+
+describe('pages render their own shell at once', () => {
+  it('shows the page header and its skeleton, not the route fallback, before the list answers', async () => {
+    handler = () => never();
+    stub();
+    mount('/retries', '/retries', Retries);
+
+    expect(await screen.findByText(t('nav.retries'))).toBeInTheDocument();
+    expect(document.querySelector('[aria-busy="true"]')).not.toBeNull();
+    expect(screen.queryByText(FALLBACK)).toBeNull();
+  });
+
+  it('renders cached rows on a revisit before any request returns', async () => {
+    handler = () => never();
+    stub();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client.setQueryData(['retries', 1, ''], page(2));
+    mount('/retries', '/retries', Retries, client);
+
+    expect(screen.getByText('Job1')).toBeInTheDocument();
+    expect(screen.getByText('Job2')).toBeInTheDocument();
+    expect(screen.queryByText(FALLBACK)).toBeNull();
+  });
+});
+
+describe('modals open on the click', () => {
+  it('opens the job modal with a backtrace skeleton before the detail request resolves', async () => {
+    handler = (url) => (url.pathname.endsWith('/api/retries') ? page(2) : never());
+    stub();
+    mount('/retries', '/retries', Retries);
+
+    fireEvent.click((await screen.findByText('Job1')).closest('tr')!);
+
+    const dialog = document.querySelector('dialog[open]')!;
+    expect(dialog).not.toBeNull();
+    expect(dialog).toHaveTextContent('jid1');
+    expect(dialog.querySelector(`[aria-label="${t('job.backtrace_loading')}"]`)).not.toBeNull();
+    expect(screen.queryByText(FALLBACK)).toBeNull();
+    // The page behind it stayed mounted.
+    expect(screen.getByText('Job2')).toBeInTheDocument();
+  });
+
+  it('keeps an open process modal mounted through a poll', async () => {
+    const proc = { identity: 'h:1:a', pid: 1, hostname: 'h', queues: ['default'], labels: [], concurrency: 5, busy: 1, quiet: false, beat: NOW };
+    let busy = 1;
+    handler = (url) => {
+      if (url.pathname.endsWith('/api/processes')) return [{ ...proc, busy, beat: NOW + busy }];
+      if (url.pathname.endsWith('/api/workers')) return [{ process_id: 'h:1:a', thread_id: 't', queue: 'default', klass: 'RunningJob', args: [], jid: 'r1', run_at: NOW }];
+      return {};
+    };
+    stub();
+    const { client } = mount('/busy', '/busy', Busy);
+
+    fireEvent.click((await screen.findByText('h')).closest('.card')!);
+    const job = await screen.findByText('RunningJob');
+    const body = job.closest('.modal-body')!;
+
+    busy = 3;
+    await client.invalidateQueries();
+    await waitFor(() => expect(screen.getAllByText('3 / 5').length).toBeGreaterThan(0));
+
+    expect(screen.getByText('RunningJob')).toBe(job);
+    expect(job.closest('.modal-body')).toBe(body);
+    expect(document.querySelector('dialog[open]')).not.toBeNull();
+    expect(screen.queryByText(FALLBACK)).toBeNull();
+  });
+});
+
+describe('optimistic actions', () => {
+  it('drops a deleted retry at once and puts it back with a toast when the server answers 500', async () => {
+    let answer!: (r: Reply) => void;
+    handler = (url, method) => {
+      if (method === 'POST') return new Promise((res) => (answer = res));
+      if (url.pathname.endsWith('/api/retries')) return page(2);
+      return never();
+    };
+    stub();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mount('/retries', '/retries', Retries);
+
+    fireEvent.click((await screen.findByText('Job1')).closest('tr')!);
+    fireEvent.click(within(document.querySelector('dialog[open]') as HTMLElement).getByRole('button', { name: t('actions.delete') }));
+
+    await waitFor(() => expect(screen.queryByText('Job1')).toBeNull());
+    expect(screen.getByText('Job2')).toBeInTheDocument();
+
+    answer({ status: 500, body: { error: 'boom' } });
+
+    expect(await screen.findByText('Job1')).toBeInTheDocument();
+    await waitFor(() => expect(toasts().some((x) => x.kind === 'error')).toBe(true));
+  });
+
+  // A poll sent after the click can be read before the server applied it. The
+  // row must not come back and leave again.
+  it('keeps a deleted row gone through a poll that answers before the server applied it', async () => {
+    let answer!: (r: Reply) => void;
+    let lists = 0;
+    handler = (url, method) => {
+      if (method === 'POST') return new Promise((res) => (answer = res));
+      if (url.pathname.endsWith('/api/retries')) {
+        lists += 1;
+        return page(2);
+      }
+      return never();
+    };
+    stub();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const { client } = mount('/retries', '/retries', Retries);
+
+    fireEvent.click((await screen.findByText('Job1')).closest('tr')!);
+    fireEvent.click(within(document.querySelector('dialog[open]') as HTMLElement).getByRole('button', { name: t('actions.delete') }));
+    await waitFor(() => expect(screen.queryByText('Job1')).toBeNull());
+
+    // Any moment the row is back in the DOM counts, not only the end state.
+    let reappeared = false;
+    const watch = new MutationObserver((records) => {
+      for (const r of records) {
+        for (const node of r.addedNodes) if (node.textContent?.includes('Job1')) reappeared = true;
+        if (r.type === 'characterData' && r.target.textContent?.includes('Job1')) reappeared = true;
+      }
+    });
+    watch.observe(document.body, { childList: true, subtree: true, characterData: true });
+    const before = lists;
+    await client.refetchQueries({ queryKey: ['retries'] });
+    await new Promise((r) => setTimeout(r, 0));
+    watch.disconnect();
+    expect(reappeared).toBe(false);
+    expect(lists).toBeGreaterThan(before);
+    expect(screen.queryByText('Job1')).toBeNull();
+    expect(screen.getByText('Job2')).toBeInTheDocument();
+
+    // The settle refetch is held: the row stays gone while it is in flight,
+    // and the list it brings (without Job1) takes over.
+    let settle!: (r: Reply) => void;
+    handler = (url, method) => {
+      if (url.pathname.endsWith('/api/retries') && method === 'GET') return new Promise((res) => (settle = res));
+      return never();
+    };
+    watch.observe(document.body, { childList: true, subtree: true, characterData: true });
+    answer({ ok: true });
+    await waitFor(() => expect(settle).toBeDefined());
+    await new Promise((r) => setTimeout(r, 20));
+    watch.disconnect();
+    expect(reappeared).toBe(false);
+    expect(screen.queryByText('Job1')).toBeNull();
+
+    // Once the settle refetch lands, the server's list is shown as it is: the
+    // edit is lifted, so even a Job1 the server still reports comes back,
+    // beside a row the optimistic list never had.
+    settle({ total: 3, page: 0, count: 3, entries: [entry(1), entry(2), entry(3)] });
+    expect(await screen.findByText('Job3')).toBeInTheDocument();
+    expect(await screen.findByText('Job1')).toBeInTheDocument();
+  });
+
+  // The hand-off from the edited list to the settle response: Job1 must not
+  // show for a frame between the edit lifting and the new list rendering.
+  it('hands over from the edited list to the settle response without showing the row', async () => {
+    let answer!: (r: Reply) => void;
+    let settle!: (r: Reply) => void;
+    let held = false;
+    handler = (url, method) => {
+      if (method === 'POST') return new Promise((res) => (answer = res));
+      if (url.pathname.endsWith('/api/retries')) return held ? new Promise((res) => (settle = res)) : page(2);
+      return never();
+    };
+    stub();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mount('/retries', '/retries', Retries);
+
+    fireEvent.click((await screen.findByText('Job1')).closest('tr')!);
+    fireEvent.click(within(document.querySelector('dialog[open]') as HTMLElement).getByRole('button', { name: t('actions.delete') }));
+    await waitFor(() => expect(screen.queryByText('Job1')).toBeNull());
+
+    let reappeared = false;
+    const watch = new MutationObserver((records) => {
+      for (const r of records) {
+        for (const node of r.addedNodes) if (node.textContent?.includes('Job1')) reappeared = true;
+        if (r.type === 'characterData' && r.target.textContent?.includes('Job1')) reappeared = true;
+      }
+    });
+    watch.observe(document.body, { childList: true, subtree: true, characterData: true });
+    held = true;
+    answer({ ok: true });
+    await waitFor(() => expect(settle).toBeDefined());
+    settle({ total: 2, page: 0, count: 2, entries: [entry(2), entry(3)] });
+    expect(await screen.findByText('Job3')).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 20));
+    watch.disconnect();
+
+    expect(reappeared).toBe(false);
+    expect(screen.queryByText('Job1')).toBeNull();
+  });
+
+  // A count cannot tell whether the server already applied the action, so it
+  // is edited once: a poll that already has the server's lower count shows it
+  // as it is, not one lower again.
+  it('does not take a deleted entry off a count the server already lowered', async () => {
+    let answer!: (r: Reply) => void;
+    let retries = 2;
+    handler = (url, method) => {
+      if (method === 'POST') return new Promise((res) => (answer = res));
+      if (url.pathname.endsWith('/api/stats')) return { retries };
+      if (url.pathname.endsWith('/api/retries')) return page(2);
+      return never();
+    };
+    stub();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const StatsProbe = () => {
+      const q = useQuery(() => ({ queryKey: ['stats'], queryFn: () => getJSON<{ retries: number }>('/wurk/api/stats') }));
+      return <output data-testid="retries-count">{q.data?.retries}</output>;
+    };
+    const { client } = mount('/retries', '/retries', () => (
+      <>
+        <StatsProbe />
+        <Retries />
+      </>
+    ));
+    await waitFor(() => expect(screen.getByTestId('retries-count')).toHaveTextContent('2'));
+
+    fireEvent.click((await screen.findByText('Job1')).closest('tr')!);
+    fireEvent.click(within(document.querySelector('dialog[open]') as HTMLElement).getByRole('button', { name: t('actions.delete') }));
+    await waitFor(() => expect(screen.getByTestId('retries-count')).toHaveTextContent('1'));
+
+    retries = 1; // the server applied the delete; its reply is still on the way
+    await client.refetchQueries({ queryKey: ['stats'] });
+    expect(screen.getByTestId('retries-count')).toHaveTextContent('1');
+
+    answer({ ok: true });
+  });
+
+  // A poll read while the POST was in flight (the old list, Job1 in it) and a
+  // failed refetch after it: neither is a fetch of the server after the
+  // action, so the row stays hidden.
+  it('keeps a deleted row gone through a stale poll and a failed refetch', async () => {
+    let answer!: (r: Reply) => void;
+    let failLists = false;
+    handler = (url, method) => {
+      if (method === 'POST') return new Promise((res) => (answer = res));
+      if (url.pathname.endsWith('/api/retries')) return failLists ? { status: 503 } : page(2);
+      return never();
+    };
+    stub();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const { client } = mount('/retries', '/retries', Retries);
+
+    fireEvent.click((await screen.findByText('Job1')).closest('tr')!);
+    fireEvent.click(within(document.querySelector('dialog[open]') as HTMLElement).getByRole('button', { name: t('actions.delete') }));
+    await waitFor(() => expect(screen.queryByText('Job1')).toBeNull());
+
+    await client.refetchQueries({ queryKey: ['retries'] }); // the stale poll
+    expect(screen.queryByText('Job1')).toBeNull();
+
+    failLists = true;
+    answer({ ok: true });
+    expect(await screen.findByText(t('common.refresh_failed'))).toBeInTheDocument();
+    expect(screen.queryByText('Job1')).toBeNull();
+  });
+
+  it('keeps a newer count a poll brought when a failed action rolls back', async () => {
+    let answer!: (r: Reply) => void;
+    let retries = 2;
+    let holdStats = false;
+    handler = (url, method) => {
+      if (method === 'POST') return new Promise((res) => (answer = res));
+      if (url.pathname.endsWith('/api/stats')) return holdStats ? never() : { retries };
+      if (url.pathname.endsWith('/api/retries')) return page(2);
+      return never();
+    };
+    stub();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const StatsProbe = () => {
+      const q = useQuery(() => ({ queryKey: ['stats'], queryFn: () => getJSON<{ retries: number }>('/wurk/api/stats') }));
+      return <output data-testid="retries-count">{q.data?.retries}</output>;
+    };
+    const { client } = mount('/retries', '/retries', () => (
+      <>
+        <StatsProbe />
+        <Retries />
+      </>
+    ));
+    await waitFor(() => expect(screen.getByTestId('retries-count')).toHaveTextContent('2'));
+
+    fireEvent.click((await screen.findByText('Job1')).closest('tr')!);
+    fireEvent.click(within(document.querySelector('dialog[open]') as HTMLElement).getByRole('button', { name: t('actions.delete') }));
+    await waitFor(() => expect(screen.getByTestId('retries-count')).toHaveTextContent('1'));
+
+    retries = 5; // other jobs failed meanwhile
+    await client.refetchQueries({ queryKey: ['stats'] });
+    expect(screen.getByTestId('retries-count')).toHaveTextContent('5');
+
+    holdStats = true; // the settle refetch never answers
+    answer({ status: 500, body: { error: 'boom' } });
+    expect(await screen.findByText('Job1')).toBeInTheDocument();
+    expect(screen.getByTestId('retries-count')).toHaveTextContent('5');
+  });
+
+  it('pauses a queue at once, then takes the server state the settle refetch reads', async () => {
+    let afterPost = false;
+    let answer!: (r: Reply) => void;
+    handler = (url, method) => {
+      if (method === 'POST') {
+        return new Promise((res) => (answer = (r) => { afterPost = true; res(r); }));
+      }
+      // Distinguishable: only the refetch after the POST reports 7 jobs.
+      if (url.pathname.endsWith('/api/queues')) return [{ name: 'default', size: afterPost ? 7 : 3, latency: 0, paused: afterPost }];
+      return never();
+    };
+    stub();
+    mount('/queues', '/queues', Queues);
+
+    fireEvent.click(await screen.findByRole('button', { name: t('actions.pause') }));
+    expect(await screen.findByRole('button', { name: t('actions.unpause') })).toBeInTheDocument();
+    expect(screen.queryByText('7')).toBeNull();
+
+    answer({ ok: true });
+    expect(await screen.findByText('7')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: t('actions.unpause') })).toBeInTheDocument();
+  });
+});
+
+describe('navigation', () => {
+  // A page chunk the idle preload has not fetched yet: the router keeps the old
+  // page while it loads, and the bar says the click registered.
+  it('shows route progress in the dashboard shell while the next chunk loads', async () => {
+    handler = () => never();
+    stub();
+    let loadChunk!: (m: { default: Component }) => void;
+    const Slow = lazy(() => new Promise<{ default: Component }>((res) => (loadChunk = res)));
+    const history = createMemoryHistory();
+    history.set({ value: '/', replace: true });
+    render(() => (
+      <MemoryRouter history={history} root={Layout}>
+        <Route path="/" component={() => <div>OLD PAGE</div>} />
+        <Route path="/retries" component={Slow} />
+      </MemoryRouter>
+    ));
+
+    fireEvent.click(await screen.findByRole('link', { name: t('nav.retries') }));
+
+    await waitFor(() => expect(screen.getByRole('progressbar')).toBeInTheDocument());
+    expect(screen.getByText('OLD PAGE')).toBeInTheDocument();
+
+    loadChunk({ default: () => <div>NEW PAGE</div> });
+    expect(await screen.findByText('NEW PAGE')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('progressbar')).toBeNull());
+  });
+});

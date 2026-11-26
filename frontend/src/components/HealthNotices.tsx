@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/solid-query';
+import { useQuery } from '../query';
 import { For, Show } from 'solid-js';
 import { A } from '@solidjs/router';
 import { basePath } from '../basePath';

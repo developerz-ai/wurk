@@ -1,4 +1,7 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/solid-query';
+import { useMutation, useQueryClient } from '@tanstack/solid-query';
+import { useQuery } from '../query';
+import { queuesQuery } from '../routeQueries';
+import { optimistic, statsPatch, type OptimisticContext, type Patch } from '../optimistic';
 import { createSignal, onMount, For, Show, Switch, Match } from 'solid-js';
 import { useNavigate, useParams, useSearchParams } from '@solidjs/router';
 import { Pagination, maxPageOf } from '../components/Pagination';
@@ -60,6 +63,16 @@ const JOB_SORT: Accessors<QueueJob> = {
   enqueued: (j) => j.enqueued_at,
 };
 
+// The queue list's size for `name`, moved by `f`. One-shot: a size cannot
+// tell whether the server already applied the action (optimistic.ts).
+function queueSize(name: string, f: (n: number) => number): Patch {
+  return {
+    queryKey: ['queues'],
+    oneShot: true,
+    update: (old: QueueSummary[]) => old.map((q) => (q.name === name ? { ...q, size: Math.max(0, f(q.size)) } : q)),
+  };
+}
+
 function QueueJobs(props: { name: string }) {
   const [page, setPage] = usePageParam();
   const [selected, setSelected] = createSignal<JobEntry | null>(null);
@@ -83,16 +96,32 @@ function QueueJobs(props: { name: string }) {
   useServedPage(page, setPage, () => query.data);
 
   // Delete one job from the queue by jid (server LREMs the exact payload).
-  const deleteJob = useMutation(() => ({
-    mutationFn: (jid: string) =>
-      post(`${basePath()}/api/queues/${encodeURIComponent(props.name)}/delete`, { jid }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['queue', props.name] });
-      qc.invalidateQueries({ queryKey: ['queues'] });
-      qc.invalidateQueries({ queryKey: ['stats'] });
-    },
-    onError: notifyError,
-  }));
+  const deleteJob = useMutation(() => {
+    const o = optimistic(
+      qc,
+      (jid: string) => [
+        {
+          queryKey: ['queue', props.name],
+          update: (old: QueueDetail) => {
+            const jobs = old.jobs.filter((j) => j.jid !== jid);
+            return { ...old, jobs, size: Math.max(0, old.size - (old.jobs.length - jobs.length)) };
+          },
+        },
+        queueSize(props.name, (n) => n - 1),
+        statsPatch({ enqueued: -1 }),
+      ],
+      [['queue', props.name], ['queues'], ['stats']],
+    );
+    return {
+      mutationFn: (jid: string) => post(`${basePath()}/api/queues/${encodeURIComponent(props.name)}/delete`, { jid }),
+      onMutate: o.onMutate,
+      onError: (err: unknown, _jid: string, ctx: OptimisticContext | undefined) => {
+        o.rollback(ctx);
+        notifyError(err);
+      },
+      onSettled: o.onSettled,
+    };
+  });
 
   useResetPageOnEmpty(page, setPage, () => !query.isPending && !!query.data, () => (query.data?.jobs.length ?? 0) === 0);
 
@@ -221,35 +250,63 @@ export default function Queues() {
   });
 
   const query = useQuery<QueueSummary[]>(() => ({
-    queryKey: ['queues'],
-    queryFn: () => getJSON<QueueSummary[]>(`${basePath()}/api/queues`),
+    ...(queuesQuery() as { queryKey: unknown[]; queryFn: () => Promise<QueueSummary[]> }),
     refetchInterval: 5000,
   }));
 
-  const clearQueue = useMutation(() => ({
-    mutationFn: (name: string) => post(`${basePath()}/api/queues/${encodeURIComponent(name)}/clear`),
-    onSuccess: (_res, name) => {
-      qc.invalidateQueries({ queryKey: ['queues'] });
-      qc.invalidateQueries({ queryKey: ['queue', name] });
-      qc.invalidateQueries({ queryKey: ['stats'] });
-    },
-    onError: notifyError,
-  }));
+  const clearQueue = useMutation(() => {
+    const o = optimistic(
+      qc,
+      (name: string) => {
+        const size = query.data?.find((q) => q.name === name)?.size ?? 0;
+        return [
+          { queryKey: ['queue', name], update: (old: QueueDetail) => ({ ...old, jobs: [], size: 0 }) },
+          queueSize(name, () => 0),
+          statsPatch({ enqueued: -size }),
+        ];
+      },
+      [['queues'], ['queue'], ['stats']],
+    );
+    return {
+      mutationFn: (name: string) => post(`${basePath()}/api/queues/${encodeURIComponent(name)}/clear`),
+      onMutate: o.onMutate,
+      onError: (err: unknown, _name: string, ctx: OptimisticContext | undefined) => {
+        o.rollback(ctx);
+        notifyError(err);
+      },
+      onSettled: o.onSettled,
+    };
+  });
 
   // Toggle the queue's membership of the `paused` SET; fetchers stop pulling
   // from a paused queue. POST skips CSRF (ApiController#skip_forgery_protection).
-  const pauseQueue = useMutation(() => ({
-    mutationFn: ({ name, paused }: { name: string; paused: boolean }) =>
-      post(`${basePath()}/api/queues/${encodeURIComponent(name)}/${paused ? 'unpause' : 'pause'}`),
-    onSuccess: (_res, { name }) => {
-      qc.invalidateQueries({ queryKey: ['queues'] });
-      qc.invalidateQueries({ queryKey: ['queue', name] });
-      // /api/stats carries per-queue paused flags the Dashboard renders, so a
-      // toggle must refresh it too (mirrors clearQueue).
-      qc.invalidateQueries({ queryKey: ['stats'] });
-    },
-    onError: notifyError,
-  }));
+  // /api/stats carries per-queue paused flags the Dashboard renders, so the
+  // toggle patches and refreshes it too.
+  const pauseQueue = useMutation(() => {
+    const o = optimistic(
+      qc,
+      ({ name, paused }: { name: string; paused: boolean }) => [
+        { queryKey: ['queues'], update: (old: QueueSummary[]) => old.map((q) => (q.name === name ? { ...q, paused: !paused } : q)) },
+        { queryKey: ['queue', name], update: (old: QueueDetail) => ({ ...old, paused: !paused }) },
+        {
+          queryKey: ['stats'],
+          update: (old: { queues?: QueueSummary[] }) =>
+            Array.isArray(old.queues) ? { ...old, queues: old.queues.map((q) => (q.name === name ? { ...q, paused: !paused } : q)) } : old,
+        },
+      ],
+      [['queues'], ['queue'], ['stats']],
+    );
+    return {
+      mutationFn: ({ name, paused }: { name: string; paused: boolean }) =>
+        post(`${basePath()}/api/queues/${encodeURIComponent(name)}/${paused ? 'unpause' : 'pause'}`),
+      onMutate: o.onMutate,
+      onError: (err: unknown, _v: { name: string; paused: boolean }, ctx: OptimisticContext | undefined) => {
+        o.rollback(ctx);
+        notifyError(err);
+      },
+      onSettled: o.onSettled,
+    };
+  });
 
   const { sorted, sort, toggle } = useSort(() => query.data ?? [], QUEUE_SORT);
 

@@ -1,7 +1,7 @@
-import { useQuery, keepPreviousData } from '@tanstack/solid-query';
+import { keepPreviousData } from '@tanstack/solid-query';
+import { useQuery } from '../query';
 import { createSignal } from 'solid-js';
-import { basePath } from '../basePath';
-import { getJSON } from '../http';
+import { JOB_SET_PAGE_SIZE, jobSetQuery } from '../routeQueries';
 import { formatNumber } from '../utils';
 import { maxPageOf } from '../components/Pagination';
 import { usePageParam } from './usePageParam';
@@ -26,7 +26,7 @@ export interface JobSetResponse<E> {
   filtered_total_exact?: boolean;
 }
 
-export const JOB_SET_PAGE_SIZE = 25;
+export { JOB_SET_PAGE_SIZE };
 
 // Query + paging + filter state shared by the Retries / Scheduled / Dead
 // tables.
@@ -45,11 +45,7 @@ export function useJobSetList<E>(set: JobSetName, initialFilter = '') {
   // keepPreviousData: a new page/filter key would otherwise drop the query
   // back to pending and blank the table on every keystroke.
   const query = useQuery<JobSetResponse<E>>(() => ({
-    queryKey: [set, page(), filter()],
-    queryFn: () =>
-      getJSON<JobSetResponse<E>>(
-        `${basePath()}/api/${set}?page=${page() - 1}&count=${JOB_SET_PAGE_SIZE}&substr=${encodeURIComponent(filter())}`,
-      ),
+    ...(jobSetQuery(set, page(), filter()) as { queryKey: unknown[]; queryFn: () => Promise<JobSetResponse<E>> }),
     placeholderData: keepPreviousData,
   }));
 

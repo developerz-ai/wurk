@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/solid-query';
+import { useQuery } from '../query';
 import { onMount, For, Switch, Match, Show } from 'solid-js';
 import { SkeletonTable } from '../components/Skeleton';
 import { RefreshError } from '../components/RefreshError';

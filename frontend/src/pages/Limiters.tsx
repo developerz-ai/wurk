@@ -1,4 +1,5 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/solid-query';
+import { useMutation, useQueryClient } from '@tanstack/solid-query';
+import { useQuery } from '../query';
 import { onMount, For, Switch, Match, Show } from 'solid-js';
 import { Pagination, maxPageOf } from '../components/Pagination';
 import { useServedPage } from '../hooks/useServedPage';

@@ -1,4 +1,6 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/solid-query';
+import { useMutation, useQueryClient } from '@tanstack/solid-query';
+import { useQuery } from '../query';
+import { optimistic, type OptimisticContext } from '../optimistic';
 import { onMount, createSignal, For, Switch, Match, Show } from 'solid-js';
 import { RefreshError } from '../components/RefreshError';
 import { t } from '../i18n';
@@ -59,12 +61,24 @@ export default function Cron() {
   // pause/unpause/enqueue skip CSRF (see ApiController#skip_forgery_protection).
   const call = (lid: string, action: string) => post(`${basePath()}/api/cron/${lid}/${action}`);
 
-  const setPaused = useMutation(() => ({
-    mutationFn: ({ lid, paused }: { lid: string; paused: boolean }) =>
-      call(lid, paused ? 'unpause' : 'pause'),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['cron'] }),
-    onError: notifyError,
-  }));
+  const setPaused = useMutation(() => {
+    const o = optimistic(
+      qc,
+      ({ lid, paused }: { lid: string; paused: boolean }) => [
+        { queryKey: ['cron'], update: (old: CronLoop[]) => old.map((l) => (l.lid === lid ? { ...l, paused: !paused } : l)) },
+      ],
+      [['cron']],
+    );
+    return {
+      mutationFn: ({ lid, paused }: { lid: string; paused: boolean }) => call(lid, paused ? 'unpause' : 'pause'),
+      onMutate: o.onMutate,
+      onError: (err: unknown, _v: { lid: string; paused: boolean }, ctx: OptimisticContext | undefined) => {
+        o.rollback(ctx);
+        notifyError(err);
+      },
+      onSettled: o.onSettled,
+    };
+  });
 
   const enqueueNow = useMutation(() => ({
     mutationFn: (lid: string) => call(lid, 'enqueue'),

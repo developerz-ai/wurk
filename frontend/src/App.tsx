@@ -1,6 +1,8 @@
 import { Router, Route } from '@solidjs/router';
+import { preloadPages, registerPages } from './pageChunks';
+import RouteProgress from './components/RouteProgress';
 import { QueryClient, QueryClientProvider } from '@tanstack/solid-query';
-import { Suspense, lazy, createSignal, createEffect, onCleanup, type ParentProps } from 'solid-js';
+import { Suspense, lazy, createSignal, createEffect, onCleanup, onMount, type ParentProps } from 'solid-js';
 import { Show } from 'solid-js';
 import { useMeta } from './hooks/useMeta';
 import { basePath } from './basePath';
@@ -33,6 +35,17 @@ const Profiles = lazy(() => import('./pages/Profiles'));
 const Search = lazy(() => import('./pages/Search'));
 const Extension = lazy(() => import('./pages/Extension'));
 const NotFound = lazy(() => import('./pages/NotFound'));
+
+// The nav preloads a page's chunk on hover through this table (pageChunks.ts),
+// and every chunk loads once the browser is idle.
+registerPages(
+  {
+    '/': Dashboard, '/queues': Queues, '/retries': Retries, '/scheduled': Scheduled, '/dead': Dead,
+    '/busy': Busy, '/batches': Batches, '/flows': Flows, '/limiters': Limiters, '/cron': Cron,
+    '/metrics': Metrics, '/profiles': Profiles, '/search': Search, '/ext/': Extension,
+  },
+  [BatchDetail, FlowDetail, NotFound],
+);
 
 const qc = new QueryClient({
   defaultOptions: {
@@ -72,11 +85,12 @@ const NAV_COLLAPSED_KEY = 'wurk-nav-collapsed';
 // Root layout: the persistent shell (hamburger, main content, nav) that wraps
 // every route. Solid Router renders the matched route into `props.children`,
 // which lives inside the <Suspense> so lazy chunks fall back to the skeleton.
-function Layout(props: ParentProps) {
+export function Layout(props: ParentProps) {
   // The shell outlives every route, so owning the tick here gives the relative
   // labels on whichever page is mounted one interval between them — rather than
   // one per page, or one per cell in a table of hundreds.
   useLiveTick();
+  onMount(preloadPages);
 
   const [navOpen, setNavOpen] = createSignal(false);
   // Desktop-only: pin the rail collapsed (icons) or expanded (full), persisted
@@ -145,6 +159,7 @@ function Layout(props: ParentProps) {
             transition: prefersReducedMotion() ? 'none' : 'margin var(--dur-page) var(--ease-emphasized)',
           }}
         >
+          <RouteProgress />
           <ReadOnlyBanner />
           <ErrorBoundary>
             <Suspense fallback={<PageSkeleton />}>{props.children}</Suspense>

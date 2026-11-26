@@ -23,6 +23,12 @@
     transition: none;
   }
 
+  // The bar stays as a static strip: it is the only sign the click registered.
+  .route-progress {
+    animation: none;
+    background: var(--accent);
+  }
+
   .row-clickable td:last-child::after {
     transition: none;
   }

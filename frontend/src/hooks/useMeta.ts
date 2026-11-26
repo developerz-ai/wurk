@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/solid-query';
+import { useQuery } from '../query';
 import { basePath } from '../basePath';
 import { getJSON } from '../http';
 

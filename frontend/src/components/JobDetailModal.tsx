@@ -1,5 +1,7 @@
 import { For, Show, createMemo, type JSX } from 'solid-js';
-import { useQuery } from '@tanstack/solid-query';
+import { useQueryClient } from '@tanstack/solid-query';
+import { prefetch, useQuery } from '../query';
+import { Skeleton } from './Skeleton';
 import Modal from './Modal';
 import { t } from '../i18n';
 import { getJSON } from '../http';
@@ -57,6 +59,17 @@ interface JobDetailModalProps {
   onClose: () => void;
 }
 
+const DETAIL_STALE_MS = 30_000;
+
+// Warm the backtrace a row's modal will ask for, on hover or focus, so the
+// modal usually opens with it already there. Only failed entries have one.
+export function usePrefetchJobDetail() {
+  const qc = useQueryClient();
+  return (entry: { error_class?: string | null }, url: string) => {
+    if (entry.error_class) prefetch(qc, ['job-detail', url], () => getJSON<JobEntry>(url), DETAIL_STALE_MS);
+  };
+}
+
 export default function JobDetailModal(props: JobDetailModalProps) {
   // Only a failed entry has a backtrace worth a request.
   const wantsDetail = () => props.entry !== null && !!props.detailUrl && !!props.entry.error_class && props.entry.error_backtrace == null;
@@ -64,7 +77,7 @@ export default function JobDetailModal(props: JobDetailModalProps) {
     queryKey: ['job-detail', props.detailUrl],
     queryFn: () => getJSON<JobEntry>(props.detailUrl!),
     enabled: wantsDetail(),
-    staleTime: 30_000,
+    staleTime: DETAIL_STALE_MS,
   }));
   const backtrace = () => props.entry?.error_backtrace ?? (wantsDetail() ? detail.data?.error_backtrace : null);
   // A memo, not a one-off: `actions` goes away when read-only mode arrives
@@ -147,9 +160,13 @@ export default function JobDetailModal(props: JobDetailModalProps) {
                 <pre class="job-backtrace">{backtrace()!.join('\n')}</pre>
               </Field>
             </Show>
+            {/* Sized like the backtrace block it stands in for (.job-backtrace's
+                max-height), so the modal does not grow when it lands. */}
             <Show when={wantsDetail() && detail.isPending}>
               <Field label={t('job.backtrace')}>
-                <span style={{ color: 'var(--text-muted)' }}>{t('job.backtrace_loading')}</span>
+                <span role="status" aria-busy="true" aria-label={t('job.backtrace_loading')}>
+                  <Skeleton height="20rem" radius="var(--radius)" style={{ display: 'block' }} />
+                </span>
               </Field>
             </Show>
             <Show when={wantsDetail() && detail.isError}>

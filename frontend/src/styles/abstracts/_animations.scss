@@ -34,3 +34,13 @@
   }
 }
 
+// RouteProgress: the bar's highlight sweeping left to right.
+@keyframes route-progress {
+  from {
+    background-position: -50% 0;
+  }
+
+  to {
+    background-position: 150% 0;
+  }
+}
