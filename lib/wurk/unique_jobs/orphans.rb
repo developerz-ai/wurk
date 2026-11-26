@@ -32,8 +32,10 @@ module Wurk
           @deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + @config.reaper_timeout.to_i
         end
 
-        # The digests deleted, expired first.
+        # The digests deleted, expired first. Hand-off lists left without a TTL
+        # get one first, whatever the queues hold.
         def call
+          PrimedSweep.new(@deadline).call
           return 0 if queues_very_full? || sorted_sets_very_full?
 
           BatchDelete.call(expired_digests) + BatchDelete.call(orphans)
@@ -98,6 +100,46 @@ module Wurk
             return true if total > MAX_QUEUE_LENGTH
           end
           false
+        end
+      end
+
+      # `<digest>:PRIMED` lists a Wurk before 1.23 (or the gem) left without a
+      # TTL: an entry BLMOVE put there that no lock script took out. The digest
+      # reaper never meets them, since a lock that was never taken is in no
+      # digest set. A PRIMED entry is a hand-off the lock script takes within
+      # the call that moved it, never the lock itself (that is LOCKED), so each
+      # such list gets the hand-off TTL: a hand-off in flight still completes,
+      # and the leftover expires. Bounded by the reaper's deadline.
+      class PrimedSweep
+        MATCH = 'uniquejobs:*:PRIMED'
+
+        def initialize(deadline)
+          @deadline = deadline
+        end
+
+        # The lists given a TTL.
+        def call
+          cursor = '0'
+          fixed = 0
+          loop do
+            cursor, keys = UniqueJobs.redis { |conn| conn.call('SCAN', cursor, 'MATCH', MATCH, 'COUNT', Reaper::PAGE) }
+            fixed += expire_unbounded(keys) unless keys.empty?
+            break if cursor == '0' || ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) >= @deadline
+          end
+          fixed
+        end
+
+        private
+
+        def expire_unbounded(keys)
+          ttls = UniqueJobs.redis { |conn| conn.pipelined { |pipe| keys.each { |key| pipe.call('PTTL', key) } } }
+          unbounded = keys.zip(ttls).filter_map { |key, ttl| key if ttl == -1 }
+          return 0 if unbounded.empty?
+
+          UniqueJobs.redis do |conn|
+            conn.pipelined { |pipe| unbounded.each { |key| pipe.call('PEXPIRE', key, Locksmith::PRIMED_TTL_MS) } }
+          end
+          unbounded.size
         end
       end
 

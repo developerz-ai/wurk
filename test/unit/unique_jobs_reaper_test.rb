@@ -165,4 +165,31 @@ class UniqueJobsReaperTest < Wurk::Test::UnitCase
 
     assert_nil Wurk::UniqueJobs::Orphans::Manager.start
   end
+
+  # Hand-off lists a Wurk before 1.23 left without a TTL: a lock never taken
+  # is in no digest set, so only this sweep meets them. It gives them the
+  # hand-off TTL and touches nothing else: a held lock, a PRIMED list that
+  # already expires, and the lock's other keys keep what they had.
+  def test_gives_unbounded_primed_lists_a_ttl_and_leaves_live_locks_alone
+    lock('uniquejobs:live:RUN', score: Time.now.to_f)
+    Wurk.redis do |c|
+      c.call('RPUSH', 'uniquejobs:leaked:RUN:PRIMED', 'a-jid')
+      c.call('RPUSH', 'uniquejobs:leaked2:PRIMED', '1')
+      c.call('RPUSH', 'uniquejobs:handoff:RUN:PRIMED', 'b-jid')
+      c.call('PEXPIRE', 'uniquejobs:handoff:RUN:PRIMED', 5_000)
+    end
+
+    reap
+
+    Wurk.redis do |c|
+      %w[uniquejobs:leaked:RUN:PRIMED uniquejobs:leaked2:PRIMED].each do |key|
+        assert_operator c.call('PTTL', key), :>, 0, key
+        assert_operator c.call('PTTL', key), :<=, Wurk::UniqueJobs::Locksmith::PRIMED_TTL_MS
+      end
+      assert_operator c.call('PTTL', 'uniquejobs:handoff:RUN:PRIMED'), :<=, 5_000
+      assert_equal(-1, c.call('PTTL', 'uniquejobs:live:RUN'))
+      assert_equal(-1, c.call('PTTL', 'uniquejobs:live:RUN:LOCKED'))
+      assert_equal ['uniquejobs:live:RUN'], digests
+    end
+  end
 end
