@@ -216,15 +216,16 @@ describe('optimistic actions', () => {
     answer({ ok: true });
     await waitFor(() => expect(settle).toBeDefined());
     await new Promise((r) => setTimeout(r, 20));
-    expect(screen.queryByText('Job1')).toBeNull();
-    // The settle response carries a row the optimistic list never had, so the
-    // page is seen to take it over.
-    settle({ total: 2, page: 0, count: 2, entries: [entry(2), entry(3)] });
-    expect(await screen.findByText('Job3')).toBeInTheDocument();
-    await new Promise((r) => setTimeout(r, 0));
     watch.disconnect();
     expect(reappeared).toBe(false);
     expect(screen.queryByText('Job1')).toBeNull();
+
+    // Once the settle refetch lands, the server's list is shown as it is: the
+    // edit is lifted, so even a Job1 the server still reports comes back,
+    // beside a row the optimistic list never had.
+    settle({ total: 3, page: 0, count: 3, entries: [entry(1), entry(2), entry(3)] });
+    expect(await screen.findByText('Job3')).toBeInTheDocument();
+    expect(await screen.findByText('Job1')).toBeInTheDocument();
   });
 
   // A count cannot tell whether the server already applied the action, so it
