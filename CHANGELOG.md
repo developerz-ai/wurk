@@ -4,6 +4,10 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 Each release's notes live in their own file under [`docs/changelog/`](docs/changelog/); this page is the index, newest first. Not released yet: [`docs/changelog/unreleased.md`](docs/changelog/unreleased.md) ([diff since the last release][Unreleased]). A pull request with a user-visible change adds its line there.
 
+## [1.22.0] - 2026-11-26
+
+The Busy page reads a pod against its own limits: the heartbeat reports the cgroup's `cpu_limit` and `memory_limit_kb`, so RSS shows over the container's memory limit and CPU as its quota instead of the node's RAM and cores. Single-process hosts (a pod running one Wurk process) share one responsive grid; a host running several keeps its own section of compact cards, and long queue lists collapse. [Release notes](docs/changelog/1.22.0.md).
+
 ## [1.21.0] - 2026-11-25
 
 Two runs of one job can no longer share a sidekiq-unique-jobs lock across a deploy: a job cut short at the shutdown deadline is requeued as its own thread ends, each run marks the lock it enters, and only the newest mark unlocks or renews it. An interrupted job keeps its runtime lock for its re-run, which differs from the gem. The deploy that brings this in is not protected, and after a rollback to 1.20 a kept `until_and_while_executing` lock stays until its TTL. [Release notes](docs/changelog/1.21.0.md)
@@ -196,7 +200,8 @@ Releases publish to RubyGems through GitHub Actions OIDC trusted publishing, and
 
 First public (pre-1.0) release. [Release notes](docs/changelog/0.0.1.md).
 
-[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.21.0...HEAD
+[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.22.0...HEAD
+[1.22.0]: https://github.com/developerz-ai/wurk/compare/v1.21.0...v1.22.0
 [1.21.0]: https://github.com/developerz-ai/wurk/compare/v1.20.0...v1.21.0
 [1.20.0]: https://github.com/developerz-ai/wurk/compare/v1.19.0...v1.20.0
 [1.19.0]: https://github.com/developerz-ai/wurk/compare/v1.18.0...v1.19.0
