@@ -34,6 +34,12 @@ if redis.call("HEXISTS", locked, job_id) == 1 then
 end
 
 if limit <= redis.call("HLEN", locked) then
+  -- Wurk's: the lock went to another job after this one's BLMOVE. What that
+  -- BLMOVE moved (its own entry, or an unlock's "1") leaves PRIMED with it; the
+  -- gem leaves it there for good.
+  if redis.call("LREM", primed, 1, job_id) == 0 then
+    redis.call("LREM", primed, 1, "1")
+  end
   log("Limited")
   return nil
 end

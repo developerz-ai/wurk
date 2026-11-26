@@ -504,6 +504,16 @@ Quirks kept on purpose, because they are the gem's and a fleet mixes the two:
   `reaper_timeout`; skipped when the queues hold more than 1,000 jobs, as the gem
   skips it (and above a schedule and retry bound, below). One process runs it, the one holding `uniquejobs:reaper`, gem or native.
 - **A runtime lock's wait blocks its own connection**, not a thread pool's.
+- **A `:PRIMED` list always expires.** It holds the entry a waiting lock moved
+  out of `:QUEUED`, for the lock script to take out in the same call. Wurk gives
+  it a 60-second TTL in the same pipeline as the move, and a lock script that
+  finds the lock taken meanwhile takes its entry out. The gem leaves both for
+  good, as does a process killed between the move and the script. Each reaper
+  run also gives the same TTL to every `uniquejobs:*:PRIMED` list that has none.
+  Those lists are left by the gem or a Wurk before 1.23, and the digest reaper
+  never meets them because a lock that was never taken is in no digest set. A
+  `:PRIMED` list is never the lock itself (that is `:LOCKED`), so this frees
+  nothing a job holds.
 - **The dashboard tabs delete only by POST**, and only a digest they list. The gem's
   deletes are GETs, which pass the dashboard's read-only mode and can be fired by a
   link or an image on another site; and its delete unlinks whatever key the URL

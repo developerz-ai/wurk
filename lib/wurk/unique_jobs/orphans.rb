@@ -32,8 +32,15 @@ module Wurk
           @deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + @config.reaper_timeout.to_i
         end
 
-        # The digests deleted, expired first.
+        # The digests deleted, expired first. Then hand-off lists without a TTL
+        # get one, on a budget of their own, whatever the queues hold.
         def call
+          deleted = reap_digests
+          PrimedSweep.new.call
+          deleted
+        end
+
+        def reap_digests
           return 0 if queues_very_full? || sorted_sets_very_full?
 
           BatchDelete.call(expired_digests) + BatchDelete.call(orphans)
@@ -98,6 +105,62 @@ module Wurk
             return true if total > MAX_QUEUE_LENGTH
           end
           false
+        end
+      end
+
+      # `<digest>:PRIMED` lists a Wurk before 1.23 (or the gem) left without a
+      # TTL: an entry BLMOVE put there that no lock script took out. The digest
+      # reaper never meets them, since a lock that was never taken is in no
+      # digest set. A PRIMED entry is a hand-off the lock script takes within
+      # the call that moved it, never the lock itself (that is LOCKED), so each
+      # such list gets the hand-off TTL: a hand-off in flight still completes,
+      # and the leftover expires. Bounded by the reaper's deadline.
+      class PrimedSweep
+        # Seconds per run. Its own, so the digest reaper using the whole
+        # reaper_timeout never starves it; a run that stops early resumes at
+        # the next run where this one stopped.
+        BUDGET = 2
+        GLOB = /[*?\[\]\\]/
+
+        @cursor = '0'
+        class << self
+          attr_accessor :cursor
+        end
+
+        # Glob characters in the prefix are matched literally: a `billing*`
+        # prefix must not reach another app's lists.
+        def initialize
+          prefix = (UniqueJobs.config.lock_prefix || 'uniquejobs').to_s.gsub(GLOB) { |c| "\\#{c}" }
+          @match = "#{prefix}:*:PRIMED"
+          @deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + BUDGET
+        end
+
+        # The lists given a TTL.
+        def call
+          cursor = self.class.cursor
+          fixed = 0
+          loop do
+            cursor, keys = UniqueJobs.redis { |conn| conn.call('SCAN', cursor, 'MATCH', @match, 'COUNT', Reaper::PAGE) }
+            fixed += expire_unbounded(keys) unless keys.empty?
+            break if cursor == '0' || ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) >= @deadline
+          end
+          self.class.cursor = cursor
+          fixed
+        end
+
+        private
+
+        # PTTL picks the candidates in one round trip; the script re-checks each
+        # (still a list, still no TTL) as it sets the TTL.
+        def expire_unbounded(keys)
+          ttls = UniqueJobs.redis { |conn| conn.pipelined { |pipe| keys.each { |key| pipe.call('PTTL', key) } } }
+          unbounded = keys.zip(ttls).filter_map { |key, ttl| key if ttl == -1 }
+          UniqueJobs.redis do |conn|
+            unbounded.count do |key|
+              Wurk::Lua::Loader.eval_cached(conn, :unique_jobs_primed_ttl,
+                                            keys: [key], argv: [Locksmith::PRIMED_TTL_MS]) == 1
+            end
+          end
         end
       end
 
