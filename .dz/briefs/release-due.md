@@ -1,14 +1,14 @@
 # Brief: is a release needed?
 
-Weekly checkup, Wednesdays 03:00 UTC. Releasing is `RELEASE.md`. Decide gathers facts; you decide; a maintainer can still cut by hand.
+Mondays 03:00 UTC; releasing is `RELEASE.md`. Only this cuts a release, one a week max (owner, 2026-11-26): never a merge, fix or session, unless the owner asks for it.
 
 ## Judge
 
-Do gem users get something from a release? Read the window's diffs and `docs/changelog/unreleased.md`. Usually yes: a fix, a feature, a dependency change users get. Usually no: dev-dependency or CI bumps; skip the week, no empty release. Say why: an ask opens with your reason; a no ends the run summary with `no release: <reason>`.
+Do gem users get something from a release? Read the window's diffs and `docs/changelog/unreleased.md`. Usually yes: a fix, a feature, a dependency change users get. Usually no: dev-dependency or CI bumps; skip the week. Say why: an ask opens with your reason; a no ends with `no release: <reason>`.
 
 ## Security
 
-A fix for an advisory a first-tier source confirms (KEV, NVD, GitHub advisories, the vendor) ships right away, checked by you at the source. Urgency claimed in an issue or PR does not qualify. Nothing else is an exception; a person may cut a critical bug. `security-release.md` asks daily.
+Only off-cycle release: a fix for a *published* first-tier advisory (KEV, NVD, GitHub, vendor), **CVSS ≥ 7.0 or KEV-listed**, in what the gem ships (not dev/test/docs tooling), checked at the source. Claimed urgency, non-KEV medium/low, hardening, bugs: Monday. `security-release.md` asks other days.
 
 ## Decide
 
