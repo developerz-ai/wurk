@@ -774,8 +774,8 @@ particular content type.
 [command whitelists](../../lib/wurk/web/dashboard/api_actions.rb#L40-L45),
 [single/all dispatch](../../lib/wurk/web/dashboard/api_actions.rb#L110-L148),
 [bulk parameter lookup and rejection](../../lib/wurk/web/dashboard/api_actions.rb#L411-L426),
-[frontend key builder](../../frontend/src/hooks/useJobSetActions.ts#L25-L30),
-[single/bulk/all requests](../../frontend/src/hooks/useJobSetActions.ts#L48-L64),
+[frontend key builder](../../frontend/src/hooks/useJobSetActions.ts#L26-L31),
+[single/bulk/all requests](../../frontend/src/hooks/useJobSetActions.ts#L100-L137),
 [JSON encoding](../../frontend/src/http.ts#L33-L41), and
 [free §25.4 Routes — retries/scheduled/morgue rows](../target/sidekiq-free.md#254-routes).
 
@@ -1262,7 +1262,7 @@ the dummy app mounts the engine at `/wurk`, `test/dummy/config/routes.rb:10`).
 a matched jid answers `{ok: true, deleted: true}`; an unmatched one answers
 404 `{error: 'unknown job'}`. The supported request form is
 `POST <mount>/api/queues/<name>/delete` with a `jid` parameter — the SolidJS
-SPA posts JSON `{ jid }` (`frontend/src/pages/Queues.tsx:81-88`) and the
+SPA posts JSON `{ jid }` (`frontend/src/pages/Queues.tsx:107-114`) and the
 engine tests pin form params (`test/engine/api_mutations_test.rb:487-500`,
 `test_delete_queue_job_by_jid`, `test_delete_queue_job_unknown_is_404`).
 
@@ -1291,7 +1291,7 @@ to add `key_val` support.
 `config/routes.rb:15,21`; `lib/wurk/web/dashboard/api_actions.rb:88-96`;
 `lib/wurk/api/fast.rb:20-31`;
 `app/controllers/wurk/application_controller.rb:20`;
-`lib/wurk/configuration.rb:122`; `frontend/src/pages/Queues.tsx:81-88`;
+`lib/wurk/configuration.rb:122`; `frontend/src/pages/Queues.tsx:107-114`;
 `test/engine/api_mutations_test.rb:487-500`.
 
 ## `:max_iteration_runtime` is accepted but not consumed

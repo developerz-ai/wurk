@@ -25,17 +25,19 @@
     method = actions[params[:cmd].to_s]
     return render(json: { error: 'unknown action' }, status: :bad_request) unless method
 - entry: "Dashboard job-set HTTP request shapes differ from Sidekiq Web"
-  anchor: "frontend/src/hooks/useJobSetActions.ts#L25-L30"
+  anchor: "frontend/src/hooks/useJobSetActions.ts#L26-L31"
   fragment: |-
     export function entryKey(e: { score: number; jid: string }): string {
       return `${e.score}|${e.jid}`;
     }
 - entry: "Dashboard job-set HTTP request shapes differ from Sidekiq Web"
-  anchor: "frontend/src/hooks/useJobSetActions.ts#L48-L64"
+  anchor: "frontend/src/hooks/useJobSetActions.ts#L100-L137"
   fragment: |-
-    const single = useMutation(() => ({
-      mutationFn: ({ key, cmd }: { key: string; cmd: string }) =>
-        post(`${basePath()}/api/${set}/${encodeURIComponent(key)}`, { cmd }),
+    const single = useMutation(() => {
+      const o = optimistic(qc, ({ key, cmd }: { key: string; cmd: string }) => removeKeys(new Set([key]), cmd), [[set], ['stats']]);
+      return {
+        mutationFn: ({ key, cmd }: { key: string; cmd: string }) =>
+          post(`${basePath()}/api/${set}/${encodeURIComponent(key)}`, { cmd }),
 - entry: "Dashboard job-set HTTP request shapes differ from Sidekiq Web"
   anchor: "frontend/src/http.ts#L33-L41"
   fragment: |-
@@ -89,7 +91,7 @@
   fragment: |-
     REDIS_ERROR_CLASSES = [RedisClient::Error, ConnectionPool::TimeoutError].freeze
 - entry: "Queue job-delete takes `jid`, not the spec's `key_val`"
-  anchor: "frontend/src/pages/Queues.tsx#L81-L88"
+  anchor: "frontend/src/pages/Queues.tsx#L107-L114"
   fragment: |-
     mutationFn: (jid: string) =>
       post(`${basePath()}/api/queues/${encodeURIComponent(props.name)}/delete`, { jid }),
