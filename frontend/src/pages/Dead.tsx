@@ -17,6 +17,7 @@ import { useJobSetActions, entryKey } from '../hooks/useJobSetActions';
 import { useJobSetList, jidFromKey, JOB_SET_PAGE_SIZE } from '../hooks/useJobSetList';
 import { SkeletonTable } from '../components/Skeleton';
 import { FilterBox } from '../components/FilterBox';
+import { RefreshError } from '../components/RefreshError';
 
 interface DeadEntry {
   jid: string;
@@ -82,11 +83,15 @@ export default function Dead() {
 
       <FilterBox value={list.filter()} onChange={list.onFilterChange} placeholder={t('common.filter_placeholder_errors')} />
 
+      <RefreshError when={query.isError && !!query.data} />
+
       <Switch>
         <Match when={query.isPending}>
           <SkeletonTable rows={8} cols={7} />
         </Match>
-        <Match when={query.isError || !query.data}>
+        {/* Gate on the payload, not isError: a failed poll keeps the rows on screen
+            and RefreshError says so (useQuery keeps the last good payload). */}
+        <Match when={!query.data}>
           <div class="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>
         </Match>
         <Match when={query.data}>

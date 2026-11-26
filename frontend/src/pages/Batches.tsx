@@ -9,6 +9,7 @@ import { useSort, type Accessors } from '../hooks/useSort';
 import { usePageParam } from '../hooks/usePageParam';
 import { useResetPageOnEmpty } from '../hooks/useResetPageOnEmpty';
 import { t } from '../i18n';
+import { RefreshError } from '../components/RefreshError';
 import { PageHeader } from '../components/PageHeader';
 import { formatNumber, relativeTime, truncate } from '../utils';
 import { SkeletonTable } from '../components/Skeleton';
@@ -107,12 +108,13 @@ export default function Batches() {
         <Match when={q.isPending}>
           <SkeletonTable rows={8} cols={7} />
         </Match>
-        <Match when={q.isError || !q.data}>
+        <Match when={!q.data}>
           <div class="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>
         </Match>
         <Match when={q.data}>
           {(data) => (
             <div>
+              <RefreshError when={q.isError} />
               <Show when={sorted().length > 0} fallback={<div class="empty-state">{t('common.empty')}</div>}>
                 <div class="table-wrapper">
                   <table>

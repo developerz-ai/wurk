@@ -24,6 +24,9 @@ export interface Patch {
 export interface OptimisticContext {
   id: number;
   snapshot: Array<[QueryKey, unknown]>;
+  written: Array<[QueryKey, unknown]>;
+  startedAt: number;
+  patches: Patch[];
 }
 
 const active = new Map<number, Patch[]>();
@@ -54,6 +57,12 @@ export function applyPending<T>(queryKey: QueryKey, data: T): T {
   return out;
 }
 
+// Tests: drop every in-flight edit, as a page reload would.
+export function resetOptimistic() {
+  active.clear();
+  setVersion((v) => v + 1);
+}
+
 export function pendingVersion() {
   return version();
 }
@@ -61,9 +70,11 @@ export function pendingVersion() {
 // Mutation lifecycle for an optimistic action. onMutate cancels in-flight
 // polls of the edited queries, writes the one-shot edits (keeping what they
 // replace) and turns the view edits on. On failure `rollback` turns them off
-// and restores the one-shot data; the caller still raises its toast. On
-// settle the edited queries refetch, and the view edits stay on until that
-// refetch has landed, so the row does not reappear in between.
+// and restores the one-shot data where the cache still holds what the edit
+// wrote (a newer poll stays); the caller still raises its toast. On settle the
+// edited queries refetch, and the view edits stay on until every edited
+// query has a successful fetch from after the action: a failed refetch
+// would otherwise hand back the stale list with the row in it.
 export function optimistic<V>(qc: QueryClient, patches: (vars: V) => Patch[], refresh: QueryKey[]) {
   return {
     onMutate: async (vars: V): Promise<OptimisticContext> => {
@@ -71,21 +82,40 @@ export function optimistic<V>(qc: QueryClient, patches: (vars: V) => Patch[], re
       await Promise.all(ps.map((p) => qc.cancelQueries({ queryKey: p.queryKey })));
       const oneShot = ps.filter((p) => p.oneShot);
       const snapshot = oneShot.flatMap((p) => qc.getQueriesData({ queryKey: p.queryKey }));
+      const written: Array<[QueryKey, unknown]> = [];
       for (const p of oneShot) {
-        qc.setQueriesData({ queryKey: p.queryKey }, (old: unknown) => (old === undefined ? old : p.update(old)));
+        for (const [key, old] of qc.getQueriesData({ queryKey: p.queryKey })) {
+          if (old !== undefined) written.push([key, qc.setQueryData(key, p.update(old))]);
+        }
       }
       const id = (nextId += 1);
       setActive(id, ps);
-      return { id, snapshot };
+      return { id, snapshot, written, startedAt: Date.now(), patches: ps };
     },
     rollback: (ctx: OptimisticContext | undefined) => {
       if (!ctx) return;
       setActive(ctx.id, null);
-      for (const [key, data] of ctx.snapshot) qc.setQueryData(key, data);
+      for (const [key, data] of ctx.snapshot) {
+        const ours = ctx.written.find(([k]) => JSON.stringify(k) === JSON.stringify(key))?.[1];
+        if (qc.getQueryData(key) === ours) qc.setQueryData(key, data);
+      }
     },
-    onSettled: async (_data: unknown, _error: unknown, _vars: unknown, ctx: OptimisticContext | undefined) => {
+    onSettled: async (_data: unknown, error: unknown, _vars: unknown, ctx: OptimisticContext | undefined) => {
       await Promise.all(refresh.map((key) => qc.invalidateQueries({ queryKey: key }))).catch(() => undefined);
-      if (ctx) setActive(ctx.id, null);
+      if (!ctx || error) {
+        if (ctx) setActive(ctx.id, null);
+        return;
+      }
+      const stale = () =>
+        ctx.patches.some((p) =>
+          qc.getQueryCache().findAll({ queryKey: p.queryKey }).some((q) => q.state.dataUpdatedAt < ctx.startedAt),
+        );
+      if (!stale()) return setActive(ctx.id, null);
+      const release = qc.getQueryCache().subscribe(() => {
+        if (stale()) return;
+        release();
+        setActive(ctx.id, null);
+      });
     },
   };
 }

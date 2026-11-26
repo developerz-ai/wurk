@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@solidjs/testing-library';
 import { QueryClient, QueryClientProvider } from '@tanstack/solid-query';
-import { A, MemoryRouter, Route, createMemoryHistory } from '@solidjs/router';
-import { Suspense, lazy, type Component, type ParentProps } from 'solid-js';
-import RouteProgress from './components/RouteProgress';
+import { MemoryRouter, Route, createMemoryHistory } from '@solidjs/router';
+import { Suspense, lazy, type Component } from 'solid-js';
+import { Layout } from './App';
 import Retries from './pages/Retries';
 import Busy from './pages/Busy';
 import Queues from './pages/Queues';
@@ -11,6 +11,7 @@ import { t } from './i18n';
 import { Toasts, dismissToast, toasts } from './toast';
 import { useQuery } from './query';
 import { getJSON } from './http';
+import { resetOptimistic } from './optimistic';
 
 // Pages render inside the app's route <Suspense> (App.tsx). Every case here
 // mounts them under one, whose fallback must never show: a page draws its own
@@ -69,6 +70,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetOptimistic();
   vi.unstubAllGlobals();
   for (const toast of toasts()) dismissToast(toast.id);
 });
@@ -203,7 +205,24 @@ describe('optimistic actions', () => {
     expect(screen.queryByText('Job1')).toBeNull();
     expect(screen.getByText('Job2')).toBeInTheDocument();
 
+    // The settle refetch is held: the row stays gone while it is in flight,
+    // and the list it brings (without Job1) takes over.
+    let settle!: (r: Reply) => void;
+    handler = (url, method) => {
+      if (url.pathname.endsWith('/api/retries') && method === 'GET') return new Promise((res) => (settle = res));
+      return never();
+    };
+    watch.observe(document.body, { childList: true, subtree: true, characterData: true });
     answer({ ok: true });
+    await waitFor(() => expect(settle).toBeDefined());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByText('Job1')).toBeNull();
+    settle({ total: 1, page: 0, count: 1, entries: [entry(2)] });
+    await waitFor(() => expect(screen.getByText('Job2')).toBeInTheDocument());
+    await new Promise((r) => setTimeout(r, 0));
+    watch.disconnect();
+    expect(reappeared).toBe(false);
+    expect(screen.queryByText('Job1')).toBeNull();
   });
 
   // A count cannot tell whether the server already applied the action, so it
@@ -243,6 +262,64 @@ describe('optimistic actions', () => {
     answer({ ok: true });
   });
 
+  it('keeps a deleted row gone when the refetch after the action fails', async () => {
+    let failLists = false;
+    handler = (url, method) => {
+      if (method === 'POST') return { ok: true };
+      if (url.pathname.endsWith('/api/retries')) return failLists ? { status: 503 } : page(2);
+      return never();
+    };
+    stub();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mount('/retries', '/retries', Retries);
+
+    fireEvent.click((await screen.findByText('Job1')).closest('tr')!);
+    failLists = true;
+    fireEvent.click(within(document.querySelector('dialog[open]') as HTMLElement).getByRole('button', { name: t('actions.delete') }));
+
+    await waitFor(() => expect(screen.queryByText('Job1')).toBeNull());
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText('Job1')).toBeNull();
+  });
+
+  it('keeps a newer count a poll brought when a failed action rolls back', async () => {
+    let answer!: (r: Reply) => void;
+    let retries = 2;
+    let holdStats = false;
+    handler = (url, method) => {
+      if (method === 'POST') return new Promise((res) => (answer = res));
+      if (url.pathname.endsWith('/api/stats')) return holdStats ? never() : { retries };
+      if (url.pathname.endsWith('/api/retries')) return page(2);
+      return never();
+    };
+    stub();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const StatsProbe = () => {
+      const q = useQuery(() => ({ queryKey: ['stats'], queryFn: () => getJSON<{ retries: number }>('/wurk/api/stats') }));
+      return <output data-testid="retries-count">{q.data?.retries}</output>;
+    };
+    const { client } = mount('/retries', '/retries', () => (
+      <>
+        <StatsProbe />
+        <Retries />
+      </>
+    ));
+    await waitFor(() => expect(screen.getByTestId('retries-count')).toHaveTextContent('2'));
+
+    fireEvent.click((await screen.findByText('Job1')).closest('tr')!);
+    fireEvent.click(within(document.querySelector('dialog[open]') as HTMLElement).getByRole('button', { name: t('actions.delete') }));
+    await waitFor(() => expect(screen.getByTestId('retries-count')).toHaveTextContent('1'));
+
+    retries = 5; // other jobs failed meanwhile
+    await client.refetchQueries({ queryKey: ['stats'] });
+    expect(screen.getByTestId('retries-count')).toHaveTextContent('5');
+
+    holdStats = true; // the settle refetch never answers
+    answer({ status: 500, body: { error: 'boom' } });
+    expect(await screen.findByText('Job1')).toBeInTheDocument();
+    expect(screen.getByTestId('retries-count')).toHaveTextContent('5');
+  });
+
   it('pauses a queue at once, then takes the server state the settle refetch reads', async () => {
     let afterPost = false;
     let answer!: (r: Reply) => void;
@@ -270,28 +347,21 @@ describe('optimistic actions', () => {
 describe('navigation', () => {
   // A page chunk the idle preload has not fetched yet: the router keeps the old
   // page while it loads, and the bar says the click registered.
-  it('shows route progress on the click while the next chunk loads', async () => {
+  it('shows route progress in the dashboard shell while the next chunk loads', async () => {
     handler = () => never();
     stub();
     let loadChunk!: (m: { default: Component }) => void;
     const Slow = lazy(() => new Promise<{ default: Component }>((res) => (loadChunk = res)));
-    const Shell: Component<ParentProps> = (props) => (
-      <>
-        <RouteProgress />
-        <A href="/slow">go</A>
-        <Suspense fallback={<div>{FALLBACK}</div>}>{props.children}</Suspense>
-      </>
-    );
     const history = createMemoryHistory();
     history.set({ value: '/', replace: true });
     render(() => (
-      <MemoryRouter history={history} root={Shell}>
+      <MemoryRouter history={history} root={Layout}>
         <Route path="/" component={() => <div>OLD PAGE</div>} />
-        <Route path="/slow" component={Slow} />
+        <Route path="/retries" component={Slow} />
       </MemoryRouter>
     ));
 
-    fireEvent.click(await screen.findByText('go'));
+    fireEvent.click(await screen.findByRole('link', { name: t('nav.retries') }));
 
     await waitFor(() => expect(screen.getByRole('progressbar')).toBeInTheDocument());
     expect(screen.getByText('OLD PAGE')).toBeInTheDocument();
