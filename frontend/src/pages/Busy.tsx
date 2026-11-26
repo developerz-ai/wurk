@@ -428,17 +428,18 @@ export default function Busy() {
     window.confirm(t('actions.confirm', { action: t('actions.stop'), scope }));
 
   const controllable = () => (query.data ?? []).some((p) => !p.embedded);
-  const hosts = () => groupByHost(query.data ?? []);
+  // Memos: every card reads these by key, so one rebuild per poll serves all.
+  const hosts = createMemo(() => groupByHost(query.data ?? []));
   // A host running several processes (a swarm) gets a section; hosts of one
   // process (a pod each, on Kubernetes) share a single grid of cards.
-  const swarmHosts = () => hosts().filter((g) => g.processes.length > 1);
-  const soloHosts = () => hosts().filter((g) => g.processes.length === 1);
+  const swarmHosts = createMemo(() => hosts().filter((g) => g.processes.length > 1));
+  const soloHosts = createMemo(() => hosts().filter((g) => g.processes.length === 1));
   const signal = (sig: Signal, identity: string) => {
     if (sig === 'stop' && !confirmStop(t('actions.scope_this_process'))) return;
     control.mutate({ signal: sig, scope: 'one', identity });
   };
-  const procById = () => new Map((query.data ?? []).map((p) => [p.identity, p]));
-  const hostByName = () => new Map(hosts().map((g) => [g.hostname, g]));
+  const procById = createMemo(() => new Map((query.data ?? []).map((p) => [p.identity, p])));
+  const hostByName = createMemo(() => new Map(hosts().map((g) => [g.hostname, g])));
   // A row a poll just dropped can be read once more before its card is
   // disposed; it keeps its last value for that read.
   const latest = <T,>(read: () => T | undefined) => createMemo<T>((prev) => read() ?? prev, read() as T);
