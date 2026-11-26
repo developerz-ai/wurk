@@ -135,7 +135,7 @@ class HeartbeatTest < Wurk::Test::UnitCase
     hb = build_heartbeat
 
     with_cgroup('cpu.max' => "1000 1000000\n") do |cgroup|
-      assert_in_delta 0.001, hb.send(:cpu_limit, 8, **cgroup)
+      assert_in_delta 0.001, hb.send(:cpu_limit, 8, **cgroup), 1e-9
     end
   end
 

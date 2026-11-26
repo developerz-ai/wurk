@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/solid-query';
-import { createSignal, onMount, For, Index, Show, Switch, Match, type JSX } from 'solid-js';
+import { createMemo, createSignal, onMount, For, Show, Switch, Match, type JSX } from 'solid-js';
 import { RefreshError } from '../components/RefreshError';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
@@ -216,10 +216,10 @@ function QueueChips(props: { queues: string[]; open: boolean; onToggle: () => vo
   );
 }
 
-// Two significant digits: 1.5 stays 1.5, and a 1 ms/1 s quota reads 0.001
+// Up to three decimals: 10.5 stays 10.5, and a 1 ms/1 s quota reads 0.001
 // rather than rounding to nothing.
 function formatCpus(n: number): string {
-  return Number.isInteger(n) ? String(n) : String(Number(n.toPrecision(2)));
+  return String(Number(n.toFixed(3)));
 }
 
 // CPU and memory for one machine. Inside a pod the cgroup's limits are what
@@ -437,6 +437,27 @@ export default function Busy() {
     if (sig === 'stop' && !confirmStop(t('actions.scope_this_process'))) return;
     control.mutate({ signal: sig, scope: 'one', identity });
   };
+  const procById = () => new Map((query.data ?? []).map((p) => [p.identity, p]));
+  const hostByName = () => new Map(hosts().map((g) => [g.hostname, g]));
+  // A row a poll just dropped can be read once more before its card is
+  // disposed; it keeps its last value for that read.
+  const latest = <T,>(read: () => T | undefined) => createMemo<T>((prev) => read() ?? prev, read() as T);
+  const card = (identity: string, hostname?: string) => {
+    const proc = latest(() => procById().get(identity));
+    const host = hostname ? latest(() => hostByName().get(hostname)) : undefined;
+    return (
+      <ProcessCard
+        proc={proc()}
+        host={host?.()}
+        readOnly={readOnly()}
+        busy={control.isPending}
+        queuesOpen={openQueues().has(identity)}
+        onToggleQueues={toggleQueues}
+        onOpen={setSelected}
+        onSignal={signal}
+      />
+    );
+  };
   const [openQueues, setOpenQueues] = createSignal<ReadonlySet<string>>(new Set());
   const toggleQueues = (identity: string) => {
     const next = new Set(openQueues());
@@ -492,46 +513,28 @@ export default function Busy() {
             <RefreshError when={query.isError} />
 
             <Show when={data().length > 0} fallback={<div class="empty-state">{t('common.empty')}</div>}>
-              {/* Index, not For: every poll rebuilds the host objects, and For
-                  would remount each card on it, dropping keyboard focus. */}
-              <Index each={swarmHosts()}>
-                {(group) => (
-                  <section class="busy-host">
-                    <HostHeader group={group()} />
-                    <div class="busy-grid">
-                      <Index each={group().processes}>
-                        {(proc) => (
-                          <ProcessCard
-                            proc={proc()}
-                            readOnly={readOnly()}
-                            busy={control.isPending}
-                            queuesOpen={openQueues().has(proc().identity)}
-                            onToggleQueues={toggleQueues}
-                            onOpen={setSelected}
-                            onSignal={signal}
-                          />
-                        )}
-                      </Index>
-                    </div>
-                  </section>
-                )}
-              </Index>
+              {/* Keyed by hostname and identity (strings): every poll rebuilds
+                  the row objects, and keying on those would remount each card,
+                  folding open queue lists and dropping focus; keying on position
+                  would move a focused Stop button onto another worker. */}
+              <For each={swarmHosts().map((g) => g.hostname)}>
+                {(name) => {
+                  const group = latest(() => hostByName().get(name));
+                  return (
+                    <section class="busy-host">
+                      <HostHeader group={group()} />
+                      <div class="busy-grid">
+                        <For each={group().processes.map((p) => p.identity)}>{(id) => card(id)}</For>
+                      </div>
+                    </section>
+                  );
+                }}
+              </For>
               <Show when={soloHosts().length > 0}>
                 <div class="busy-grid">
-                  <Index each={soloHosts()}>
-                    {(group) => (
-                      <ProcessCard
-                        proc={group().processes[0]}
-                        host={group()}
-                        readOnly={readOnly()}
-                        busy={control.isPending}
-                        queuesOpen={openQueues().has(group().processes[0].identity)}
-                        onToggleQueues={toggleQueues}
-                        onOpen={setSelected}
-                        onSignal={signal}
-                      />
-                    )}
-                  </Index>
+                  <For each={soloHosts().map((g) => g.processes[0].identity)}>
+                    {(id) => card(id, procById().get(id)!.hostname)}
+                  </For>
                 </div>
               </Show>
             </Show>
