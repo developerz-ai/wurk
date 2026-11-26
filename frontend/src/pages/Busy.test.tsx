@@ -136,6 +136,55 @@ describe('Busy', () => {
     expect(screen.getByText(/512 MB \/ 16\.0 GB/)).toBeInTheDocument();
   });
 
+  function stubProcesses(rows: unknown[]) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => ({
+        ok: true,
+        status: 200,
+        json: async () => (url.includes('/api/processes') ? rows : url.includes('/api/meta') ? { read_only: true } : []),
+      }) as Response),
+    );
+  }
+
+  // A pod's heartbeat carries the node's cores and RAM; the cgroup limits are
+  // what the process can use, so they are the figures shown.
+  it('shows a container limit instead of the node RAM and cores', async () => {
+    stubProcesses([{ ...PROCESSES[2], cpu_limit: 1.5, memory_limit_kb: 2097152, memory_total_kb: 32505856 }]);
+    renderBusy();
+
+    expect(await screen.findByText(/128 MB \/ 2\.0 GB limit/)).toBeInTheDocument();
+    expect(screen.getByText(t('busy.cpu_limit', { n: '1.5' }))).toBeInTheDocument();
+    expect(screen.getByTitle(t('busy.host_cores', { n: 8 }))).toBeInTheDocument();
+    expect(screen.queryByText(/31\.0 GB/)).toBeNull();
+  });
+
+  // One process per host is a Kubernetes fleet: every pod's card shares one
+  // grid and carries its hostname, with no per-host header row.
+  it('puts single-process hosts in one grid of cards titled by hostname', async () => {
+    const pods = [0, 1, 2].map((i) => ({ ...PROCESSES[2], identity: `pod-${i}:1:x`, hostname: `pod-${i}`, pid: 1 }));
+    stubProcesses(pods);
+    const { container } = renderBusy();
+
+    expect(await screen.findByText('pod-0')).toBeInTheDocument();
+    expect(container.querySelectorAll('.busy-host')).toHaveLength(0);
+    expect(container.querySelectorAll('.busy-grid')).toHaveLength(1);
+    expect(container.querySelectorAll('.busy-grid > .card')).toHaveLength(3);
+  });
+
+  it('collapses a long queue list behind a toggle', async () => {
+    const queues = Array.from({ length: 10 }, (_, i) => `q${i}`);
+    stubProcesses([{ ...PROCESSES[2], queues }]);
+    renderBusy();
+
+    const more = await screen.findByText(t('busy.more_queues', { n: 4 }));
+    expect(screen.queryByText('q9')).toBeNull();
+    fireEvent.click(more);
+    expect(screen.getByText('q9')).toBeInTheDocument();
+    // The toggle does not open the process detail.
+    expect(screen.queryByText(t('busy.running_jobs'))).toBeNull();
+  });
+
   it('renders a live heartbeat from the API `beat` field', async () => {
     renderBusy();
     const beats = await screen.findAllByText(/\d seconds ago/);

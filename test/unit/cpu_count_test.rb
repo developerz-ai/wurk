@@ -93,6 +93,28 @@ class CpuCountTest < Wurk::Test::UnitCase
     assert_equal 'Etc.nprocessors', detect(64).source
   end
 
+  # The Busy page shows the quota itself; only the swarm size rounds it.
+  def test_quota_keeps_a_fractional_v2_limit
+    write('cpu.max', "150000 100000\n")
+
+    assert_equal Rational(3, 2), quota
+  end
+
+  def test_quota_reads_v1
+    write('cpu/cpu.cfs_quota_us', "50000\n")
+    write('cpu/cpu.cfs_period_us', "100000\n")
+
+    assert_equal Rational(1, 2), quota
+  end
+
+  def test_quota_is_nil_when_unlimited_or_missing
+    assert_nil quota
+
+    write('cpu.max', "max 100000\n")
+
+    assert_nil quota
+  end
+
   def test_the_real_host_answers_something_usable
     result = Wurk::CpuCount.detect
 
@@ -104,6 +126,10 @@ class CpuCountTest < Wurk::Test::UnitCase
 
   def detect(nprocessors)
     Wurk::CpuCount.detect(root: @root, proc_cgroup: @proc_cgroup, nprocessors: nprocessors)
+  end
+
+  def quota
+    Wurk::CpuCount.quota(root: @root, proc_cgroup: @proc_cgroup)
   end
 
   def proc_cgroup(content)

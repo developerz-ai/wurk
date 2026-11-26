@@ -273,6 +273,8 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     assert_equal 'AMD EPYC 7702P', row[:cpu_model]
     assert_equal 64, row[:cores]
     assert_equal 16_777_216, row[:memory_total_kb]
+    assert_in_delta 2.0, row[:cpu_limit]
+    assert_equal 4_194_304, row[:memory_limit_kb]
     assert_in_delta Time.now.to_f, row[:beat], 5
     assert_equal({ busy: 2, concurrency: 10, rss: 262_144 }, row.slice(:busy, :concurrency, :rss))
   ensure
@@ -766,7 +768,8 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
       'hostname' => 'api-host', 'started_at' => ::Time.now.to_f - 120, 'pid' => 99,
       'tag' => @ns, 'concurrency' => 10, 'queues' => [@queue], 'labels' => [],
       'identity' => identity, 'version' => ::Wurk::VERSION, 'embedded' => false,
-      'cpu_model' => 'AMD EPYC 7702P', 'cores' => 64, 'memory_total_kb' => 16_777_216
+      'cpu_model' => 'AMD EPYC 7702P', 'cores' => 64, 'memory_total_kb' => 16_777_216,
+      'cpu_limit' => 2.0, 'memory_limit_kb' => 4_194_304
     }
     ::Wurk.redis do |c|
       c.call('SADD', ::Wurk::Keys::PROCESSES, identity)

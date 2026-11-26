@@ -50,6 +50,7 @@
 // — Pages —
 @use 'pages/search';
 @use 'pages/obsidian';
+@use 'pages/busy';
 
 // — Motion policy last: revokes the transitions declared above for users who
 //   asked for reduced motion (single source of the carve-out). —

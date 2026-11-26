@@ -293,12 +293,42 @@ module Wurk
     # `info` fields only — Sidekiq Web ignores keys it doesn't know, so the
     # drop-in wire contract holds. Best-effort: nil/0 when the platform has
     # no readable source (the dashboard renders a dash).
+    #
+    # `cores` and `memory_total_kb` are the machine's, which inside a
+    # container is the node's. `cpu_limit` (CPUs, may be fractional) and
+    # `memory_limit_kb` are the cgroup's caps, nil when nothing caps tighter
+    # than the machine — what the process can actually use.
     def host_facts
-      @host_facts ||= {
-        'cpu_model' => cpu_model,
-        'cores' => cores,
-        'memory_total_kb' => memory_total_kb
-      }
+      @host_facts ||= begin
+        total_kb = memory_total_kb
+        host_cores = cores
+        {
+          'cpu_model' => cpu_model,
+          'cores' => host_cores,
+          'memory_total_kb' => total_kb,
+          'cpu_limit' => cpu_limit(host_cores),
+          'memory_limit_kb' => memory_limit_kb(total_kb)
+        }
+      end
+    end
+
+    def cpu_limit(host_cores, **cgroup)
+      quota = CpuCount.quota(**cgroup)
+      return nil if quota.nil? || (host_cores && quota >= host_cores)
+
+      quota.to_f.round(2)
+    rescue StandardError
+      nil
+    end
+
+    def memory_limit_kb(total_kb, **cgroup)
+      bytes = MemoryLimit.detect(**cgroup)
+      return nil if bytes.nil?
+
+      kb = bytes / 1024
+      kb if total_kb.to_i <= 0 || kb < total_kb
+    rescue StandardError
+      nil
     end
 
     def cores(etc = Etc)

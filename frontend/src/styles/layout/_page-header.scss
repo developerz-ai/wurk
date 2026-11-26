@@ -7,6 +7,7 @@
 
 .page-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: to-rem(15.2);
   margin-bottom: to-rem(24);
@@ -30,7 +31,10 @@
     @include transition((transform, border-color), 'base');
   }
 
+  // Takes the row first; on a phone the aside (badges, page actions) wraps
+  // below it instead of squeezing the summary to a word per line.
   &__text {
+    flex: 1 1 to-rem(200);
     min-width: 0;
   }
 

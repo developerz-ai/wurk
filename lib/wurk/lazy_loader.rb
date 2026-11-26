@@ -26,7 +26,7 @@ module Wurk
     TOP_LEVEL = {
       # Server tier.
       CLI: 'cli', Embedded: 'embedded', Swarm: 'swarm', Launcher: 'launcher', Manager: 'manager',
-      Heartbeat: 'heartbeat', Scheduled: 'scheduled', Leader: 'leader',
+      Heartbeat: 'heartbeat', MemoryLimit: 'memory_limit', Scheduled: 'scheduled', Leader: 'leader',
       Cron: 'cron', Periodic: 'cron', History: 'history', Health: 'health', ShutdownGate: 'shutdown_gate',
       Topology: 'topology', RailsBoot: 'rails_boot',
       # On-demand tier.

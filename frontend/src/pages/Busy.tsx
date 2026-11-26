@@ -32,6 +32,8 @@ interface Process {
   cpu_model?: string | null;
   cores?: number;
   memory_total_kb?: number;
+  cpu_limit?: number | null;
+  memory_limit_kb?: number | null;
   version?: string;
   embedded?: boolean;
   leader?: boolean;
@@ -65,6 +67,9 @@ interface HostGroup {
   cpuModel?: string | null;
   cores?: number;
   memoryTotalKb?: number;
+  // The cgroup's caps (a pod's limits), absent on a machine nothing caps.
+  cpuLimit?: number;
+  memoryLimitKb?: number;
 }
 
 // Processes carrying the same `hostname` run on one machine — fold them into
@@ -84,6 +89,8 @@ function groupByHost(processes: Process[]): HostGroup[] {
     g.cpuModel ??= proc.cpu_model ?? undefined;
     g.cores ??= proc.cores;
     g.memoryTotalKb ??= proc.memory_total_kb;
+    g.cpuLimit ??= proc.cpu_limit ?? undefined;
+    g.memoryLimitKb ??= proc.memory_limit_kb ?? undefined;
   }
   return [...groups.values()].sort((a, b) => a.hostname.localeCompare(b.hostname));
 }
@@ -178,40 +185,208 @@ function ProcessDetail(props: { proc: Process }) {
   );
 }
 
-function HostHeader(props: { group: HostGroup }) {
-  const ramPct = () => props.group.memoryTotalKb ? Math.min(100, (props.group.rssKb / props.group.memoryTotalKb) * 100) : null;
+const QUEUE_PREVIEW = 6;
+
+// A worker can listen on dozens of queues; past a handful they collapse
+// behind a toggle so one card does not outgrow its row.
+function QueueChips(props: { queues: string[] }) {
+  const [open, setOpen] = createSignal(false);
+  const hidden = () => Math.max(0, props.queues.length - QUEUE_PREVIEW);
+  const shown = () => (open() || hidden() === 0 ? props.queues : props.queues.slice(0, QUEUE_PREVIEW));
 
   return (
-    <div style={{ display: 'flex', 'flex-wrap': 'wrap', 'align-items': 'center', gap: '0.75rem', 'margin-bottom': '0.75rem' }}>
-      <span style={{ 'font-weight': 600, 'font-size': '15px' }}>
+    <div class="busy-queues" aria-label={t('table.queues')}>
+      <For each={shown()}>{(q) => <span class="badge badge-muted">{q}</span>}</For>
+      <Show when={hidden() > 0}>
+        <button
+          type="button"
+          class="busy-queues__toggle"
+          aria-expanded={open()}
+          onClick={(e) => {
+            e.stopPropagation();
+            setOpen(!open());
+          }}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          {open() ? t('busy.fewer_queues') : t('busy.more_queues', { n: hidden() })}
+        </button>
+      </Show>
+    </div>
+  );
+}
+
+function formatCpus(n: number): string {
+  return Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/0$/, '');
+}
+
+// CPU and memory for one machine. Inside a pod the cgroup's limits are what
+// the processes can use, so they are the figures shown; the node's own cores
+// and RAM move to the tooltip.
+function cpuFact(g: HostGroup): { text: string; title?: string } | null {
+  if (g.cpuLimit) {
+    return { text: t('busy.cpu_limit', { n: formatCpus(g.cpuLimit) }), title: g.cores ? t('busy.host_cores', { n: g.cores }) : undefined };
+  }
+  return g.cores != null && g.cores > 0 ? { text: t('busy.cores', { n: g.cores }) } : null;
+}
+
+function memFact(g: HostGroup): { text: string; title?: string } | null {
+  if (g.rssKb <= 0) return null;
+  const cap = g.memoryLimitKb ?? g.memoryTotalKb;
+  const title: string[] = [];
+  if (cap) title.push(`${Math.min(100, (g.rssKb / cap) * 100).toFixed(1)}% ${g.memoryLimitKb ? t('busy.of_limit') : t('busy.of_total_ram')}`);
+  if (g.memoryLimitKb && g.memoryTotalKb) title.push(t('busy.host_ram', { total: formatKb(g.memoryTotalKb) }));
+  const text = `${formatKb(g.rssKb)}${cap ? ` / ${formatKb(cap)}` : ''}${g.memoryLimitKb ? ` ${t('busy.limit_suffix')}` : ''}`;
+  return { text, title: title.join(' · ') || undefined };
+}
+
+function HostFacts(props: { group: HostGroup }) {
+  const g = () => props.group;
+  return (
+    <>
+      <Show when={g().cpuModel}>
+        <span class="badge badge-muted" title={g().cpuModel ?? undefined}>
+          <Icon name="microchip" style={{ 'margin-right': '0.35rem' }} />
+          {truncate(g().cpuModel, 40)}
+        </span>
+      </Show>
+      <Show when={cpuFact(g())}>
+        {(cpu) => <span class="badge badge-muted" title={cpu().title}>{cpu().text}</span>}
+      </Show>
+      <Show when={memFact(g())}>
+        {(mem) => (
+          <span class="badge badge-muted" title={mem().title}>
+            <Icon name="memory" style={{ 'margin-right': '0.35rem' }} />
+            {mem().text}
+          </span>
+        )}
+      </Show>
+    </>
+  );
+}
+
+// The same facts as one muted line, for a card that stands for its host.
+function CardFacts(props: { group: HostGroup }) {
+  const cpu = () => cpuFact(props.group);
+  const mem = () => memFact(props.group);
+  return (
+    <Show when={cpu() || mem()}>
+      <div class="busy-card__facts" title={props.group.cpuModel ?? undefined}>
+        <Show when={cpu()}>{(c) => <span title={c().title}><Icon name="microchip" /> {c().text}</span>}</Show>
+        <Show when={mem()}>{(m) => <span title={m().title}><Icon name="memory" /> {m().text}</span>}</Show>
+      </div>
+    </Show>
+  );
+}
+
+function HostHeader(props: { group: HostGroup }) {
+  return (
+    <div class="busy-host__head">
+      <span class="busy-host__name">
         <Icon name="server" style={{ color: 'var(--text-muted)', 'margin-right': '0.5rem' }} />
         {props.group.hostname}
       </span>
       <span class="badge badge-muted">
         {props.group.processes.length} {t('dashboard.processes').toLowerCase()}
       </span>
-      <Show when={props.group.cpuModel}>
-        <span class="badge badge-muted" title={props.group.cpuModel ?? undefined}>
-          <Icon name="microchip" style={{ 'margin-right': '0.35rem' }} />
-          {truncate(props.group.cpuModel, 40)}
-        </span>
-      </Show>
-      <Show when={props.group.cores != null && props.group.cores > 0}>
-        <span class="badge badge-muted">{t('busy.cores', { n: props.group.cores! })}</span>
-      </Show>
-      <Show when={props.group.rssKb > 0}>
-        <span
-          class="badge badge-muted"
-          title={ramPct() != null ? `${ramPct()!.toFixed(1)}% ${t('busy.of_total_ram')}` : undefined}
-        >
-          <Icon name="memory" style={{ 'margin-right': '0.35rem' }} />
-          {formatKb(props.group.rssKb)}
-          {props.group.memoryTotalKb ? ` / ${formatKb(props.group.memoryTotalKb)}` : ''}
-        </span>
-      </Show>
+      <HostFacts group={props.group} />
       <span class="badge badge-muted" style={{ 'font-variant-numeric': 'tabular-nums' }}>
         {t('table.busy')} {props.group.busy} / {props.group.concurrency}
       </span>
+    </div>
+  );
+}
+
+interface CardProps {
+  proc: Process;
+  // Set when the card stands for its whole host (a pod): the card then
+  // carries the hostname and the host's facts, with no section header.
+  host?: HostGroup;
+  readOnly: boolean;
+  busy: boolean;
+  onOpen: (identity: string) => void;
+  onSignal: (signal: Signal, identity: string) => void;
+}
+
+function ProcessCard(props: CardProps) {
+  const proc = () => props.proc;
+  const utilization = () => (proc().concurrency > 0 ? (proc().busy / proc().concurrency) * 100 : 0);
+  // Re-judged on the shared tick: a process that stops beating keeps its
+  // last `beat`, so the poll hands back an unchanged row and nothing else
+  // would re-run this.
+  const isRecent = () => {
+    liveTick();
+    return nowSeconds() - proc().beat < 30;
+  };
+  const sub = () => {
+    const parts: string[] = [];
+    if (props.host) parts.push(`PID ${proc().pid}`);
+    if (proc().tag && proc().tag !== proc().hostname) parts.push(proc().tag!);
+    else if (!props.host) parts.push(proc().hostname);
+    if (proc().started_at) parts.push(`${t('busy.up_for')} ${formatDuration(nowSeconds() - proc().started_at!)}`);
+    return parts.join(' · ');
+  };
+
+  return (
+    <div class="card busy-card row-clickable" {...activatable(() => proc().identity && props.onOpen(proc().identity))}>
+      <div class="busy-card__head">
+        <div style={{ 'min-width': 0 }}>
+          <div class="busy-card__title" title={props.host ? proc().hostname : undefined}>
+            {props.host ? proc().hostname : `PID ${proc().pid}`}
+          </div>
+          <div class="busy-card__sub">{sub()}</div>
+        </div>
+        <div class="busy-card__flags">
+          <Show when={isRecent()}><span class="live-dot" title={t('busy.heartbeat_ok')} /></Show>
+          <Show when={proc().leader}>
+            <span class="badge badge-accent" title={t('busy.leader_title')}>
+              <Icon name="crown" style={{ 'margin-right': '0.3rem' }} />
+              {t('busy.leader')}
+            </span>
+          </Show>
+          <Show when={proc().quiet}><span class="badge badge-warning">{t('busy.quiet')}</span></Show>
+          <Show when={proc().embedded}><span class="badge badge-muted">{t('busy.embedded')}</span></Show>
+        </div>
+      </div>
+
+      <div class="busy-card__stats">
+        <div>
+          <div class="busy-card__label">{t('table.busy')}</div>
+          <div class="busy-card__value busy-card__busy">{proc().busy} / {proc().concurrency}</div>
+        </div>
+        <div>
+          <div class="busy-card__label">{t('busy.heartbeat')}</div>
+          <div class="busy-card__value" style={{ color: isRecent() ? 'var(--success)' : 'var(--danger)' }}>
+            {relativeTime(proc().beat)}
+          </div>
+        </div>
+        <div>
+          <div class="busy-card__label">{t('busy.rss')}</div>
+          <div class="busy-card__value">{formatKb(proc().rss ?? 0)}</div>
+        </div>
+      </div>
+
+      <div class="progress-bar-track">
+        <div class="progress-bar-fill" style={{ width: `${utilization()}%`, background: utilizationColor(utilization()) }} />
+      </div>
+
+      <Show when={props.host}>{(host) => <CardFacts group={host()} />}</Show>
+
+      <QueueChips queues={proc().queues} />
+
+      <Show when={!props.readOnly && !proc().embedded}>
+        <div class="busy-card__actions" onClick={(e) => e.stopPropagation()}>
+          <button class="btn btn-sm" disabled={props.busy} onClick={() => props.onSignal('quiet', proc().identity)}>
+            {t('actions.quiet')}
+          </button>
+          <button
+            class="btn btn-sm btn-danger"
+            disabled={props.busy}
+            onClick={() => props.onSignal('stop', proc().identity)}
+          >
+            {t('actions.stop')}
+          </button>
+        </div>
+      </Show>
     </div>
   );
 }
@@ -249,6 +424,24 @@ export default function Busy() {
 
   const controllable = () => (query.data ?? []).some((p) => !p.embedded);
   const hosts = () => groupByHost(query.data ?? []);
+  // A host running several processes (a swarm) gets a section; hosts of one
+  // process (a pod each, on Kubernetes) share a single grid of cards.
+  const swarmHosts = () => hosts().filter((g) => g.processes.length > 1);
+  const soloHosts = () => hosts().filter((g) => g.processes.length === 1);
+  const signal = (sig: Signal, identity: string) => {
+    if (sig === 'stop' && !confirmStop(t('actions.scope_this_process'))) return;
+    control.mutate({ signal: sig, scope: 'one', identity });
+  };
+  const card = (proc: Process, host?: HostGroup) => (
+    <ProcessCard
+      proc={proc}
+      host={host}
+      readOnly={readOnly()}
+      busy={control.isPending}
+      onOpen={setSelected}
+      onSignal={signal}
+    />
+  );
   const selectedProc = () => (query.data ?? []).find((p) => p.identity === selected()) ?? null;
 
   return (
@@ -268,7 +461,7 @@ export default function Busy() {
         {(data) => (
           <div>
             <PageHeader icon="gears" title={t('nav.busy')} summary={t('summaries.busy')}>
-              <div style={{ display: 'flex', 'align-items': 'center', gap: '0.6rem' }}>
+              <div style={{ display: 'flex', 'flex-wrap': 'wrap', 'align-items': 'center', gap: '0.6rem' }}>
                 <span class="badge badge-muted">
                   {data().length} {t('dashboard.processes').toLowerCase()}
                 </span>
@@ -298,119 +491,21 @@ export default function Busy() {
             <RefreshError when={query.isError} />
 
             <Show when={data().length > 0} fallback={<div class="empty-state">{t('common.empty')}</div>}>
-              <For each={hosts()}>
+              <For each={swarmHosts()}>
                 {(group) => (
-                  <section style={{ 'margin-bottom': '1.5rem' }}>
+                  <section class="busy-host">
                     <HostHeader group={group} />
-                    <div
-                      style={{
-                        display: 'grid',
-                        'grid-template-columns': 'repeat(auto-fill, minmax(min(100%, 320px), 1fr))',
-                        gap: '1rem',
-                      }}
-                    >
-                      <For each={group.processes}>
-                        {(proc) => {
-                          const utilization = proc.concurrency > 0 ? (proc.busy / proc.concurrency) * 100 : 0;
-                          // Re-judged on the shared tick: a process that stops
-                          // beating keeps its last `beat`, so the poll hands back
-                          // an unchanged row and nothing else would re-run this.
-                          const isRecent = () => {
-                            liveTick();
-                            return nowSeconds() - proc.beat < 30;
-                          };
-
-                          return (
-                            <div
-                              class="card row-clickable"
-                              {...activatable(() => proc.identity && setSelected(proc.identity))}
-                            >
-                              <div style={{ display: 'flex', 'justify-content': 'space-between', 'align-items': 'flex-start', 'margin-bottom': '0.75rem' }}>
-                                <div>
-                                  <div style={{ 'font-weight': 600, 'font-size': '15px' }}>PID {proc.pid}</div>
-                                  <div style={{ color: 'var(--text-muted)', 'font-size': '12px' }}>
-                                    {proc.tag || proc.hostname}
-                                    {proc.started_at ? ` · ${t('busy.up_for')} ${formatDuration(nowSeconds() - proc.started_at)}` : ''}
-                                  </div>
-                                </div>
-                                <div style={{ display: 'flex', gap: '0.375rem' }}>
-                                  <Show when={isRecent()}><span class="live-dot" title={t('busy.heartbeat_ok')} /></Show>
-                                  <Show when={proc.leader}>
-                                    <span class="badge badge-accent" title={t('busy.leader_title')}>
-                                      <Icon name="crown" style={{ 'margin-right': '0.3rem' }} />
-                                      {t('busy.leader')}
-                                    </span>
-                                  </Show>
-                                  <Show when={proc.quiet}><span class="badge badge-warning">{t('busy.quiet')}</span></Show>
-                                  <Show when={proc.embedded}><span class="badge badge-muted">{t('busy.embedded')}</span></Show>
-                                </div>
-                              </div>
-
-                              <div style={{ display: 'grid', 'grid-template-columns': '1fr 1fr 1fr', gap: '0.5rem', 'margin-bottom': '0.75rem' }}>
-                                <div>
-                                  <div style={statLabelStyle}>
-                                    {t('table.busy')} / {t('table.concurrency')}
-                                  </div>
-                                  <div style={{ 'font-weight': 600, 'font-size': '18px', 'font-variant-numeric': 'tabular-nums' }}>
-                                    {proc.busy} / {proc.concurrency}
-                                  </div>
-                                </div>
-                                <div>
-                                  <div style={statLabelStyle}>{t('busy.heartbeat')}</div>
-                                  <div style={{ 'font-size': '13px', color: isRecent() ? 'var(--success)' : 'var(--danger)' }}>
-                                    {relativeTime(proc.beat)}
-                                  </div>
-                                </div>
-                                <div>
-                                  <div style={statLabelStyle}>{t('busy.rss')}</div>
-                                  <div style={{ 'font-size': '13px' }}>{formatKb(proc.rss ?? 0)}</div>
-                                </div>
-                              </div>
-
-                              <div class="progress-bar-track" style={{ 'margin-bottom': '0.75rem' }}>
-                                <div
-                                  class="progress-bar-fill"
-                                  style={{ width: `${utilization}%`, background: utilizationColor(utilization) }}
-                                />
-                              </div>
-
-                              <div>
-                                <div style={{ ...statLabelStyle, 'margin-bottom': '0.25rem' }}>
-                                  {t('table.queues')}
-                                </div>
-                                <div style={{ display: 'flex', 'flex-wrap': 'wrap', gap: '0.25rem' }}>
-                                  <For each={proc.queues}>
-                                    {(q) => <span class="badge badge-muted">{q}</span>}
-                                  </For>
-                                </div>
-                              </div>
-
-                              <Show when={!readOnly() && !proc.embedded}>
-                                <div style={{ display: 'flex', gap: '0.4rem', 'margin-top': '0.85rem' }} onClick={(e) => e.stopPropagation()}>
-                                  <button
-                                    class="btn btn-sm"
-                                    disabled={control.isPending}
-                                    onClick={() => control.mutate({ signal: 'quiet', scope: 'one', identity: proc.identity })}
-                                  >
-                                    {t('actions.quiet')}
-                                  </button>
-                                  <button
-                                    class="btn btn-sm btn-danger"
-                                    disabled={control.isPending}
-                                    onClick={() => confirmStop(t('actions.scope_this_process')) && control.mutate({ signal: 'stop', scope: 'one', identity: proc.identity })}
-                                  >
-                                    {t('actions.stop')}
-                                  </button>
-                                </div>
-                              </Show>
-                            </div>
-                          );
-                        }}
-                      </For>
+                    <div class="busy-grid">
+                      <For each={group.processes}>{(proc) => card(proc)}</For>
                     </div>
                   </section>
                 )}
               </For>
+              <Show when={soloHosts().length > 0}>
+                <div class="busy-grid">
+                  <For each={soloHosts()}>{(group) => card(group.processes[0], group)}</For>
+                </div>
+              </Show>
             </Show>
 
             <Modal

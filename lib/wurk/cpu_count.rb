@@ -28,15 +28,25 @@ module Wurk
     module_function
 
     def detect(root: ROOT, proc_cgroup: PROC_SELF_CGROUP, nprocessors: Etc.nprocessors)
-      quota = cgroup_v2_quota(root, proc_cgroup)
-      source = 'cgroup v2 cpu.max'
-      unless quota
-        quota = cgroup_v1_quota(root)
-        source = 'cgroup v1 cpu.cfs_quota_us'
-      end
-      return Result.new(nprocessors, 'Etc.nprocessors') if quota.nil? || quota >= nprocessors
+      quota, source = quota_with_source(root, proc_cgroup)
+      count = quota&.ceil
+      return Result.new(nprocessors, 'Etc.nprocessors') if count.nil? || count >= nprocessors
 
-      Result.new(quota, source)
+      Result.new(count, source)
+    end
+
+    # The quota itself, unrounded (a Rational: 1.5 CPUs stays 3/2), or nil
+    # when no cgroup caps the CPU. The Busy page shows this one, beside the
+    # host's cores.
+    def quota(root: ROOT, proc_cgroup: PROC_SELF_CGROUP)
+      quota_with_source(root, proc_cgroup).first
+    end
+
+    def quota_with_source(root, proc_cgroup)
+      v2 = cgroup_v2_quota(root, proc_cgroup)
+      return [v2, 'cgroup v2 cpu.max'] if v2
+
+      [cgroup_v1_quota(root), 'cgroup v1 cpu.cfs_quota_us']
     end
 
     def cgroup_v2_quota(root, proc_cgroup)
@@ -63,7 +73,7 @@ module Wurk
       quota, period = read(file)&.split
       return nil if quota.nil? || quota == 'max'
 
-      ceil_ratio(quota, period)
+      ratio(quota, period)
     end
 
     def cgroup_v1_quota(root)
@@ -73,17 +83,18 @@ module Wurk
 
         return nil if quota.strip.start_with?('-')
 
-        return ceil_ratio(quota, read(File.join(root, dir, 'cpu.cfs_period_us')))
+        return ratio(quota, read(File.join(root, dir, 'cpu.cfs_period_us')))
       end
       nil
     end
 
-    def ceil_ratio(quota, period)
+    # Rational, so rounding up a whole quota never lands one CPU high.
+    def ratio(quota, period)
       quota = Integer(quota.to_s.strip, 10)
       period = Integer(period.to_s.strip, 10)
       return nil unless quota.positive? && period.positive?
 
-      (quota + period - 1) / period
+      Rational(quota, period)
     rescue ArgumentError
       nil
     end

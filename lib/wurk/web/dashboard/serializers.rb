@@ -89,6 +89,8 @@ module Wurk
           cpu_model: process['cpu_model'],
           cores: process['cores'],
           memory_total_kb: process['memory_total_kb'],
+          cpu_limit: process['cpu_limit'],
+          memory_limit_kb: process['memory_limit_kb'],
           labels: process.labels,
           queues: process.queues,
           version: process.version,
