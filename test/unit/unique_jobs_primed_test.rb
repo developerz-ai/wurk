@@ -45,6 +45,17 @@ class UniqueJobsPrimedTest < Wurk::Test::UnitCase
     assert_operator ttl(primed), :>, 0, 'a PRIMED list with no TTL outlives the run that made it'
   end
 
+  # The TTL rides the same pipeline as the move, so the server sets it right
+  # after serving the move whether or not this process lives to read the reply.
+  # A PEXPIRE sent after reading it would leave the window open.
+  def test_the_move_and_its_ttl_go_in_one_pipeline
+    conn = RecordingConn.new
+
+    smith.send(:pop_queued, conn, 1)
+
+    assert_equal [%w[pipeline BLMOVE], %w[pipeline PEXPIRE]], conn.log
+  end
+
   # Another job took the lock between this run's BLMOVE and its lock script, so
   # the script answers "Limited". The wake token it moved must not stay behind.
   def test_a_limited_lock_script_takes_its_hand_off_back_out
@@ -82,5 +93,27 @@ class UniqueJobsPrimedTest < Wurk::Test::UnitCase
     waiter.unlock
 
     assert_empty(Wurk.redis { |c| c.call('KEYS', "#{@digest}*") }.reject { |k| k.end_with?(':QUEUED') })
+  end
+
+  # Records which commands a Locksmith sends, and whether inside a pipeline.
+  class RecordingConn
+    attr_reader :log
+
+    def initialize
+      @log = []
+    end
+
+    def pipelined
+      yield Pipe.new(@log)
+      [nil, 0]
+    end
+
+    def blocking_call(_timeout, *command) = @log << ['direct', command.first]
+    def call(*command) = @log << ['direct', command.first]
+
+    Pipe = ::Struct.new(:log) do
+      def blocking_call(_timeout, *command) = log << ['pipeline', command.first]
+      def call(*command) = log << ['pipeline', command.first]
+    end
   end
 end

@@ -177,7 +177,9 @@ class UniqueJobsReaperTest < Wurk::Test::UnitCase
       c.call('RPUSH', 'uniquejobs:leaked2:PRIMED', '1')
       c.call('RPUSH', 'uniquejobs:handoff:RUN:PRIMED', 'b-jid')
       c.call('PEXPIRE', 'uniquejobs:handoff:RUN:PRIMED', 5_000)
+      c.call('HSET', 'uniquejobs:not-a-list:PRIMED', 'f', 'v')
     end
+    handoff_before = Wurk.redis { |c| c.call('PTTL', 'uniquejobs:handoff:RUN:PRIMED') }
 
     reap
 
@@ -186,10 +188,15 @@ class UniqueJobsReaperTest < Wurk::Test::UnitCase
         assert_operator c.call('PTTL', key), :>, 0, key
         assert_operator c.call('PTTL', key), :<=, Wurk::UniqueJobs::Locksmith::PRIMED_TTL_MS
       end
-      assert_operator c.call('PTTL', 'uniquejobs:handoff:RUN:PRIMED'), :<=, 5_000
+      handoff_after = c.call('PTTL', 'uniquejobs:handoff:RUN:PRIMED')
+
+      assert_operator handoff_after, :<=, handoff_before, 'an expiring hand-off keeps its TTL'
+      assert_operator handoff_after, :>, handoff_before - 2_000, 'an expiring hand-off keeps its TTL'
+      assert_equal(-1, c.call('PTTL', 'uniquejobs:not-a-list:PRIMED'), 'a key that is not a list is left alone')
       assert_equal(-1, c.call('PTTL', 'uniquejobs:live:RUN'))
       assert_equal(-1, c.call('PTTL', 'uniquejobs:live:RUN:LOCKED'))
       assert_equal ['uniquejobs:live:RUN'], digests
+      c.call('DEL', 'uniquejobs:not-a-list:PRIMED')
     end
   end
 end

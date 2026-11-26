@@ -32,10 +32,16 @@ module Wurk
           @deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + @config.reaper_timeout.to_i
         end
 
-        # The digests deleted, expired first. Hand-off lists left without a TTL
-        # get one first, whatever the queues hold.
+        # The digests deleted, expired first. Then, with what is left of the
+        # run's time, hand-off lists without a TTL get one, whatever the queues
+        # hold.
         def call
+          deleted = reap_digests
           PrimedSweep.new(@deadline).call
+          deleted
+        end
+
+        def reap_digests
           return 0 if queues_very_full? || sorted_sets_very_full?
 
           BatchDelete.call(expired_digests) + BatchDelete.call(orphans)
@@ -111,10 +117,9 @@ module Wurk
       # such list gets the hand-off TTL: a hand-off in flight still completes,
       # and the leftover expires. Bounded by the reaper's deadline.
       class PrimedSweep
-        MATCH = 'uniquejobs:*:PRIMED'
-
         def initialize(deadline)
           @deadline = deadline
+          @match = "#{UniqueJobs.config.lock_prefix || 'uniquejobs'}:*:PRIMED"
         end
 
         # The lists given a TTL.
@@ -122,7 +127,7 @@ module Wurk
           cursor = '0'
           fixed = 0
           loop do
-            cursor, keys = UniqueJobs.redis { |conn| conn.call('SCAN', cursor, 'MATCH', MATCH, 'COUNT', Reaper::PAGE) }
+            cursor, keys = UniqueJobs.redis { |conn| conn.call('SCAN', cursor, 'MATCH', @match, 'COUNT', Reaper::PAGE) }
             fixed += expire_unbounded(keys) unless keys.empty?
             break if cursor == '0' || ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) >= @deadline
           end
@@ -131,15 +136,17 @@ module Wurk
 
         private
 
+        # PTTL picks the candidates in one round trip; the script re-checks each
+        # (still a list, still no TTL) as it sets the TTL.
         def expire_unbounded(keys)
           ttls = UniqueJobs.redis { |conn| conn.pipelined { |pipe| keys.each { |key| pipe.call('PTTL', key) } } }
           unbounded = keys.zip(ttls).filter_map { |key, ttl| key if ttl == -1 }
-          return 0 if unbounded.empty?
-
           UniqueJobs.redis do |conn|
-            conn.pipelined { |pipe| unbounded.each { |key| pipe.call('PEXPIRE', key, Locksmith::PRIMED_TTL_MS) } }
+            unbounded.count do |key|
+              Wurk::Lua::Loader.eval_cached(conn, :unique_jobs_primed_ttl,
+                                            keys: [key], argv: [Locksmith::PRIMED_TTL_MS]) == 1
+            end
           end
-          unbounded.size
         end
       end
 
