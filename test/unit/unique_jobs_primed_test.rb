@@ -53,7 +53,8 @@ class UniqueJobsPrimedTest < Wurk::Test::UnitCase
 
     smith.send(:pop_queued, conn, 1)
 
-    assert_equal [%w[pipeline BLMOVE], %w[pipeline PEXPIRE]], conn.log
+    assert_equal [%w[BLMOVE PEXPIRE]], conn.pipelines, 'both in one pipeline'
+    assert_empty conn.direct
   end
 
   # Another job took the lock between this run's BLMOVE and its lock script, so
@@ -95,25 +96,29 @@ class UniqueJobsPrimedTest < Wurk::Test::UnitCase
     assert_empty(Wurk.redis { |c| c.call('KEYS', "#{@digest}*") }.reject { |k| k.end_with?(':QUEUED') })
   end
 
-  # Records which commands a Locksmith sends, and whether inside a pipeline.
+  # Records each pipeline a Locksmith sends as its own group of commands, and
+  # every command sent outside one.
   class RecordingConn
-    attr_reader :log
+    attr_reader :pipelines, :direct
 
     def initialize
-      @log = []
+      @pipelines = []
+      @direct = []
     end
 
     def pipelined
-      yield Pipe.new(@log)
+      group = []
+      @pipelines << group
+      yield Pipe.new(group)
       [nil, 0]
     end
 
-    def blocking_call(_timeout, *command) = @log << ['direct', command.first]
-    def call(*command) = @log << ['direct', command.first]
+    def blocking_call(_timeout, *command) = @direct << command.first
+    def call(*command) = @direct << command.first
 
-    Pipe = ::Struct.new(:log) do
-      def blocking_call(_timeout, *command) = log << ['pipeline', command.first]
-      def call(*command) = log << ['pipeline', command.first]
+    Pipe = ::Struct.new(:group) do
+      def blocking_call(_timeout, *command) = group << command.first
+      def call(*command) = group << command.first
     end
   end
 end

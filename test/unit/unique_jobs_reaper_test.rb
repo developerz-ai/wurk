@@ -10,6 +10,7 @@ class UniqueJobsReaperTest < Wurk::Test::UnitCase
     Wurk::UniqueJobs.reset!
     Wurk::UniqueJobs.config.reaper_timeout = 10
     @old = Time.now.to_f - 3600
+    Wurk::UniqueJobs::Orphans::PrimedSweep.cursor = '0'
   end
 
   def teardown
@@ -197,6 +198,24 @@ class UniqueJobsReaperTest < Wurk::Test::UnitCase
       assert_equal(-1, c.call('PTTL', 'uniquejobs:live:RUN:LOCKED'))
       assert_equal ['uniquejobs:live:RUN'], digests
       c.call('DEL', 'uniquejobs:not-a-list:PRIMED')
+    end
+  end
+
+  # A prefix's glob characters match only themselves: `ap*` must not reach
+  # `app:...:PRIMED`, a list some other code owns.
+  def test_the_sweep_matches_the_lock_prefix_literally
+    Wurk::UniqueJobs.config.lock_prefix = 'ap*'
+    Wurk.redis do |c|
+      c.call('RPUSH', 'app:events:PRIMED', 'x')
+      c.call('RPUSH', 'ap*:d:PRIMED', 'y')
+    end
+
+    Wurk::UniqueJobs::Orphans::PrimedSweep.new.call
+
+    Wurk.redis do |c|
+      assert_equal(-1, c.call('PTTL', 'app:events:PRIMED'))
+      assert_operator c.call('PTTL', 'ap*:d:PRIMED'), :>, 0
+      c.call('DEL', 'app:events:PRIMED', 'ap*:d:PRIMED')
     end
   end
 end

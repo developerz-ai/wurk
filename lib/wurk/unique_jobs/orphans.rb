@@ -32,12 +32,11 @@ module Wurk
           @deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + @config.reaper_timeout.to_i
         end
 
-        # The digests deleted, expired first. Then, with what is left of the
-        # run's time, hand-off lists without a TTL get one, whatever the queues
-        # hold.
+        # The digests deleted, expired first. Then hand-off lists without a TTL
+        # get one, on a budget of their own, whatever the queues hold.
         def call
           deleted = reap_digests
-          PrimedSweep.new(@deadline).call
+          PrimedSweep.new.call
           deleted
         end
 
@@ -117,20 +116,35 @@ module Wurk
       # such list gets the hand-off TTL: a hand-off in flight still completes,
       # and the leftover expires. Bounded by the reaper's deadline.
       class PrimedSweep
-        def initialize(deadline)
-          @deadline = deadline
-          @match = "#{UniqueJobs.config.lock_prefix || 'uniquejobs'}:*:PRIMED"
+        # Seconds per run. Its own, so the digest reaper using the whole
+        # reaper_timeout never starves it; a run that stops early resumes at
+        # the next run where this one stopped.
+        BUDGET = 2
+        GLOB = /[*?\[\]\\]/
+
+        @cursor = '0'
+        class << self
+          attr_accessor :cursor
+        end
+
+        # Glob characters in the prefix are matched literally: a `billing*`
+        # prefix must not reach another app's lists.
+        def initialize
+          prefix = (UniqueJobs.config.lock_prefix || 'uniquejobs').to_s.gsub(GLOB) { |c| "\\#{c}" }
+          @match = "#{prefix}:*:PRIMED"
+          @deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + BUDGET
         end
 
         # The lists given a TTL.
         def call
-          cursor = '0'
+          cursor = self.class.cursor
           fixed = 0
           loop do
             cursor, keys = UniqueJobs.redis { |conn| conn.call('SCAN', cursor, 'MATCH', @match, 'COUNT', Reaper::PAGE) }
             fixed += expire_unbounded(keys) unless keys.empty?
             break if cursor == '0' || ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) >= @deadline
           end
+          self.class.cursor = cursor
           fixed
         end
 
