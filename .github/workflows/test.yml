@@ -114,6 +114,13 @@ jobs:
               - 'Dockerfile'
               - 'mise.toml'
               - '.github/workflows/*.yml'
+              # Root agent config. Every tracked file is read by test/unit/public_tree_test.rb, and
+              # #952 changed only .mcp.json: neither filter named it, so the PR skipped the required
+              # checks and merged green with a host the guard rejects on main. In `code` too, so such
+              # a change runs the full suite, not only the docs guards.
+              - '.coderabbit.yml'
+              - '.mcp.json'
+              - '.ui-debugger-mcp.json'
             # Everything in `ruby` that can change what code does. A change outside this but
             # inside `ruby` is docs-only: it can only break a test in test/guards.txt, so it
             # runs those instead of the whole suite. Keep in step with `ruby`;
@@ -137,6 +144,9 @@ jobs:
               - 'Dockerfile'
               - 'mise.toml'
               - '.github/workflows/*.yml'
+              - '.coderabbit.yml'
+              - '.mcp.json'
+              - '.ui-debugger-mcp.json'
             frontend:
               - 'frontend/**'
               - '.github/workflows/test.yml'

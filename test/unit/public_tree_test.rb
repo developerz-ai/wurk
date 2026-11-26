@@ -17,9 +17,6 @@ require 'open3'
 # The scan reads `git ls-files`, proves it read this file and counts what it read, so a wrong root
 # is a failure, never a pass over nothing. A failure names the file and the rule, never the
 # matched text: CI logs are public. Each rule is proven to fire below before it is trusted.
-#
-# `docs/plans/` is skipped by the private-repository and private-word rules until its adopter
-# slices are anonymised (tracked in the issue this guard closes); every other rule reads it.
 class PublicTreeTest < Minitest::Test
   ROOT = File.expand_path('../..', __dir__)
   SELF = 'test/unit/public_tree_test.rb'
@@ -46,7 +43,6 @@ class PublicTreeTest < Minitest::Test
   SETUP_MODE = /(?<![a-z0-9])#{%w[runner dz].reverse.join('[-_ ]?')}(?![a-z0-9])/i
   PRIVATE_WORDS_ENV = 'PUBLIC_TREE_PRIVATE_WORDS'
   REQUIRED_ENV = 'PUBLIC_TREE_PRIVATE_WORDS_REQUIRED'
-  PLANS = 'docs/plans/'
 
   def self.private_words(raw)
     raw.to_s.split(/[,\n]/).map(&:strip).reject(&:empty?).map { |w| /#{Regexp.escape(w)}/i }
@@ -64,17 +60,15 @@ class PublicTreeTest < Minitest::Test
   end
 
   # The names of every rule `text` breaks at `path`. Never the matched text.
-  def self.violations(path, text, words)
+  def self.violations(_path, text, words)
     rules = []
     rules << 'internal host on our own domain' if text.scan(OWN_HOST).any? { |h| !PUBLIC_HOSTS.include?(h.downcase) }
     rules << 'setup-mode name' if text.match?(SETUP_MODE)
     rules << "someone's home directory" if text.match?(HOME_PATH)
-    return rules if path.start_with?(PLANS)
-
     rules + private_rules(text, words)
   end
 
-  # The rules `docs/plans/` is spared for now: a private repository and a private word.
+  # The rules that need the org's repository list or the secret: a private repository, a private word.
   def self.private_rules(text, words)
     rules = []
     private_repo = text.scan(ORG_REPO).flatten.any? do |name|
@@ -160,12 +154,10 @@ class PublicTreeTest < Minitest::Test
     assert_empty self.class.private_words(nil)
   end
 
-  def test_plans_skip_only_the_private_repository_and_word_rules
+  def test_plans_get_every_rule
     words = self.class.private_words('quimtel')
-    org = %w[developerz ai].join('-')
 
-    assert_empty self.class.violations('docs/plans/x/a.md', "quimtel, #{org}/vault", words)
-    assert_equal ['internal host on our own domain'], self.class.violations('docs/plans/x/a.md', "mcp.#{DOMAIN}", words)
+    assert_equal ['private word (from the secret)'], self.class.violations('docs/plans/x/a.md', 'quimtel', words)
   end
 
   def test_a_required_run_without_the_secret_fails
