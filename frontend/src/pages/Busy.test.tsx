@@ -185,6 +185,37 @@ describe('Busy', () => {
     expect(screen.queryByText(t('busy.running_jobs'))).toBeNull();
   });
 
+  // Every poll rebuilds the host groups; the cards must update in place, not
+  // remount, or an open queue list folds up and the toggle loses focus.
+  it('keeps an expanded queue list and its card across a poll', async () => {
+    const queues = Array.from({ length: 10 }, (_, i) => `q${i}`);
+    let beat = NOW - 5;
+    const fetchMock = vi.fn(async (url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () => (url.includes('/api/processes') ? [{ ...PROCESSES[2], queues, beat: (beat += 1) }] : []),
+    }) as Response);
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(() => (
+      <QueryClientProvider client={client}>
+        <Busy />
+      </QueryClientProvider>
+    ));
+
+    const toggle = await screen.findByText(t('busy.more_queues', { n: 4 }));
+    const card = toggle.closest('.card');
+    fireEvent.click(toggle);
+    expect(screen.getByText('q9')).toBeInTheDocument();
+
+    const calls = fetchMock.mock.calls.length;
+    await client.invalidateQueries({ queryKey: ['processes'] });
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(calls));
+
+    expect(screen.getByText('q9')).toBeInTheDocument();
+    expect(screen.getByText('q9').closest('.card')).toBe(card);
+  });
+
   it('renders a live heartbeat from the API `beat` field', async () => {
     renderBusy();
     const beats = await screen.findAllByText(/\d seconds ago/);

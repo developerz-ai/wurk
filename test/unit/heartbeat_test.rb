@@ -131,6 +131,14 @@ class HeartbeatTest < Wurk::Test::UnitCase
     end
   end
 
+  def test_the_smallest_cpu_quota_is_not_rounded_away
+    hb = build_heartbeat
+
+    with_cgroup('cpu.max' => "1000 1000000\n") do |cgroup|
+      assert_in_delta 0.001, hb.send(:cpu_limit, 8, **cgroup)
+    end
+  end
+
   def test_limits_are_nil_when_the_cap_is_not_tighter_than_the_machine
     hb = build_heartbeat
     with_cgroup('cpu.max' => "1600000 100000\n", 'memory.max' => "#{128 * (1024**3)}\n") do |cgroup|

@@ -297,7 +297,9 @@ module Wurk
     # `cores` and `memory_total_kb` are the machine's, which inside a
     # container is the node's. `cpu_limit` (CPUs, may be fractional) and
     # `memory_limit_kb` are the cgroup's caps, nil when nothing caps tighter
-    # than the machine — what the process can actually use.
+    # than the machine — what the process can actually use. Read once, like
+    # the rest: the info JSON is cached per process, and an in-place pod
+    # resize shows from the next restart, as it reaches the swarm size.
     def host_facts
       @host_facts ||= begin
         total_kb = memory_total_kb
@@ -316,7 +318,8 @@ module Wurk
       quota = CpuCount.quota(**cgroup)
       return nil if quota.nil? || (host_cores && quota >= host_cores)
 
-      quota.to_f.round(2)
+      # 4 places: the smallest quota the kernel takes, 1ms per 1s, is 0.001.
+      quota.to_f.round(4)
     rescue StandardError
       nil
     end
