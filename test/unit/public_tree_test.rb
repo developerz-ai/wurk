@@ -156,8 +156,10 @@ class PublicTreeTest < Minitest::Test
 
   def test_plans_get_every_rule
     words = self.class.private_words('quimtel')
+    org = %w[developerz ai].join('-')
 
-    assert_equal ['private word (from the secret)'], self.class.violations('docs/plans/x/a.md', 'quimtel', words)
+    assert_equal ['private repository', 'private word (from the secret)'],
+                 self.class.violations('docs/plans/x/a.md', "quimtel, #{org}/vault", words)
   end
 
   def test_a_required_run_without_the_secret_fails
