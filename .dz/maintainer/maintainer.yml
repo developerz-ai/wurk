@@ -287,14 +287,16 @@ escalate:
 # only through `health`.
 schedules:
   # Weekly and judged, so a merge never cuts a release (owner, 2026-11-01: "no auto, not dependabot,
-  # us developerz.ai AI decides if needed"). One weekday per repo, so the fleet is not hit at once.
+  # us developerz.ai AI decides if needed"). Monday, the only release slot (owner, 2026-11-26: weekly,
+  # never one per fix).
   - name: release-due
-    days: [wed]
+    days: [mon]
     hours_utc: [3]
     brief_file: .dz/briefs/release-due.md
-  # The one exception, so a confirmed security fix does not wait up to a week for the slot above.
+  # The one exception, so a published high/critical advisory fix does not wait up to a week for the
+  # slot above. It only files an ask on the strict criteria in its brief (owner, 2026-11-26).
   - name: security-release
-    days: [mon, tue, thu, fri, sat, sun]
+    days: [tue, wed, thu, fri, sat, sun]
     hours_utc: [5]
     brief_file: .dz/briefs/security-release.md
   # Weekly (owner, 2026-11-06: routine maintenance weekly, CVE daily). Security has its own lanes.
@@ -310,8 +312,17 @@ schedules:
     hours_utc: [8]
     brief_file: .dz/briefs/improve.md
 
-# devops: first-tier security advisories (KEV, NVD, GitHub, OSV, EPSS) are read against
-# the versions this repo runs, and a fix is filed at once when one is in a vulnerable
-# range; it claims ahead of routine work. It runs on your boxes and your key. `off` stops it.
+# devops: off (owner, 2026-11-26: one PR per advisory was too much noise). Advisories arrive through
+# Dependabot instead, batched weekly per ecosystem (.github/dependabot.yml).
 devops:
-  watch: advisories
+  watch: off
+
+# branches: a branch with no new commit this long is tagged archive/<branch>/<date> at its last
+# commit, then deleted. 14 (owner, 2026-11-26: keep the repos cleaned). false keeps every branch.
+branches:
+  close_inactive_after_days: 14
+
+# scout: the platform's daily survey files only what is already BROKEN (red CI, failing tests, a
+# security advisory, a broken build or link), never an improvement idea (owner, 2026-11-26).
+scout:
+  survey: broken_only

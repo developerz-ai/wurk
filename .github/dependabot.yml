@@ -1,4 +1,7 @@
 # Dependabot config. Minor+patch grouped per ecosystem to keep PR noise low
+# (owner, 2026-11-26: weekly at most, grouped, quiet; advisories come through here, dz
+# devops.watch is off, and each ecosystem batches its security bumps into one PR via an
+# `applies-to: security-updates` group).
 # (majors still open individually — except the github-actions group, which
 # also takes majors). The developerz.ai maintainer agent reviews and fixes
 # Dependabot PRs, then merges them when ready
@@ -26,7 +29,8 @@ updates:
     versioning-strategy: increase
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+      day: monday
+    open-pull-requests-limit: 3
     cooldown:
       default-days: 14
     groups:
@@ -34,13 +38,19 @@ updates:
         update-types:
           - minor
           - patch
+      # Every security bump in this tree as one PR, not one per advisory (owner, 2026-11-26).
+      bundler-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
   - package-ecosystem: bundler
     directory: "/demo"
     # A committed lock serving public traffic: move the lock, not the Gemfile.
     versioning-strategy: lockfile-only
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+      day: monday
+    open-pull-requests-limit: 3
     cooldown:
       default-days: 14
     groups:
@@ -48,6 +58,11 @@ updates:
         update-types:
           - minor
           - patch
+      # Every security bump in this tree as one PR, not one per advisory (owner, 2026-11-26).
+      bundler-demo-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
   # `bun`, not `npm`: the frontend's lockfile is frontend/bun.lock, which the
   # npm ecosystem cannot read (it failed every run with misconfigured_tooling
   # and froze frontend deps). The bun ecosystem updates package.json AND
@@ -57,7 +72,8 @@ updates:
     directory: "/frontend"
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+      day: monday
+    open-pull-requests-limit: 3
     cooldown:
       default-days: 14
     groups:
@@ -65,6 +81,11 @@ updates:
         update-types:
           - minor
           - patch
+      # Every security bump in this tree as one PR, not one per advisory (owner, 2026-11-26).
+      bun-frontend-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
   # Every action is SHA-pinned and reviewed as one diff, so majors join the
   # group too: the July 2026 batch was four separate major PRs (#330-#333) for
   # one afternoon's review.
@@ -72,11 +93,16 @@ updates:
     directory: "/"
     schedule:
       interval: monthly
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
     cooldown:
       default-days: 14
     groups:
       actions:
+        patterns:
+          - "*"
+      # Every security bump in this tree as one PR, not one per advisory (owner, 2026-11-26).
+      github-actions-security:
+        applies-to: security-updates
         patterns:
           - "*"
   # docker covers the Dockerfile's two base images (oven/bun and
@@ -98,7 +124,7 @@ updates:
     directory: "/"
     schedule:
       interval: monthly
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
     cooldown:
       default-days: 14
     groups:
@@ -106,6 +132,11 @@ updates:
         update-types:
           - minor
           - patch
+      # Every security bump in this tree as one PR, not one per advisory (owner, 2026-11-26).
+      docker-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
     ignore:
       - dependency-name: "ruby"
         update-types:
