@@ -101,6 +101,9 @@ module Wurk
       CLOCK_DRIFT_FACTOR = 0.01
       # A blocking wait never parks a web request longer than this, as the gem caps it.
       MAX_BLOCKING_WAIT = 5
+      # How long a hand-off entry may sit in PRIMED. It is taken out in the same
+      # call that moved it, so this is reached only by an entry nothing will take.
+      PRIMED_TTL_MS = 60_000
 
       attr_reader :key, :job_id, :config, :item
 
@@ -194,12 +197,20 @@ module Wurk
         false
       end
 
+      # BLMOVE and the PRIMED TTL go in one pipeline: the server runs the
+      # PEXPIRE right after the move even when this process dies, or is
+      # interrupted, before reading the reply. The lock script takes the entry
+      # out within the same call; the TTL only bounds an entry nothing will.
       def pop_queued(conn, wait)
         raise InvalidArgument, 'wait must be an integer' unless wait.is_a?(::Integer)
         raise InvalidArgument, 'wait must be positive' if wait.negative?
 
         wait = [wait, MAX_BLOCKING_WAIT].min
-        conn.blocking_call(wait, 'BLMOVE', key.queued, key.primed, 'RIGHT', 'LEFT', wait)
+        moved, = conn.pipelined do |pipe|
+          pipe.blocking_call(wait, 'BLMOVE', key.queued, key.primed, 'RIGHT', 'LEFT', wait)
+          pipe.call('PEXPIRE', key.primed, PRIMED_TTL_MS)
+        end
+        moved
       end
 
       # A lock whose script outran its own TTL is not trusted, as in the gem.

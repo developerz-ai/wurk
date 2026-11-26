@@ -10,6 +10,7 @@ class UniqueJobsReaperTest < Wurk::Test::UnitCase
     Wurk::UniqueJobs.reset!
     Wurk::UniqueJobs.config.reaper_timeout = 10
     @old = Time.now.to_f - 3600
+    Wurk::UniqueJobs::Orphans::PrimedSweep.cursor = '0'
   end
 
   def teardown
@@ -164,5 +165,57 @@ class UniqueJobsReaperTest < Wurk::Test::UnitCase
     Wurk::UniqueJobs.config.reaper = :none
 
     assert_nil Wurk::UniqueJobs::Orphans::Manager.start
+  end
+
+  # Hand-off lists a Wurk before 1.23 left without a TTL: a lock never taken
+  # is in no digest set, so only this sweep meets them. It gives them the
+  # hand-off TTL and touches nothing else: a held lock, a PRIMED list that
+  # already expires, and the lock's other keys keep what they had.
+  def test_gives_unbounded_primed_lists_a_ttl_and_leaves_live_locks_alone
+    lock('uniquejobs:live:RUN', score: Time.now.to_f)
+    Wurk.redis do |c|
+      c.call('RPUSH', 'uniquejobs:leaked:RUN:PRIMED', 'a-jid')
+      c.call('RPUSH', 'uniquejobs:leaked2:PRIMED', '1')
+      c.call('RPUSH', 'uniquejobs:handoff:RUN:PRIMED', 'b-jid')
+      c.call('PEXPIRE', 'uniquejobs:handoff:RUN:PRIMED', 5_000)
+      c.call('HSET', 'uniquejobs:not-a-list:PRIMED', 'f', 'v')
+    end
+    handoff_before = Wurk.redis { |c| c.call('PTTL', 'uniquejobs:handoff:RUN:PRIMED') }
+
+    reap
+
+    Wurk.redis do |c|
+      %w[uniquejobs:leaked:RUN:PRIMED uniquejobs:leaked2:PRIMED].each do |key|
+        assert_operator c.call('PTTL', key), :>, 0, key
+        assert_operator c.call('PTTL', key), :<=, Wurk::UniqueJobs::Locksmith::PRIMED_TTL_MS
+      end
+      handoff_after = c.call('PTTL', 'uniquejobs:handoff:RUN:PRIMED')
+
+      assert_operator handoff_after, :<=, handoff_before, 'an expiring hand-off keeps its TTL'
+      assert_operator handoff_after, :>, handoff_before - 2_000, 'an expiring hand-off keeps its TTL'
+      assert_equal(-1, c.call('PTTL', 'uniquejobs:not-a-list:PRIMED'), 'a key that is not a list is left alone')
+      assert_equal(-1, c.call('PTTL', 'uniquejobs:live:RUN'))
+      assert_equal(-1, c.call('PTTL', 'uniquejobs:live:RUN:LOCKED'))
+      assert_equal ['uniquejobs:live:RUN'], digests
+      c.call('DEL', 'uniquejobs:not-a-list:PRIMED')
+    end
+  end
+
+  # A prefix's glob characters match only themselves: `ap*` must not reach
+  # `app:...:PRIMED`, a list some other code owns.
+  def test_the_sweep_matches_the_lock_prefix_literally
+    Wurk::UniqueJobs.config.lock_prefix = 'ap*'
+    Wurk.redis do |c|
+      c.call('RPUSH', 'app:events:PRIMED', 'x')
+      c.call('RPUSH', 'ap*:d:PRIMED', 'y')
+    end
+
+    Wurk::UniqueJobs::Orphans::PrimedSweep.new.call
+
+    Wurk.redis do |c|
+      assert_equal(-1, c.call('PTTL', 'app:events:PRIMED'))
+      assert_operator c.call('PTTL', 'ap*:d:PRIMED'), :>, 0
+      c.call('DEL', 'app:events:PRIMED', 'ap*:d:PRIMED')
+    end
   end
 end
