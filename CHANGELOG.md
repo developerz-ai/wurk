@@ -6,7 +6,7 @@ Each release's notes live in their own file under [`docs/changelog/`](docs/chang
 
 ## [1.22.0] - 2026-11-26
 
-The Busy page reads a pod against its own limits: the heartbeat reports the cgroup's `cpu_limit` and `memory_limit_kb`, so RSS shows over the container's memory limit and CPU as its quota instead of the node's RAM and cores. Single-process hosts (every pod) share one responsive grid of compact cards, and long queue lists collapse. [Release notes](docs/changelog/1.22.0.md).
+The Busy page reads a pod against its own limits: the heartbeat reports the cgroup's `cpu_limit` and `memory_limit_kb`, so RSS shows over the container's memory limit and CPU as its quota instead of the node's RAM and cores. Single-process hosts (a pod running one Wurk process) share one responsive grid; a host running several keeps its own section of compact cards, and long queue lists collapse. [Release notes](docs/changelog/1.22.0.md).
 
 ## [1.21.0] - 2026-11-25
 
