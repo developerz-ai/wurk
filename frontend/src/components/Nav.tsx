@@ -9,6 +9,8 @@ import ThemeToggle from './ThemeToggle';
 import TimezonePicker from './TimezonePicker';
 import logoUrl from '../assets/wurk-logo.png';
 import Icon from './Icon';
+import { useQueryClient } from '@tanstack/solid-query';
+import { prefetchRoute } from '../routeQueries';
 
 interface NavProps {
   open: boolean;
@@ -20,6 +22,7 @@ interface NavProps {
 }
 
 export default function Nav(props: NavProps) {
+  const qc = useQueryClient();
   // Custom tabs navigate within the SPA via /ext/:tab: registered server-rendered
   // views are embedded natively; bare tabs[]= tabs embed their own paths in an
   // iframe.
@@ -155,6 +158,8 @@ export default function Nav(props: NavProps) {
                   href={link.to}
                   end={link.end}
                   onClick={handleNavClick}
+                  onPointerEnter={() => prefetchRoute(qc, link.to)}
+                  onFocus={() => prefetchRoute(qc, link.to)}
                   title={paneLabel(link)}
                   class="wurk-navlink"
                   activeClass="active"

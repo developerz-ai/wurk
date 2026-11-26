@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/solid-query';
+import { useQuery } from '../query';
 import { createSignal, createMemo, onMount, For, Show } from 'solid-js';
 import { useNavigate, useParams } from '@solidjs/router';
 import { AreaChart, BarChart, LineChart, type Datum } from '../components/charts';

@@ -1,4 +1,5 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/solid-query';
+import { useMutation, useQueryClient } from '@tanstack/solid-query';
+import { useQuery } from '../query';
 import { onMount, For, Show, Switch, Match, type JSX } from 'solid-js';
 import { A, useParams } from '@solidjs/router';
 import { t } from '../i18n';

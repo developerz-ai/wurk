@@ -9,7 +9,7 @@ import { t } from '../i18n';
 import { basePath } from '../basePath';
 import { PageHeader } from '../components/PageHeader';
 import { formatArgs, formatNumber, hoverTime, relativeTime, truncate } from '../utils';
-import JobDetailModal, { type JobEntry } from '../components/JobDetailModal';
+import JobDetailModal, { type JobEntry, usePrefetchJobDetail } from '../components/JobDetailModal';
 import JobSetActionBar, { type ActionDef } from '../components/JobSetActionBar';
 import { useMeta } from '../hooks/useMeta';
 import { useSelection } from '../hooks/useSelection';
@@ -57,6 +57,9 @@ export default function Dead() {
   const { single, bulk, all, sweep, swept } = useJobSetActions('dead');
   const pending = () => single.isPending || bulk.isPending || all.isPending || sweep.isPending;
 
+  const prefetchDetail = usePrefetchJobDetail();
+  const detailUrl = (key: string) => `${basePath()}/api/dead/${encodeURIComponent(key)}`;
+
   onMount(() => {
     document.title = `${t('nav.dead')} — Wurk`;
   });
@@ -100,12 +103,12 @@ export default function Dead() {
                       filtered={list.filtered()}
                       matching={list.matching()}
                       pending={pending()}
-                      onBulk={(cmd) => bulk.mutate({ keys: chosen(), cmd }, { onSuccess: sel.clear })}
+                      onBulk={(cmd) => { bulk.mutate({ keys: chosen(), cmd }); sel.clear(); }}
                       progress={swept()}
                       onAll={(cmd) =>
                         list.filtered()
                           ? sweep.mutate({ cmd, substr: list.filter() }, { onSuccess: sel.clear })
-                          : all.mutate(cmd, { onSuccess: sel.clear })
+                          : (all.mutate(cmd), sel.clear())
                       }
                     />
                   </Show>
@@ -132,7 +135,12 @@ export default function Dead() {
                             const argsStr = formatArgs(entry.args);
                             const key = entryKey(entry);
                             return (
-                              <tr class="row-clickable" {...activatable(() => { setSelected(entry); setSelectedKey(key); })}>
+                              <tr
+                                class="row-clickable"
+                                {...activatable(() => { setSelected(entry); setSelectedKey(key); })}
+                                onPointerEnter={() => prefetchDetail(entry, detailUrl(key))}
+                                onFocus={() => prefetchDetail(entry, detailUrl(key))}
+                              >
                                 <Show when={!readOnly()}>
                                   <td class="row-action" onClick={(e) => e.stopPropagation()}>
                                     <input type="checkbox" checked={sel.selected().has(key)} onChange={() => sel.toggle(key)} aria-label={t('table.select_row')} />
@@ -165,13 +173,19 @@ export default function Dead() {
               </Show>
               <JobDetailModal
                 entry={selected()}
-                detailUrl={selectedKey() ? `${basePath()}/api/dead/${encodeURIComponent(selectedKey()!)}` : null}
+                detailUrl={selectedKey() ? detailUrl(selectedKey()!) : null}
                 atLabel={t('table.failed_at')}
                 actions={readOnly() ? undefined : ACTIONS}
                 pending={single.isPending}
                 onAction={(cmd) => {
                   const k = selectedKey();
-                  if (k) single.mutate({ key: k, cmd }, { onSuccess: () => { setSelected(null); setSelectedKey(null); } });
+                  // Optimistic: the row is already gone, so the modal closes now;
+                  // a failure puts the row back and raises a toast.
+                  if (k) {
+                    single.mutate({ key: k, cmd });
+                    setSelected(null);
+                    setSelectedKey(null);
+                  }
                 }}
                 onClose={() => { setSelected(null); setSelectedKey(null); }}
               />

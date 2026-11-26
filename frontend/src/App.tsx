@@ -1,6 +1,6 @@
 import { Router, Route } from '@solidjs/router';
 import { QueryClient, QueryClientProvider } from '@tanstack/solid-query';
-import { Suspense, lazy, createSignal, createEffect, onCleanup, type ParentProps } from 'solid-js';
+import { Suspense, lazy, createSignal, createEffect, onCleanup, onMount, type ParentProps } from 'solid-js';
 import { Show } from 'solid-js';
 import { useMeta } from './hooks/useMeta';
 import { basePath } from './basePath';
@@ -33,6 +33,17 @@ const Profiles = lazy(() => import('./pages/Profiles'));
 const Search = lazy(() => import('./pages/Search'));
 const Extension = lazy(() => import('./pages/Extension'));
 const NotFound = lazy(() => import('./pages/NotFound'));
+
+// Once the first page is up, fetch the other pages' chunks while the browser
+// is idle: navigation then never waits on a chunk (the old page stayed on
+// screen, with no feedback, until the new chunk arrived).
+const PAGES = [Dashboard, Queues, Retries, Scheduled, Dead, Busy, Batches, BatchDetail, Flows, FlowDetail, Limiters, Cron, Metrics, Profiles, Search];
+function preloadPages() {
+  const run = () => PAGES.forEach((p) => void p.preload());
+  if (typeof window === 'undefined') return;
+  if ('requestIdleCallback' in window) window.requestIdleCallback(run, { timeout: 3000 });
+  else setTimeout(run, 1500);
+}
 
 const qc = new QueryClient({
   defaultOptions: {
@@ -77,6 +88,7 @@ function Layout(props: ParentProps) {
   // labels on whichever page is mounted one interval between them — rather than
   // one per page, or one per cell in a table of hundreds.
   useLiveTick();
+  onMount(preloadPages);
 
   const [navOpen, setNavOpen] = createSignal(false);
   // Desktop-only: pin the rail collapsed (icons) or expanded (full), persisted

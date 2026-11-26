@@ -1,4 +1,7 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/solid-query';
+import { useMutation, useQueryClient } from '@tanstack/solid-query';
+import { prefetch, useQuery } from '../query';
+import { processesQuery } from '../routeQueries';
+import { optimistic, type OptimisticContext } from '../optimistic';
 import { createMemo, createSignal, onMount, For, Show, Switch, Match, type JSX } from 'solid-js';
 import { RefreshError } from '../components/RefreshError';
 import { t } from '../i18n';
@@ -9,7 +12,7 @@ import { ArgsValue } from '../components/ArgsValue';
 import { relativeTime, hoverTime, formatKb, formatDuration, formatArgs, nowSeconds, truncate } from '../utils';
 import { liveTick } from '../tick';
 import { useMeta } from '../hooks/useMeta';
-import { SkeletonCards } from '../components/Skeleton';
+import { SkeletonCards, SkeletonTable } from '../components/Skeleton';
 import { basePath } from '../basePath';
 import { getJSON, post } from '../http';
 import { notifyError } from '../toast';
@@ -106,10 +109,13 @@ const statLabelStyle = {
   'letter-spacing': '0.04em',
 } as const;
 
+const WORKERS_KEY = ['workers'];
+const fetchWorkers = () => getJSON<WorkRow[]>(`${basePath()}/api/workers`);
+
 function ProcessDetail(props: { proc: Process }) {
   const work = useQuery<WorkRow[]>(() => ({
-    queryKey: ['workers'],
-    queryFn: () => getJSON<WorkRow[]>(`${basePath()}/api/workers`),
+    queryKey: WORKERS_KEY,
+    queryFn: fetchWorkers,
     refetchInterval: 5000,
   }));
   const rows = () => (work.data ?? []).filter((w) => w.process_id === props.proc.identity);
@@ -149,37 +155,41 @@ function ProcessDetail(props: { proc: Process }) {
       </div>
 
       <h3 class="section-title" style={{ 'margin-bottom': '0.5rem' }}>
-        {t('busy.running_jobs')} <span class="badge badge-muted">{rows().length}</span>
+        {t('busy.running_jobs')} <span class="badge badge-muted">{work.isPending ? props.proc.busy : rows().length}</span>
       </h3>
-      <Show when={rows().length > 0} fallback={<div class="empty-state" style={{ padding: '1rem' }}>{t('busy.no_running')}</div>}>
-        <div class="table-wrapper">
-          <table>
-            <thead>
-              <tr>
-                <th>{t('table.jid')}</th>
-                <th>{t('table.class')}</th>
-                <th>{t('table.queue')}</th>
-                <th>{t('table.args')}</th>
-                <th>{t('busy.running_since')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <For each={rows()}>
-                {(w) => (
-                  <tr>
-                    <td title={w.jid} style={{ 'font-family': 'monospace', 'font-size': '12px', color: 'var(--text-muted)' }}>
-                      {truncate(w.jid, 12)}
-                    </td>
-                    <td style={{ 'font-weight': 500 }}>{w.klass}</td>
-                    <td><span class="badge badge-muted">{w.queue}</span></td>
-                    <td><ArgsValue str={formatArgs(w.args)} max={40} /></td>
-                    <td title={hoverTime(w.run_at)}>{relativeTime(w.run_at)}</td>
-                  </tr>
-                )}
-              </For>
-            </tbody>
-          </table>
-        </div>
+      {/* The heartbeat already says how many jobs run, so the placeholder has
+          their row count and the table lands without moving the modal. */}
+      <Show when={!work.isPending} fallback={<SkeletonTable rows={Math.max(1, Math.min(props.proc.busy, 8))} cols={5} />}>
+        <Show when={rows().length > 0} fallback={<div class="empty-state" style={{ padding: '1rem' }}>{t('busy.no_running')}</div>}>
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>{t('table.jid')}</th>
+                  <th>{t('table.class')}</th>
+                  <th>{t('table.queue')}</th>
+                  <th>{t('table.args')}</th>
+                  <th>{t('busy.running_since')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <For each={rows()}>
+                  {(w) => (
+                    <tr>
+                      <td title={w.jid} style={{ 'font-family': 'monospace', 'font-size': '12px', color: 'var(--text-muted)' }}>
+                        {truncate(w.jid, 12)}
+                      </td>
+                      <td style={{ 'font-weight': 500 }}>{w.klass}</td>
+                      <td><span class="badge badge-muted">{w.queue}</span></td>
+                      <td><ArgsValue str={formatArgs(w.args)} max={40} /></td>
+                      <td title={hoverTime(w.run_at)}>{relativeTime(w.run_at)}</td>
+                    </tr>
+                  )}
+                </For>
+              </tbody>
+            </table>
+          </div>
+        </Show>
       </Show>
     </div>
   );
@@ -309,6 +319,7 @@ interface CardProps {
   queuesOpen: boolean;
   onToggleQueues: (identity: string) => void;
   onOpen: (identity: string) => void;
+  onPrefetch: () => void;
   onSignal: (signal: Signal, identity: string) => void;
 }
 
@@ -332,7 +343,12 @@ function ProcessCard(props: CardProps) {
   };
 
   return (
-    <div class="card busy-card row-clickable" {...activatable(() => proc().identity && props.onOpen(proc().identity))}>
+    <div
+      class="card busy-card row-clickable"
+      {...activatable(() => proc().identity && props.onOpen(proc().identity))}
+      onPointerEnter={props.onPrefetch}
+      onFocus={props.onPrefetch}
+    >
       <div class="busy-card__head">
         <div style={{ 'min-width': 0 }}>
           <div class="busy-card__title" title={props.host ? proc().hostname : undefined}>
@@ -407,22 +423,39 @@ export default function Busy() {
   });
 
   const query = useQuery<Process[]>(() => ({
-    queryKey: ['processes'],
-    queryFn: () => getJSON<Process[]>(`${basePath()}/api/processes`),
+    ...(processesQuery() as { queryKey: unknown[]; queryFn: () => Promise<Process[]> }),
     refetchInterval: 5000,
   }));
 
   // Quiet (SIGTSTP) / stop (SIGTERM) one process by identity, or all when
-  // scope is 'all'. Both are async — the process reacts on its next
-  // heartbeat — so we just refetch rather than optimistically updating.
-  const control = useMutation(() => ({
-    mutationFn: (target: ControlTarget) =>
-      post(`${basePath()}/api/busy/${target.signal}`, {
-        identity: target.scope === 'all' ? 'all' : target.identity,
-      }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['processes'] }),
-    onError: notifyError,
-  }));
+  // scope is 'all'. The process reacts on its next heartbeat; until then the
+  // card shows it quiet (a stopping process stops fetching first), and the
+  // refetch after the call replaces the guess.
+  const control = useMutation(() => {
+    const o = optimistic(
+      qc,
+      (target: ControlTarget) => [
+        {
+          queryKey: ['processes'],
+          update: (old: Process[]) =>
+            old.map((p) => (target.scope === 'all' ? !p.embedded : p.identity === target.identity) ? { ...p, quiet: true } : p),
+        },
+      ],
+      [['processes']],
+    );
+    return {
+      mutationFn: (target: ControlTarget) =>
+        post(`${basePath()}/api/busy/${target.signal}`, {
+          identity: target.scope === 'all' ? 'all' : target.identity,
+        }),
+      onMutate: o.onMutate,
+      onError: (err: unknown, _t: ControlTarget, ctx: OptimisticContext | undefined) => {
+        o.rollback(ctx);
+        notifyError(err);
+      },
+      onSettled: o.onSettled,
+    };
+  });
 
   const confirmStop = (scope: string) =>
     window.confirm(t('actions.confirm', { action: t('actions.stop'), scope }));
@@ -455,10 +488,12 @@ export default function Busy() {
         queuesOpen={openQueues().has(identity)}
         onToggleQueues={toggleQueues}
         onOpen={setSelected}
+        onPrefetch={prefetchWorkers}
         onSignal={signal}
       />
     );
   };
+  const prefetchWorkers = () => prefetch(qc, WORKERS_KEY, fetchWorkers, 5000);
   const [openQueues, setOpenQueues] = createSignal<ReadonlySet<string>>(new Set());
   const toggleQueues = (identity: string) => {
     const next = new Set(openQueues());

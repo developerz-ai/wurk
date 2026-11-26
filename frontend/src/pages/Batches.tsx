@@ -1,4 +1,5 @@
-import { useQuery, keepPreviousData } from '@tanstack/solid-query';
+import { keepPreviousData } from '@tanstack/solid-query';
+import { useQuery } from '../query';
 import { onMount, For, Switch, Match, Show } from 'solid-js';
 import { A, useSearchParams } from '@solidjs/router';
 import { Pagination, maxPageOf } from '../components/Pagination';

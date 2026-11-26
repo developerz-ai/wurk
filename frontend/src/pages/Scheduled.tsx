@@ -95,12 +95,12 @@ export default function Scheduled() {
                       filtered={list.filtered()}
                       matching={list.matching()}
                       pending={pending()}
-                      onBulk={(cmd) => bulk.mutate({ keys: chosen(), cmd }, { onSuccess: sel.clear })}
+                      onBulk={(cmd) => { bulk.mutate({ keys: chosen(), cmd }); sel.clear(); }}
                       progress={swept()}
                       onAll={(cmd) =>
                         list.filtered()
                           ? sweep.mutate({ cmd, substr: list.filter() }, { onSuccess: sel.clear })
-                          : all.mutate(cmd, { onSuccess: sel.clear })
+                          : (all.mutate(cmd), sel.clear())
                       }
                     />
                   </Show>
@@ -160,7 +160,13 @@ export default function Scheduled() {
                 pending={single.isPending}
                 onAction={(cmd) => {
                   const k = selectedKey();
-                  if (k) single.mutate({ key: k, cmd }, { onSuccess: () => { setSelected(null); setSelectedKey(null); } });
+                  // Optimistic: the row is already gone, so the modal closes now;
+                  // a failure puts the row back and raises a toast.
+                  if (k) {
+                    single.mutate({ key: k, cmd });
+                    setSelected(null);
+                    setSelectedKey(null);
+                  }
                 }}
                 onClose={() => { setSelected(null); setSelectedKey(null); }}
               />
