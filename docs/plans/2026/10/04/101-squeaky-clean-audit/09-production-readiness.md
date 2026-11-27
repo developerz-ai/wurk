@@ -27,7 +27,7 @@
 | R17 | P2 | Dashboard | SSE thread starvation; `Sidekiq::Web.call` auth bypass. | — | Code fixes in [`04`](04-web-dashboard.md) W1/W2; doc "mount dashboard on separate web role" for big deployments. | S |
 | R18 | P3 | Security | Args not redacted in logs/dashboard unless encrypted. | `lib/wurk/job_logger.rb` | Optional `config.redact_args = ->(job){…}` applied in logger + dashboard JSON; doc. | S |
 | R19 | P3 | Long uptime | Mostly fine (TTL'd/trimmed keys; bounded caches). Per-class metric keys grow with distinct class names. | `docs/metrics.md:420-440` | Confirm via R11 soak. | — |
-| R20 | P2 | Versioning/support | 4.5 months old, 31 releases; roadmap M6 1.0 exit criteria unmet; migration guide "pending v1.0.0 sign-off"; support = GH issues; SECURITY.md 3-day ack. | `CHANGELOG.md:425`; `docs/idea/13-roadmap.md`; `SECURITY.md` | HITL: support channel + LTS line for the customer; reconcile 1.0 claims in docs. | S |
+| R20 | P2 | Versioning/support | 4.5 months old, 31 releases; roadmap M6 1.0 exit criteria unmet; migration guide "pending v1.0.0 sign-off"; support = GH issues; SECURITY.md 3-day ack. | `CHANGELOG.md:7-209`; `docs/idea/13-roadmap.md`; `SECURITY.md` | HITL: support channel + LTS line for the customer; reconcile 1.0 claims in docs. | S |
 
 ## Steps (order)
 1. R1 (biggest day-1 risk), R5 doc truth, R12 drop logging, R9 cgroup — one week of small PRs.
