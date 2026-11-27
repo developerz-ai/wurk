@@ -7,7 +7,11 @@ require 'socket'
 require 'tmpdir'
 
 # bin/check's Redis guard must look where the suite will connect: REDIS_URL,
-# which lib/wurk and test_helper already read, falling back to the default.
+# which lib/wurk and test_helper already read. When REDIS_URL is unset, the
+# guard discovers the checkout's provisioned private endpoint via `bin/redis
+# url`. When no private endpoint is provisioned, the guard exits 75 — it never
+# falls back to shared Redis.
+#
 # A box whose Redis is not on 127.0.0.1:6379 (the developerz.ai fleet moves its
 # sidecar off the well-known port so a repo's own store can bind it) must not
 # be refused for a server the suite was never going to use.
@@ -19,12 +23,13 @@ class BinCheckRedisUrlTest < Minitest::Test
 
   CHECK = File.expand_path('../../bin/check', __dir__)
 
-  def run_check(redis_url)
+  def run_check(redis_url, trace: false)
     Dir.mktmpdir do |dir|
       stub = File.join(dir, 'bundle')
       File.write(stub, "#!/usr/bin/env bash\nexit 0\n")
       File.chmod(0o755, stub)
-      Open3.capture3(check_env(dir, redis_url), CHECK, 'fast')
+      command = trace ? ['bash', '-x', CHECK] : [CHECK]
+      Open3.capture3(check_env(dir, redis_url), *command, 'fast')
     end
   end
 
@@ -92,19 +97,159 @@ class BinCheckRedisUrlTest < Minitest::Test
     assert_includes err, "127.0.0.1:#{port}"
   end
 
-  # The unset-REDIS_URL fallback must be the suite's own default, byte for byte: a
-  # guard that probes `127.0.0.1` while RedisPool connects to `localhost` can pass
-  # or refuse over a server the suite never uses. Read, not run — the real 6379
-  # on the box would otherwise decide the answer.
-  def test_the_unset_fallback_is_the_suites_own_default
-    suite_default = File.read(File.expand_path('../../lib/wurk/redis_pool.rb', __dir__))[
-      /DEFAULT_URL\s*=\s*ENV\.fetch\('REDIS_URL', '([^']+)'\)/, 1
-    ]
+  # Drive the real script in a throwaway checkout with REDIS_URL unset and a
+  # stubbed `bin/redis url`, so the only endpoint it can discover is the one we
+  # hand it. The stubbed bundle records the URL each stage actually receives.
+  # `bundle check` is the gems precondition probe, run before the Redis guard,
+  # so it cannot carry the discovered URL. Record only commands dispatched by
+  # stage(), which are the stages the gate actually runs.
+  STAGE_COMMANDS = [
+    'exec rubocop --parallel',
+    'exec bin/repin-anchors --check',
+    'exec rake test:unit',
+    'exec rake test',
+    'exec rake test:parity'
+  ].freeze
 
-    refute_nil suite_default, 'RedisPool::DEFAULT_URL must still read REDIS_URL with a literal fallback'
-    fallback = File.read(File.expand_path('../../bin/check', __dir__))[/\$\{REDIS_URL:-([^}]+)\}/, 1]
+  def recorded_stages(log)
+    return [] unless File.exist?(log)
 
-    assert_equal suite_default, fallback, "bin/check must fall back to the suite's own default"
+    File.readlines(log, chomp: true).select { |line| STAGE_COMMANDS.include?(line.split('|').first) }
+  end
+
+  def run_unset_redis_check(redis_script:, mode: 'fast', trace: false)
+    Dir.mktmpdir('check ') do |dir|
+      FileUtils.mkdir_p(File.join(dir, 'bin'))
+      FileUtils.mkdir_p(File.join(dir, 'frontend'))
+      FileUtils.cp(CHECK, File.join(dir, 'bin', 'check'))
+      File.chmod(0o755, File.join(dir, 'bin', 'check'))
+
+      log = File.join(dir, 'stage-urls.log')
+      %w[bundle bun].each do |command|
+        stub = File.join(dir, 'bin', command)
+        File.write(stub, <<~'BASH')
+          #!/usr/bin/env bash
+          printf '%s|%s\n' "$*" "${REDIS_URL-unset}" >> "$CHECK_LOG"
+          exit 0
+        BASH
+        File.chmod(0o755, stub)
+      end
+
+      redis_stub = File.join(dir, 'bin', 'redis')
+      File.write(redis_stub, "#!/usr/bin/env bash\n#{redis_script}\n")
+      File.chmod(0o755, redis_stub)
+
+      # Under the full gate bin/check exports REDIS_URL into the suite process,
+      # so Open3 would hand it straight back to the child. Clear it explicitly:
+      # these tests must exercise discovery via the stubbed `bin/redis url`.
+      env = { 'PATH' => "#{dir}/bin:#{ENV.fetch('PATH')}",
+              'REDIS_URL' => nil, 'COVERAGE' => nil, 'CHECK_LOG' => log }
+      command = trace ? ['bash', '-x', File.join(dir, 'bin', 'check')] : [File.join(dir, 'bin', 'check')]
+      out, err, status = Open3.capture3(env, *command, mode)
+      [out, err, status, recorded_stages(log)]
+    end
+  end
+
+  # The guard probes the private endpoint and must hand the *full* URL to every
+  # stage: test_helper otherwise falls back to shared localhost:6379. A stubbed
+  # stage records what it actually received, so a probe-only fix cannot pass.
+  def test_unset_redis_url_exports_provisioned_endpoint_to_every_stage
+    server = TCPServer.new('127.0.0.1', 0)
+    url = "redis://fixture-user:fixture-password@127.0.0.1:#{server.addr[1]}/7"
+    out, err, status, stages = run_unset_redis_check(
+      redis_script: "echo #{url}", mode: 'pr'
+    )
+
+    assert_equal 0, status.exitstatus, "#{out}\n#{err}"
+    refute_empty stages, 'the gate must actually run stages'
+    assert(stages.all? { |line| line.end_with?("|#{url}") },
+           "every stage must receive the provisioned URL, got: #{stages.inspect}")
+    assert_includes stages.map { |line| line.split('|').first }, 'exec rubocop --parallel'
+    assert_includes stages.map { |line| line.split('|').first }, 'exec rake test'
+    assert_includes stages.map { |line| line.split('|').first }, 'exec rake test:parity'
+    assert_includes stages.map { |line| line.split('|').first }, 'exec bin/repin-anchors --check'
+  ensure
+    server&.close
+  end
+
+  # A provisioned URL can carry credentials. The guard needs host:port to probe,
+  # but neither stdout nor any refusal may echo the password or the full URL.
+  def test_provisioned_credentials_are_never_printed
+    user = 'gate-user'
+    password = 'gate-secret-value'
+    server = TCPServer.new('127.0.0.1', 0)
+    port = server.addr[1]
+    url = "redis://#{user}:#{password}@127.0.0.1:#{port}"
+    out, err, status, = run_unset_redis_check(
+      redis_script: "echo #{url}"
+    )
+
+    assert_equal 0, status.exitstatus, "#{out}\n#{err}"
+    [out, err].each do |stream|
+      refute_includes stream, password
+      refute_includes stream, url
+      refute_includes stream, "#{user}:#{password}"
+    end
+  ensure
+    server&.close
+  end
+
+  def test_tracing_does_not_expose_discovered_credentials_and_resumes_after_export
+    server = TCPServer.new('127.0.0.1', 0)
+    url = "redis://trace-user:trace-password@127.0.0.1:#{server.addr[1]}/7"
+    out, err, status, = run_unset_redis_check(redis_script: "echo #{url}", trace: true)
+
+    assert_equal 0, status.exitstatus, "#{out}\n#{err}"
+    [out, err].each do |stream|
+      refute_includes stream, 'trace-user'
+      refute_includes stream, 'trace-password'
+    end
+    assert_includes err, '+ stage '
+  ensure
+    server&.close
+  end
+
+  def test_credentialed_closed_port_refusal_never_prints_credentials
+    port = closed_port
+    url = "redis://refusal-user:refusal-password@127.0.0.1:#{port}/7"
+    out, err, status, = run_unset_redis_check(redis_script: "echo #{url}")
+
+    assert_equal 75, status.exitstatus, err
+    assert_includes err, "127.0.0.1:#{port}"
+    [out, err].each do |stream|
+      refute_includes stream, 'refusal-user'
+      refute_includes stream, 'refusal-password'
+    end
+  end
+
+  def test_tracing_does_not_expose_explicit_credentials
+    server = TCPServer.new('127.0.0.1', 0)
+    url = "redis://explicit-user:explicit-password@127.0.0.1:#{server.addr[1]}/7"
+    out, err, status = run_check(url, trace: true)
+
+    assert_equal 0, status.exitstatus, "#{out}\n#{err}"
+    [out, err].each do |stream|
+      refute_includes stream, 'explicit-user'
+      refute_includes stream, 'explicit-password'
+    end
+    assert_includes err, '+ stage '
+  ensure
+    server&.close
+  end
+
+  # When REDIS_URL is unset and no private endpoint is provisioned
+  # (`bin/redis url` fails), the guard exits 75. It never falls back to
+  # shared Redis, and the refusal names only host:port — never credentials.
+  def test_unset_redis_url_no_private_endpoint_exits_75
+    _out, err, status, stages = run_unset_redis_check(
+      redis_script: 'exit 1'
+    )
+
+    assert_equal 75, status.exitstatus, err
+    assert_empty stages, 'no stage may run when the prerequisite is missing'
+    refute_includes err, 'localhost:6379'
+    refute_includes err, 'redis://'
+    assert_includes err, 'no private Redis endpoint is provisioned'
   end
 
   def test_runs_the_gate_when_the_redis_url_server_answers
