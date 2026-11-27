@@ -23,12 +23,13 @@ class BinCheckRedisUrlTest < Minitest::Test
 
   CHECK = File.expand_path('../../bin/check', __dir__)
 
-  def run_check(redis_url)
+  def run_check(redis_url, trace: false)
     Dir.mktmpdir do |dir|
       stub = File.join(dir, 'bundle')
       File.write(stub, "#!/usr/bin/env bash\nexit 0\n")
       File.chmod(0o755, stub)
-      Open3.capture3(check_env(dir, redis_url), CHECK, 'fast')
+      command = trace ? ['bash', '-x', CHECK] : [CHECK]
+      Open3.capture3(check_env(dir, redis_url), *command, 'fast')
     end
   end
 
@@ -116,8 +117,8 @@ class BinCheckRedisUrlTest < Minitest::Test
     File.readlines(log, chomp: true).select { |line| STAGE_COMMANDS.include?(line.split('|').first) }
   end
 
-  def run_unset_redis_check(redis_script:, mode: 'fast')
-    Dir.mktmpdir do |dir|
+  def run_unset_redis_check(redis_script:, mode: 'fast', trace: false)
+    Dir.mktmpdir('check ') do |dir|
       FileUtils.mkdir_p(File.join(dir, 'bin'))
       FileUtils.mkdir_p(File.join(dir, 'frontend'))
       FileUtils.cp(CHECK, File.join(dir, 'bin', 'check'))
@@ -126,9 +127,9 @@ class BinCheckRedisUrlTest < Minitest::Test
       log = File.join(dir, 'stage-urls.log')
       %w[bundle bun].each do |command|
         stub = File.join(dir, 'bin', command)
-        File.write(stub, <<~BASH)
+        File.write(stub, <<~'BASH')
           #!/usr/bin/env bash
-          printf '%s|%s\n' "$*" "${REDIS_URL-unset}" >> #{log}
+          printf '%s|%s\n' "$*" "${REDIS_URL-unset}" >> "$CHECK_LOG"
           exit 0
         BASH
         File.chmod(0o755, stub)
@@ -142,8 +143,9 @@ class BinCheckRedisUrlTest < Minitest::Test
       # so Open3 would hand it straight back to the child. Clear it explicitly:
       # these tests must exercise discovery via the stubbed `bin/redis url`.
       env = { 'PATH' => "#{dir}/bin:#{ENV.fetch('PATH')}",
-              'REDIS_URL' => nil, 'COVERAGE' => nil }
-      out, err, status = Open3.capture3(env, File.join(dir, 'bin', 'check'), mode)
+              'REDIS_URL' => nil, 'COVERAGE' => nil, 'CHECK_LOG' => log }
+      command = trace ? ['bash', '-x', File.join(dir, 'bin', 'check')] : [File.join(dir, 'bin', 'check')]
+      out, err, status = Open3.capture3(env, *command, mode)
       [out, err, status, recorded_stages(log)]
     end
   end
@@ -153,7 +155,7 @@ class BinCheckRedisUrlTest < Minitest::Test
   # stage records what it actually received, so a probe-only fix cannot pass.
   def test_unset_redis_url_exports_provisioned_endpoint_to_every_stage
     server = TCPServer.new('127.0.0.1', 0)
-    url = "redis://127.0.0.1:#{server.addr[1]}"
+    url = "redis://fixture-user:fixture-password@127.0.0.1:#{server.addr[1]}/7"
     out, err, status, stages = run_unset_redis_check(
       redis_script: "echo #{url}", mode: 'pr'
     )
@@ -188,6 +190,49 @@ class BinCheckRedisUrlTest < Minitest::Test
       refute_includes stream, url
       refute_includes stream, "#{user}:#{password}"
     end
+  ensure
+    server&.close
+  end
+
+  def test_tracing_does_not_expose_discovered_credentials_and_resumes_after_export
+    server = TCPServer.new('127.0.0.1', 0)
+    url = "redis://trace-user:trace-password@127.0.0.1:#{server.addr[1]}/7"
+    out, err, status, = run_unset_redis_check(redis_script: "echo #{url}", trace: true)
+
+    assert_equal 0, status.exitstatus, "#{out}\n#{err}"
+    [out, err].each do |stream|
+      refute_includes stream, 'trace-user'
+      refute_includes stream, 'trace-password'
+    end
+    assert_includes err, '+ stage '
+  ensure
+    server&.close
+  end
+
+  def test_credentialed_closed_port_refusal_never_prints_credentials
+    port = closed_port
+    url = "redis://refusal-user:refusal-password@127.0.0.1:#{port}/7"
+    out, err, status, = run_unset_redis_check(redis_script: "echo #{url}")
+
+    assert_equal 75, status.exitstatus, err
+    assert_includes err, "127.0.0.1:#{port}"
+    [out, err].each do |stream|
+      refute_includes stream, 'refusal-user'
+      refute_includes stream, 'refusal-password'
+    end
+  end
+
+  def test_tracing_does_not_expose_explicit_credentials
+    server = TCPServer.new('127.0.0.1', 0)
+    url = "redis://explicit-user:explicit-password@127.0.0.1:#{server.addr[1]}/7"
+    out, err, status = run_check(url, trace: true)
+
+    assert_equal 0, status.exitstatus, "#{out}\n#{err}"
+    [out, err].each do |stream|
+      refute_includes stream, 'explicit-user'
+      refute_includes stream, 'explicit-password'
+    end
+    assert_includes err, '+ stage '
   ensure
     server&.close
   end
