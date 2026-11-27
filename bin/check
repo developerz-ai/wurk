@@ -96,12 +96,24 @@ fi
 # Redis is not optional — integration and parity tests use a real server, never
 # a mock (CLAUDE.md). Refuse with the platform's preconditions-unmet contract
 # code (apps/runner/src/modes/setup/base.ts, CHECK_EXIT_PRECONDITIONS_UNMET =
-# 75). The guard probes the server the suite will actually use: REDIS_URL, which
-# test_helper and RedisPool read, else their default. A developerz.ai box hands
-# the gate a REDIS_URL on a private port, because 6379 belongs to whatever repo
-# stack the box also runs. Locally, `eval "$(bin/redis env)"` starts a private
-# server and sets REDIS_URL.
-redis_addr="${REDIS_URL:-redis://localhost:6379/0}"
+# 75). The guard probes the server the suite will actually use: REDIS_URL when
+# set, else the checkout's provisioned private endpoint from `bin/redis url`.
+# A developerz.ai box hands the gate a REDIS_URL on a private port, because
+# 6379 belongs to whatever repo stack the box also runs. When neither is
+# available, the gate exits 75 — it never falls back to shared Redis.
+# Locally, `eval "$(bin/redis env)"` starts a private server and sets REDIS_URL.
+if [ -n "${REDIS_URL:-}" ]; then
+  redis_url="$REDIS_URL"
+else
+  redis_url="$(bin/redis url)" || {
+    echo "bin/check: REDIS_URL is unset and no private Redis endpoint is provisioned." >&2
+    echo "  start one with:  eval \"\$(bin/redis env)\"" >&2
+    exit 75
+  }
+fi
+# Keep the full URL for the stages, but reduce to host:port for the probe and
+# its messages: a provisioned URL may carry credentials that must never print.
+redis_addr="$redis_url"
 redis_addr="${redis_addr#*://}"
 redis_addr="${redis_addr##*@}"
 redis_addr="${redis_addr%%/*}"
@@ -109,10 +121,14 @@ redis_host="${redis_addr%:*}"
 redis_port="${redis_addr##*:}"
 [ "$redis_host" != "$redis_addr" ] || redis_port=6379
 if ! (exec 3<>"/dev/tcp/${redis_host}/${redis_port}") 2>/dev/null; then
-  echo "bin/check: no Redis on ${redis_host}:${redis_port} (REDIS_URL, default redis://localhost:6379/0)." >&2
+  echo "bin/check: no Redis on ${redis_host}:${redis_port}." >&2
   echo "  start a private one with:  eval \"\$(bin/redis env)\"" >&2
   exit 75
 fi
+
+# test_helper reads REDIS_URL and otherwise defaults to localhost:6379, the
+# shared store this guard refuses. Hand the probed endpoint to every stage.
+export REDIS_URL="$redis_url"
 
 # bun is checked HERE, with the other preconditions, and deliberately not next
 # to the frontend stage that needs it. Exit 75 means "the gate never ran", so
