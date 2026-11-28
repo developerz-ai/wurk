@@ -19,7 +19,6 @@ test/unit/forbidden_claims_test.rb
 test/unit/global_test_mode_guard_test.rb
 test/unit/guard_manifest_test.rb
 # test/unit/guard_manifest_test.rb fails if a test that reads such a file is missing.
-test/unit/health_brief_test.rb
 test/unit/llms_full_test.rb
 test/unit/llms_txt_test.rb
 test/unit/maintainer_policy_contract_test.rb

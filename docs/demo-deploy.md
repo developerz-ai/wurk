@@ -353,7 +353,7 @@ the same sense: `c.read_only = true`
 ([`demo/config/initializers/wurk.rb`](../demo/config/initializers/wurk.rb))
 plus `WURK_WEB_READ_ONLY=1` makes every mutating endpoint 403 at the
 middleware layer, so even a request that tried to mutate the demo would be
-refused. The health checkup that runs this probe sends a GET and nothing else.
+refused. Whatever runs this probe sends a GET and nothing else.
 
 ### One-time GitHub setup (repo admin)
 

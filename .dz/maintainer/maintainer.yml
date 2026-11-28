@@ -281,10 +281,15 @@ escalate:
   # hardcoded asks (security, license, CLA) still apply; this list cannot remove them.
   ask_before_acting: [breaking_change]
 
-# The checkups nothing else triggers (owner, 2026-10-14: maintained so nobody has to watch it). Is a
-# release needed, is the project healthy, and (monthly) what is worth improving. Bot-authored alarm
-# issues never pass intake, so a red `main` or a release run that did not publish reaches the bot
-# only through `health`.
+# The checkups nothing else triggers (owner, 2026-10-14: maintained so nobody has to watch it): is a
+# release needed, and (twice a month) what is worth improving. A red `main` reaches the bot through
+# the platform's own red-base ask (`cron.base_red_ask`, every few minutes), not a schedule.
+#
+# CUT 2026-11-28 (fleet dz cost standard, from the 30-day prod census across both accounts):
+# `security-release` (fleet-wide 170 firings -> 3 product merges + 17 REPORT-only PRs) and `health`
+# (270 firings -> 8 asks -> 0 merges; the red-base ask already covers a red `main`). Their briefs and
+# `bin/health-check` went with them. A security fix arrives as Dependabot's grouped security PR
+# (.github/dependabot.yml).
 schedules:
   # Weekly and judged, so a merge never cuts a release (owner, 2026-11-01: "no auto, not dependabot,
   # us developerz.ai AI decides if needed"). Monday, the only release slot (owner, 2026-11-26: weekly,
@@ -293,22 +298,12 @@ schedules:
     days: [mon]
     hours_utc: [3]
     brief_file: .dz/briefs/release-due.md
-  # The one exception, so a published high/critical advisory fix does not wait up to a week for the
-  # slot above. It only files an ask on the strict criteria in its brief (owner, 2026-11-26).
-  - name: security-release
-    days: [tue, wed, thu, fri, sat, sun]
-    hours_utc: [5]
-    brief_file: .dz/briefs/security-release.md
-  # Weekly (owner, 2026-11-06: routine maintenance weekly, CVE daily). Security has its own lanes.
-  - name: health
-    days: [mon]
-    hours_utc: [7]
-    brief_file: .dz/briefs/health.md
-  # Monthly improvement pass (owner, 2026-10-31: improved by AI monthly). The schema has weekdays,
-  # not days of the month, so this fires every Monday and the brief acts only on the first Monday
-  # of the month (UTC day 1-7); on the other Mondays it stops at its first line.
+  # Improvement pass on the first and third Monday of the month (2026-11-28 standard: the best
+  # scheduled return, 59 firings -> 25 product merges; wurk is an active repo). `weeks_of_month`
+  # picks the Mondays, so the brief no longer checks the date itself.
   - name: improve
     days: [mon]
+    weeks_of_month: [1, 3]
     hours_utc: [8]
     brief_file: .dz/briefs/improve.md
 
@@ -328,3 +323,9 @@ branches:
 # security advisory, a broken build or link), never an improvement idea (owner, 2026-11-26).
 scout:
   survey: broken_only
+
+# care.docs_drift: off (2026-11-28 standard). It was this repo's "fix stale citation" PR stream:
+# wurk drew the most docs-drift asks of any repo (20 in 30 days), and fleet-wide 47 tasks gave 8
+# docs-only merges and 33 failures. The repo's own doc-claim tests guard drift on every PR.
+care:
+  docs_drift: off

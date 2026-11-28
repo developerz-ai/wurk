@@ -4,8 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Weekly, not nightly (2026-11-28 CI cost sweep): the schedule's only unique work is the
+  # ruby-head/3.4 `canary` legs, and an upstream Ruby break surfaces within a week either way.
   schedule:
-    - cron: "15 5 * * *"
+    - cron: "15 5 * * 1"
   workflow_dispatch:
 
 # Least privilege: every job here only reads the repo (artifact upload doesn't
@@ -399,6 +401,11 @@ jobs:
       # A red leg is a real support-window break; surface it next to the
       # others instead of cancelling the remaining legs.
       fail-fast: false
+      # PULL REQUESTS RUN ONE LEG: `pr: true`, the support floor, which is also the
+      # required check `compat (ruby 3.2.11, rails 8.1, redis)`. The other legs are
+      # always created and report (a no-op on a PR), and do their work on every push
+      # to main and on the schedule. Four ~9-minute legs on every PR were the single
+      # largest line in this repo's CI (2026-11-28 sweep: 87 PR runs a week).
       matrix:
         include:
           - ruby: "3.2.11"
@@ -406,6 +413,7 @@ jobs:
             backend: redis
             image: redis:7.4
             ping: redis-cli ping
+            pr: true
           - ruby: "4.0"
             rails: "7.1"
             backend: redis
@@ -429,7 +437,7 @@ jobs:
     services:
       store:
         # An empty image starts no service, so a no-op leg skips the pull.
-        image: ${{ (needs.detect.result != 'success' || (needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || (needs.detect.outputs.ruby == 'true' && needs.detect.outputs.code == 'true')))) && matrix.image || '' }}
+        image: ${{ (needs.detect.result != 'success' || (github.event_name == 'pull_request' && matrix.pr == true && needs.detect.outputs.ruby == 'true' && needs.detect.outputs.code == 'true') || (github.event_name != 'pull_request' && (matrix.pr != true || needs.detect.outputs.dup != 'true'))) && matrix.image || '' }}
         ports: ["6379"]
         # DFLY_* configure Dragonfly (a service container takes no args) and mean
         # nothing to the other images. Two threads for the runner's cores.
@@ -449,7 +457,8 @@ jobs:
       # Per-step gate, not a job-level `if:` (#469) — see the `test` job.
       # Matrix expression, so the job-level `env:` block below CAN read it
       # (unlike `job.services.*`, which is only visible in steps).
-      RUN: ${{ needs.guards.result == 'success' && (needs.detect.result != 'success' || (needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || (needs.detect.outputs.ruby == 'true' && needs.detect.outputs.code == 'true')))) }}
+      # A non-`pr` leg ignores `dup`: its PR run was a no-op, so main is where it runs.
+      RUN: ${{ needs.guards.result == 'success' && (needs.detect.result != 'success' || (github.event_name == 'pull_request' && matrix.pr == true && needs.detect.outputs.ruby == 'true' && needs.detect.outputs.code == 'true') || (github.event_name != 'pull_request' && (matrix.pr != true || needs.detect.outputs.dup != 'true'))) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: env.RUN == 'true'

@@ -2,13 +2,13 @@ name: soak
 
 # Long-uptime proof (plan 101/12 T1, 101/08 M0): bench/rss_soak.rb's per-child
 # Rss/Pss over 100k jobs, then bench/soak/run.rb's chaos soak with its jid
-# ledger. Advisory: never on a pull request, never a required check. Nightly
+# ledger. Advisory: never on a pull request, never a required check. Weekly
 # runs one hour; a manual run takes its duration in seconds. A hosted runner
 # caps a job at six hours, so the 24h proof run is a quiet box, not this
 # workflow (`SOAK_MODE=long SOAK_DURATION=86400 ruby -Ilib bench/soak/run.rb`).
 on:
   schedule:
-    - cron: "17 3 * * *"
+    - cron: "17 3 * * 0"
   workflow_dispatch:
     inputs:
       duration:

@@ -16,7 +16,7 @@
 # key-count slopes ride along; they never set the exit code.
 #
 #   ruby -Ilib bench/soak/run.rb                     # short: ~2.5 min load + drain
-#   SOAK_MODE=long ruby -Ilib bench/soak/run.rb      # 1h, CI nightly
+#   SOAK_MODE=long ruby -Ilib bench/soak/run.rb      # 1h, CI weekly
 #   SOAK_MODE=long SOAK_DURATION=86400 ...           # the 24h proof run
 #   SOAK_LOSSY=50 ruby -Ilib bench/soak/run.rb       # self-test: must exit 1
 #
