@@ -8,7 +8,7 @@ Do gem users get something from a release? Read the window's diffs and `docs/cha
 
 ## Security
 
-Only off-cycle release: a fix for a *published* first-tier advisory (KEV, NVD, GitHub, vendor), **CVSS ≥ 7.0 or KEV-listed**, in what the gem ships (not dev/test/docs tooling), checked at the source. Claimed urgency, non-KEV medium/low, hardening, bugs: Monday. `security-release.md` asks other days.
+Only off-cycle release: a fix for a *published* first-tier advisory (KEV, NVD, GitHub, vendor), **CVSS ≥ 7.0 or KEV-listed**, in what the gem ships (not dev/test/docs tooling), checked at the source. Claimed urgency, non-KEV medium/low, hardening, bugs: Monday. Other days: Dependabot security PRs.
 
 ## Decide
 

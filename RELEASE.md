@@ -231,7 +231,7 @@ second holds regardless of whether it does.
 ### Recovering a gem-less release
 
 Should one appear anyway, it is cosmetic (no gem shipped) but it lies about the
-latest version, so clear it — a maintainer-only manual runbook the scheduled health checkup only ever points at via a filed ask; the checkup reports, it never executes. This is the gem-less release recovery path:
+latest version, so clear it — a maintainer-only manual runbook an agent only ever points at via a filed ask; the agent reports, it never executes. This is the gem-less release recovery path:
 
 ```bash
 # This removes a gem-less release: drops the Release and the remote tag,
@@ -385,9 +385,8 @@ while `main` is still at the version commit, dispatch `release.yml` on `main` an
 the tag and GitHub Release, attaches the `.gem` and runs `demo` and `smoke`. Past that
 commit, see [What a re-run does](#what-a-re-run-does).
 
-Every step in this section is a maintainer-only manual action. The scheduled
-health checkup only ever points at this runbook via a filed ask — the checkup
-reports; it never executes a publish, a tag operation or a release create
+Every step in this section is a maintainer-only manual action. An agent only
+ever points at this runbook via a filed ask — it reports; it never executes a publish, a tag operation or a release create
 itself.
 
 ## Upgrade notes in the release notes

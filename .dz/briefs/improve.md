@@ -1,26 +1,21 @@
-# Brief: monthly improvement
+# Brief: improvement pass
 
-Fired every Monday by `schedules: improve` in `.dz/maintainer/maintainer.yml`. **Act only on the first
-Monday of the month (UTC day 1-7); on any other Monday stop here and do nothing.**
+Fired on the first and third Monday of the month by `schedules: improve` in
+`.dz/maintainer/maintainer.yml` (`weeks_of_month: [1, 3]`).
 
-```bash
-[ "$(date -u +%d)" -le 7 ] || { echo "not the first Monday of the month: improve does nothing"; exit 0; }
-```
-
-Wurk is maintained by agents only. Once a month, leave it measurably better and one step ahead of
+Wurk is maintained by agents only. Each pass, leave it measurably better and one step ahead of
 the next Sidekiq, Ruby and Rails release. Read `CLAUDE.md` first: its three pillars (100% drop-in,
 free, measured), its *Never* list and its Testing rules (real Redis, parity tests are oracles, the
 90% line + branch coverage gate) bind every change. `non_goals` in the policy file are off limits.
 
 ## 1. Read what CI already knows
 
-The `health` checkup owns a red `main`, a release that did not publish and a stuck Dependabot PR.
-If it has an ask open for something, leave it to that ask. This pass reads the lanes `health` does
-not grade:
+A red `main` is the platform's red-base ask; if an ask is already open for something, leave it to
+that ask. This pass reads the lanes nothing else grades:
 
 | Signal | Command | Healthy |
 |---|---|---|
-| support window (nightly `compat` legs: Ruby floor, oldest Rails, Valkey) | `gh run list --workflow test.yml --event schedule --limit 5 --json conclusion,url,createdAt` | last runs `success` |
+| support window (`compat` legs: Ruby floor, oldest Rails, Valkey, Dragonfly; every main push and the weekly schedule) | `gh run list --workflow test.yml --event schedule --limit 5 --json conclusion,url,createdAt` | last runs `success` |
 | ecosystem suites + `sidekiq release watcher` (weekly) | `gh run list --workflow ecosystem.yml --event schedule --limit 3 --json conclusion,url,createdAt` | `success` |
 | Redis topologies (Valkey 8, TLS, ACL, Sentinel) | `gh run list --workflow topology.yml --branch main --limit 3 --json conclusion,url,createdAt` | `success` |
 | parity pin vs upstream Sidekiq | `curl -fsS https://rubygems.org/api/v1/versions/sidekiq.json \| jq -r '.[0:5][] \| "\(.number) \(.created_at)"'` against the `date:` in `test/parity/.sidekiq_sha` (Sidekiq publishes no GitHub Releases, only tags and gems) | no release since the pin's date |
@@ -73,11 +68,11 @@ Never bump `lib/wurk/version.rb` here: the `release-due` checkup decides release
 issue, explain the trade-off and leave it for the owner.
 
 Before opening anything, check that no open PR or issue already covers it. If nothing is worth
-changing this month, do nothing: no empty PRs, no churn.
+changing this pass, do nothing: no empty PRs, no churn.
 
 ## Rows
 
-- `support-window` — Read the nightly compat signals for the Ruby floor, oldest Rails and Valkey.
+- `support-window` — Read the compat signals for the Ruby floor, oldest Rails and Valkey.
 - `ecosystem` — Read the weekly ecosystem suites and Sidekiq release watcher signals.
 - `redis-topologies` — Read the Redis topology signals for Valkey 8, TLS, ACL and Sentinel.
 - `parity-pin` — Compare upstream Sidekiq gem releases with the parity pin's date.
