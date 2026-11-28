@@ -299,7 +299,9 @@ create the Deployment and post its statuses. The workflow-level block and the
 
 ### The served-version check (read-only)
 
-This is a second, independent check — not the CI probe above. The CI probe
+This is a second, independent check — not the CI probe above. Nothing runs it on a
+schedule (the weekly health checkup that did was removed 2026-11-28); an operator runs
+it by hand, after a deploy or when a report says the demo looks stale. The CI probe
 compares the demo against the commit *it just built*; this
 one compares the demo against the version *this checkout* declares. The demo's
 own endpoint answers both:
@@ -333,7 +335,7 @@ Comparing the two gives exactly three verdicts:
 |---|---|---|
 | **match** — the reported `version` equals the extracted one | the demo is serving this checkout's version | healthy (`success`) |
 | **mismatch** — the probe answered with a parsable `version` that differs | the demo is serving a *different* version than the checkout — a stale digest, or a deploy that never landed | **not healthy** (`Unhealthy`), naming both the served version and the expected one |
-| **unavailable / invalid** — the transport failed, the status was not 200, the body was not exactly one JSON object (leading or trailing garbage included), or the JSON carried no usable `version` | the probe could not establish anything | `verdict unknown` — **never** a green and never a success; the next checkup re-runs it |
+| **unavailable / invalid** — the transport failed, the status was not 200, the body was not exactly one JSON object (leading or trailing garbage included), or the JSON carried no usable `version` | the probe could not establish anything | `verdict unknown` — **never** a green and never a success; retry it, and treat a repeat as the demo being down |
 
 An unreachable probe is explicitly **not** healthy: "I could not tell" is not
 "it is fine", and it must never be reported as a match. The mismatch verdict
@@ -342,7 +344,7 @@ being served and the version that was expected. The probe itself is
 deadline-bounded (`--max-time 5`), the same per-request bound the CI probe
 carries: a demo that accepts the connection but stalls the response costs its
 request deadline and grades `verdict unknown` like any other transport failure,
-instead of blocking the scheduled checkup.
+instead of hanging the operator's shell.
 
 **This check is READ-ONLY.** It holds no cluster credentials, no `DOCR_TOKEN`
 and no `ARGOCD_*` secret; it needs no GitHub token and no deployment
