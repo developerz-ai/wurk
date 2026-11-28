@@ -335,7 +335,7 @@ Comparing the two gives exactly three verdicts:
 |---|---|---|
 | **match** — the reported `version` equals the extracted one | the demo is serving this checkout's version | healthy (`success`) |
 | **mismatch** — the probe answered with a parsable `version` that differs | the demo is serving a *different* version than the checkout — a stale digest, or a deploy that never landed | **not healthy** (`Unhealthy`), naming both the served version and the expected one |
-| **unavailable / invalid** — the transport failed, the status was not 200, the body was not exactly one JSON object (leading or trailing garbage included), or the JSON carried no usable `version` | the probe could not establish anything | `verdict unknown` — **never** a green and never a success; retry it, and treat a repeat as the demo being down |
+| **unavailable / invalid** — the transport failed, the status was not 200, the body was not exactly one JSON object (leading or trailing garbage included), or the JSON carried no usable `version` | the probe could not establish anything | `verdict unknown` — **never** a green and never a success; retry it, and if it stays unknown, confirm from another network before calling the demo down |
 
 An unreachable probe is explicitly **not** healthy: "I could not tell" is not
 "it is fine", and it must never be reported as a match. The mismatch verdict
