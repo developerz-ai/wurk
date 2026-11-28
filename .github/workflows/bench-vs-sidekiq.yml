@@ -2,15 +2,15 @@ name: bench vs sidekiq
 
 # The COMPARISON against stock Sidekiq (CLAUDE.md pillar 3; plan 101/12 T4),
 # as opposed to bench.yml's regression check of wurk against its own base.
-# Advisory: nightly plus manual dispatch, never on a pull request, never a
+# Advisory: weekly plus manual dispatch, never on a pull request, never a
 # required check, and nothing reads its result but a person. It runs both
 # topologies docs/benchmarks.md publishes on one hosted runner and uploads the
-# tables and raw JSON. A hosted runner is shared hardware, so one night's ratio
+# tables and raw JSON. A hosted runner is shared hardware, so one run's ratio
 # is a sample, not a result: docs/benchmarks.md publishes paired medians across
 # many runs, and nothing here updates that doc.
 on:
   schedule:
-    - cron: "41 4 * * *"
+    - cron: "41 4 * * 3"
   workflow_dispatch:
 
 permissions:

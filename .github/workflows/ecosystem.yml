@@ -39,7 +39,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Third-party suites have nothing to say about a docs edit. Gate them — but
+  # Third-party suites run on a PR only when it changes their harness. Gate them — but
   # on pull requests ONLY: push-to-main keeps main verifiable
   # (minus `dup` pushes, see test.yml), and the weekly schedule has no base
   # commit to diff against, so filtering there would silently skip the run it
@@ -55,29 +55,32 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Push whose tree already passed this workflow on the PR head → skip.
+      # Push whose tree already passed this workflow on the PR head → skip. The step name
+      # makes it count only a PR run that actually ran the suites: most PRs no longer do
+      # (see the `ruby` filter below), and main is where their change meets the third-party suites.
       - name: duplicate of an already-green PR head (dup)
         id: dup
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          dup="$(bin/ci-dup-push .github/workflows/ecosystem.yml)"
+          dup="$(bin/ci-dup-push .github/workflows/ecosystem.yml 'rake test:ecosystem')"
           [ "$dup" = "true" ] || dup=false
           echo "dup=$dup" >> "$GITHUB_OUTPUT"
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         with:
+          # A PR runs the third-party suites only when it touches the harness itself
+          # (2026-11-28 CI cost sweep): ~9 minutes on each of 87 PRs a week, for a lane
+          # that is not a required check. Every other code change meets them on the push
+          # to main, which runs in full unless `dup` proves the PR already ran them.
           filters: |
             ruby:
-              - 'lib/**'
-              - 'app/**'
-              - 'exe/**'
-              - 'test/**'
-              - 'tasks/**'
               # bin/test-ecosystem is the harness driver; ecosystem/** is the
-              # sidekiq shim gem every harness Gemfile resolves `sidekiq` to.
-              - 'bin/**'
+              # sidekiq shim gem every harness Gemfile resolves `sidekiq` to;
+              # test/ecosystem/** holds each harness's Gemfile, PIN and guards.
+              - 'bin/test-ecosystem'
               - 'ecosystem/**'
+              - 'test/ecosystem/**'
               # Gemfile.lock is deliberately absent from the filter — it is
               # gitignored and can never appear in a diff; `Gemfile` and the
               # gemspec are what actually move dependencies.
